@@ -587,6 +587,10 @@ impl ArcletApp {
         let closed = ui_kit::Window::new(egui::Id::new("arclet_graph_close"), "save", tr("arclet.close.title")).cards(1.5).show_body(ctx, |ui| {
             ui.set_max_width(440.0);
             ui.label(tr(if busy { "arclet.close.busy" } else { "arclet.close.message" }));
+            if let Some(error) = self.cad.nodes.editor.last_error() {
+                ui.add_space(6.0);
+                ui.colored_label(Tokens::get().error, error);
+            }
             ui.add_space(10.0);
             ui.horizontal_wrapped(|ui| {
                 if ui_kit::button(ui, tr("arclet.close.keep"), ui_kit::Button::Normal).clicked() {

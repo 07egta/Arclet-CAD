@@ -261,12 +261,16 @@ pub(crate) fn tick(app: &mut SolveApp, ctx: &egui::Context) {
                 },
                 Ok(Completed::Saved { path, text, graph }) => {
                     if graph {
-                        if let Err(error) = app.nodes.editor.mark_saved_json(&text) {
-                            app.nodes.editor.report_error(error);
+                        match app.nodes.editor.mark_saved_json(&text) {
+                            Ok(()) => {
+                                app.nodes.path = Some(path);
+                                app.nodes.message = Some(tr("node.workspace.saved").to_string());
+                            }
+                            Err(error) => app.nodes.editor.report_error(error),
                         }
-                        app.nodes.path = Some(path);
+                    } else {
+                        app.nodes.message = Some(tr("node.workspace.saved").to_string());
                     }
-                    app.nodes.message = Some(tr("node.workspace.saved").to_string());
                 }
                 Ok(Completed::Preview { file, destination }) => {
                     if destination != Destination::of(app)
@@ -368,10 +372,14 @@ fn save(app: &mut SolveApp, ctx: &egui::Context, text: String, graph: bool) {
     if let Some(download) = &app.services.download_design {
         match download(name, text.as_bytes()) {
             Ok(()) => {
-                if graph && let Err(error) = app.nodes.editor.mark_saved_json(&text) {
-                    app.nodes.editor.report_error(error);
+                if graph {
+                    match app.nodes.editor.mark_saved_json(&text) {
+                        Ok(()) => app.nodes.message = Some(tr("node.workspace.saved").to_string()),
+                        Err(error) => app.nodes.editor.report_error(error),
+                    }
+                } else {
+                    app.nodes.message = Some(tr("node.workspace.saved").to_string());
                 }
-                app.nodes.message = Some(tr("node.workspace.saved").to_string());
             }
             Err(error) => app.nodes.editor.report_error(error),
         }

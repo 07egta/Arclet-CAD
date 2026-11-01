@@ -167,6 +167,12 @@ impl NodeEditor {
         Ok(())
     }
 
+    /// The most recent bounded error text, so another surface (such as the close dialog)
+    /// can show a failure that happened while the node workspace itself is hidden.
+    pub fn last_error(&self) -> Option<&str> {
+        self.error.as_deref()
+    }
+
     pub fn report_error(&mut self, error: impl Into<String>) {
         // Parser errors can repeat an attacker-controlled field or component name. Bound the
         // retained display text before egui lays it out, without cutting a UTF-8 character.
