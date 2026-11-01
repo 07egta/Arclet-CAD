@@ -350,8 +350,8 @@ fn group_target(groups: &[GroupRow], chosen: Option<u64>, bodies: &[String]) -> 
 /// The preset `prefs::graphics_preset` names, from the same values. Manual edits show as custom.
 fn graphics_preset(ambient_occlusion: bool, display_quality: &str, supersampling: f32, adaptive: bool) -> &'static str {
     match (ambient_occlusion, display_quality, supersampling, adaptive) {
-        (false, "normal", s, _) if s == 1.0 => "performance",
-        (true, "fine", s, true) if s == 2.0 => "quality",
+        (false, "normal", 1.0, _) => "performance",
+        (true, "fine", 2.0, true) => "quality",
         _ => "custom",
     }
 }

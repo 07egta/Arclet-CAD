@@ -6,7 +6,6 @@ use std::f32::consts::{PI, TAU};
 use std::time::Duration;
 
 use egui::{Color32, Id, Painter, Rect, Shape, Stroke, Ui, pos2, vec2};
-use solidcraft_engine::find_command;
 use solidcraft_ui_egui::SolveApp;
 use solidcraft_ui_egui::i18n::tr;
 use solidcraft_ui_egui::theme::Tokens;
@@ -638,7 +637,7 @@ mod tests {
             for group in row.iter() {
                 let ids = std::iter::once(group.id).chain(group.more.iter().map(|&(_, id)| id));
                 for id in ids {
-                    assert!(find_command(id).is_some(), "{id} is not an engine command");
+                    assert!(solidcraft_engine::find_command(id).is_some(), "{id} is not an engine command");
                 }
             }
         }

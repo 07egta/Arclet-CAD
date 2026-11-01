@@ -31,6 +31,8 @@
     "hover": "#d3d7dd",
     "viewport_top": "#9ea2a8",
     "viewport_bottom": "#7c8189",
+    "dimension": "#04102e",
+    "dimension_driven": "#2a0f3d",
     "grid": "#6d7179",
     "grid_major": "#4c5058",
     "body": "#cfd2d7",
