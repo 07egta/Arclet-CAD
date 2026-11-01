@@ -12,7 +12,7 @@
 //! enforce shared work and allocation limits before allocating their dense matrices.
 
 use crate::Vec3;
-use crate::bspline::{MAX_SPLINE_DEGREE, SplineError};
+use crate::bspline::{self, HPoint, MAX_SPLINE_DEGREE, SplineError, weighted_points};
 use crate::spline_space::Space;
 
 /// Most controls accepted in one editable curve.
@@ -143,6 +143,85 @@ impl NurbsCurve {
             })
             .collect();
         Self::new(self.degree(), knots, self.points.iter().rev().copied().collect(), self.weights.iter().rev().copied().collect())
+    }
+
+    /// The same curve with one more knot at `t`: same geometry, parameter range and
+    /// parameterization, only more control points. `t` must lie strictly inside the domain, and
+    /// its multiplicity may not exceed the degree, because a higher multiplicity would split the
+    /// curve into disconnected pieces. Refusals leave `self` unchanged.
+    pub fn insert_knot(&self, t: f64) -> CurveResult<Self> {
+        let [a, b] = self.domain();
+        if !t.is_finite() || t <= a || t >= b {
+            return invalid("an inserted knot must be finite and strictly inside the domain");
+        }
+        let degree = self.degree();
+        let multiplicity = self.knots().iter().filter(|k| **k == t).count();
+        if multiplicity + 1 > degree {
+            return invalid("inserting this knot would exceed the curve's degree in multiplicity");
+        }
+        let ctrl = weighted_points(&self.points, &self.weights)?;
+        let (knots, ctrl) = bspline::insert_knot(degree, self.knots(), &ctrl, t)?;
+        Self::from_homogeneous(degree, knots, &ctrl)
+    }
+
+    /// The same curve written with degree one higher. The curve is split into Bezier pieces (each
+    /// interior knot is first raised to multiplicity `degree`), every piece is elevated with
+    /// NURBS Book eq. 5.36 applied to homogeneous points, and the pieces are joined again.
+    /// Geometry, parameter range and every evaluated point are unchanged. The price is
+    /// representation: each interior knot now has multiplicity `degree + 1`, so the knot vector
+    /// records only C0 joins even where the original curve was smoother. Its jets stay correct.
+    pub fn elevate_degree(&self) -> CurveResult<Self> {
+        let degree = self.degree();
+        let raised = degree + 1;
+        let [a, b] = self.domain();
+        let mut knots = self.knots().to_vec();
+        let mut ctrl = weighted_points(&self.points, &self.weights)?;
+        let interior_end = ctrl.len();
+        let mut distinct: Vec<f64> = Vec::new();
+        for knot in knots.get(degree + 1..interior_end).unwrap_or(&[]) {
+            if distinct.last() != Some(knot) {
+                distinct.push(*knot);
+            }
+        }
+        // Raise each interior knot to multiplicity `degree` so the pieces are Bezier curves.
+        for knot in &distinct {
+            let present = knots.iter().filter(|k| *k == knot).count();
+            for _ in present..degree {
+                (knots, ctrl) = bspline::insert_knot(degree, &knots, &ctrl, *knot)?;
+            }
+        }
+        let pieces = distinct.len() + 1;
+        let mut elevated = Vec::with_capacity(ctrl.len() + pieces);
+        for piece in 0..pieces {
+            let start = piece * degree;
+            let Some(points) = ctrl.get(start..start + degree + 1) else {
+                return invalid("curve pieces do not match the degree");
+            };
+            // Adjacent pieces share an end control point; keep only one copy of it.
+            let skip = usize::from(piece > 0);
+            elevated.extend(elevate_bezier_homogeneous(points).into_iter().skip(skip));
+        }
+        let mut new_knots = vec![a; raised + 1];
+        for knot in &distinct {
+            new_knots.extend(std::iter::repeat_n(*knot, raised));
+        }
+        new_knots.extend(std::iter::repeat_n(b, raised + 1));
+        Self::from_homogeneous(raised, new_knots, &elevated)
+    }
+
+    /// Cartesian points and weights from homogeneous control points. Refuses a point with no
+    /// usable weight instead of dividing by it.
+    fn from_homogeneous(degree: usize, knots: Vec<f64>, ctrl: &[HPoint]) -> CurveResult<Self> {
+        let mut points = Vec::with_capacity(ctrl.len());
+        let mut weights = Vec::with_capacity(ctrl.len());
+        for point in ctrl {
+            let Some(cartesian) = point.project() else {
+                return invalid("a knot operation produced a control point without a usable weight");
+            };
+            points.push(cartesian);
+            weights.push(point.w);
+        }
+        Self::new(degree, knots, points, weights)
     }
 
     /// The same geometry with its parameter range mapped affinely onto `[0, 1]`. Control points
@@ -724,6 +803,21 @@ fn directed_distance(points: &[Vec3], polyline: &[Vec3], cancelled: &impl Fn() -
     Ok(maximum)
 }
 
+/// A Bezier piece of `degree + 1` homogeneous points, raised to one more degree (NURBS Book
+/// eq. 5.36). Homogeneous coordinates combine linearly, so the same weights apply to them.
+fn elevate_bezier_homogeneous(piece: &[HPoint]) -> Vec<HPoint> {
+    let degree = piece.len().saturating_sub(1);
+    let at = |i: usize| piece.get(i).copied().unwrap_or(HPoint::ZERO);
+    let denominator = (degree + 1) as f64;
+    (0..=degree + 1)
+        .map(|i| {
+            let a = i as f64 / denominator;
+            let previous = if i == 0 { HPoint::ZERO } else { at(i - 1) * a };
+            previous + at(i) * (1.0 - a)
+        })
+        .collect()
+}
+
 fn norm(v: Vec3) -> f64 {
     v.x.hypot(v.y).hypot(v.z)
 }
@@ -1102,6 +1196,196 @@ mod tests {
                 "scale {scale}"
             );
             assert_eq!(report.measured_order, reference.measured_order, "scale {scale}");
+        }
+    }
+
+    /// Independent reference: Cox-de Boor basis recursion, then the weighted average of the
+    /// controls. Written here so the library's own evaluation is not its only check.
+    fn reference_eval(curve: &NurbsCurve, t: f64) -> Vec3 {
+        let knots = curve.knots();
+        let degree = curve.degree();
+        let [a, b] = curve.domain();
+        let mut basis: Vec<f64> = (0..knots.len() - 1)
+            .map(|i| {
+                let inside = knots[i] <= t && t < knots[i + 1];
+                let at_end = t == b && knots[i] < b && knots[i + 1] == b;
+                if inside || at_end { 1.0 } else { 0.0 }
+            })
+            .collect();
+        assert!(a <= t);
+        for d in 1..=degree {
+            let mut next = vec![0.0; basis.len() - 1];
+            for (i, value) in next.iter_mut().enumerate() {
+                let left = if knots[i + d] > knots[i] { (t - knots[i]) / (knots[i + d] - knots[i]) * basis[i] } else { 0.0 };
+                let right =
+                    if knots[i + d + 1] > knots[i + 1] { (knots[i + d + 1] - t) / (knots[i + d + 1] - knots[i + 1]) * basis[i + 1] } else { 0.0 };
+                *value = left + right;
+            }
+            basis = next;
+        }
+        let mut numerator = Vec3::ZERO;
+        let mut denominator = 0.0;
+        for ((point, weight), value) in curve.control_points().iter().zip(curve.weights()).zip(&basis) {
+            numerator = numerator + *point * (weight * value);
+            denominator += weight * value;
+        }
+        numerator / denominator
+    }
+
+    /// Sixty-four interior parameters, avoiding the domain ends and the knots of the test curves.
+    fn samples(curve: &NurbsCurve) -> Vec<f64> {
+        let [a, b] = curve.domain();
+        (0..64).map(|i| a + (b - a) * (f64::from(i) + 0.5) / 64.0).collect()
+    }
+
+    fn cubic_knots() -> Vec<f64> {
+        vec![0.0, 0.0, 0.0, 0.0, 0.3, 0.6, 1.0, 1.0, 1.0, 1.0]
+    }
+
+    fn cubic_points() -> Vec<Vec3> {
+        (0..6).map(|i| Vec3::new(f64::from(i), f64::from((i * i) % 5), 0.1 * f64::from(i))).collect()
+    }
+
+    fn cubic(weights: Vec<f64>) -> NurbsCurve {
+        NurbsCurve::new(3, cubic_knots(), cubic_points(), weights).unwrap()
+    }
+
+    fn rational_cubic() -> NurbsCurve {
+        cubic(vec![1.0, 0.5, 2.0, 1.5, 0.8, 1.2])
+    }
+
+    fn non_rational_cubic() -> NurbsCurve {
+        cubic(vec![1.0; 6])
+    }
+
+    fn assert_same_curve(before: &NurbsCurve, after: &NurbsCurve, tolerance: f64) {
+        for t in samples(before) {
+            near(before.eval(t).unwrap(), after.eval(t).unwrap(), tolerance);
+            near(reference_eval(before, t), after.eval(t).unwrap(), tolerance);
+        }
+    }
+
+    #[test]
+    fn knot_insertion_preserves_rational_and_non_rational_curves() {
+        for curve in [rational_cubic(), non_rational_cubic(), quarter_circle()] {
+            let inserted = curve.insert_knot(0.45).unwrap();
+            assert_eq!(inserted.control_points().len(), curve.control_points().len() + 1);
+            assert_eq!(inserted.domain(), curve.domain());
+            assert_same_curve(&curve, &inserted, 1e-9);
+        }
+    }
+
+    #[test]
+    fn repeated_knot_insertion_preserves_the_curve_up_to_the_degree() {
+        let curve = rational_cubic();
+        let mut current = curve.clone();
+        // 0.3 already appears once, so the cubic may take it twice more before it reaches 3.
+        for expected_multiplicity in [2, 3] {
+            current = current.insert_knot(0.3).unwrap();
+            assert_eq!(current.knots().iter().filter(|k| **k == 0.3).count(), expected_multiplicity);
+            assert_same_curve(&curve, &current, 1e-9);
+        }
+        assert!(current.insert_knot(0.3).is_err(), "a fourth copy would exceed the cubic's degree");
+        let mut inner = curve.insert_knot(0.45).unwrap().insert_knot(0.45).unwrap().insert_knot(0.45).unwrap();
+        assert_eq!(inner.knots().iter().filter(|k| **k == 0.45).count(), 3);
+        assert_same_curve(&curve, &inner, 1e-9);
+        inner = inner.insert_knot(0.8).unwrap().insert_knot(0.1).unwrap();
+        assert_same_curve(&curve, &inner, 1e-9);
+    }
+
+    #[test]
+    fn knot_insertion_refuses_bad_parameters_and_leaves_the_curve_unchanged() {
+        let circle = quarter_circle();
+        for t in [0.0, 1.0, -0.1, 1.5, f64::NAN, f64::INFINITY] {
+            assert!(circle.insert_knot(t).is_err(), "t = {t}");
+        }
+        let twice = circle.insert_knot(0.5).unwrap().insert_knot(0.5).unwrap();
+        assert!(twice.insert_knot(0.5).is_err(), "a third copy exceeds the quadratic's degree");
+        assert_eq!(circle.control_points().len(), 3);
+    }
+
+    #[test]
+    fn degree_elevation_preserves_shape_for_both_kinds_of_curve() {
+        for curve in [rational_cubic(), non_rational_cubic(), quarter_circle()] {
+            let elevated = curve.elevate_degree().unwrap();
+            assert_eq!(elevated.degree(), curve.degree() + 1);
+            assert_eq!(elevated.domain(), curve.domain());
+            assert_same_curve(&curve, &elevated, 1e-9);
+        }
+        // The quarter circle keeps its exact radius after elevation.
+        let circle = quarter_circle().elevate_degree().unwrap();
+        for t in samples(&circle) {
+            assert!((norm(circle.eval(t).unwrap()) - 1.0).abs() < 1e-12);
+        }
+        // Elevation composes with knot insertion.
+        let twice = rational_cubic().elevate_degree().unwrap().insert_knot(0.5).unwrap().elevate_degree().unwrap();
+        assert_eq!(twice.degree(), 5);
+        assert_same_curve(&rational_cubic(), &twice, 1e-9);
+    }
+
+    #[test]
+    fn jet_first_derivative_matches_a_central_difference() {
+        let h = 1e-6;
+        for curve in [rational_cubic(), non_rational_cubic(), quarter_circle()] {
+            for t in samples(&curve).into_iter().step_by(5) {
+                let [a, b] = curve.domain();
+                if t - h < a || t + h > b {
+                    continue;
+                }
+                let difference = (curve.eval(t + h).unwrap() - curve.eval(t - h).unwrap()) / (2.0 * h);
+                near(curve.jet(t).unwrap().d1, difference, 1e-7);
+            }
+        }
+    }
+
+    #[test]
+    fn closed_curves_meet_at_their_common_end_point() {
+        let mut points = cubic_points();
+        let first = points[0];
+        *points.last_mut().unwrap() = first;
+        let closed = NurbsCurve::new(3, cubic_knots(), points, vec![1.0, 0.5, 2.0, 1.5, 0.8, 1.0]).unwrap();
+        near(closed.eval(0.0).unwrap(), closed.eval(1.0).unwrap(), 1e-12);
+        near(closed.eval(0.0).unwrap(), first, 1e-12);
+        let inserted = closed.insert_knot(0.45).unwrap().elevate_degree().unwrap();
+        near(inserted.eval(0.0).unwrap(), inserted.eval(1.0).unwrap(), 1e-12);
+    }
+
+    #[test]
+    fn equal_weights_behave_as_a_non_rational_curve() {
+        let plain = non_rational_cubic();
+        let scaled = cubic(vec![2.0; 6]);
+        for t in samples(&plain) {
+            near(plain.eval(t).unwrap(), scaled.eval(t).unwrap(), 1e-12);
+            let (p, s) = (plain.jet(t).unwrap(), scaled.jet(t).unwrap());
+            near(p.d1, s.d1, 1e-11);
+            near(p.d2, s.d2, 1e-10);
+        }
+        let inserted = scaled.insert_knot(0.45).unwrap();
+        assert!(inserted.weights().iter().all(|w| (w - 2.0).abs() < 1e-12), "{:?}", inserted.weights());
+        assert_same_curve(&plain, &inserted, 1e-9);
+    }
+
+    #[test]
+    fn evaluation_is_scale_invariant_at_model_scales() {
+        let base = rational_cubic();
+        for scale in [1e-3, 1.0, 1e6] {
+            let points: Vec<Vec3> = base.control_points().iter().map(|p| *p * scale).collect();
+            let knots: Vec<f64> = base.knots().iter().map(|k| k * scale).collect();
+            let scaled = NurbsCurve::new(3, knots, points, base.weights().to_vec()).unwrap();
+            let tolerance = 1e-11 * scale;
+            for t in samples(&base) {
+                let want = base.eval(t).unwrap() * scale;
+                near(scaled.eval(t * scale).unwrap(), want, tolerance);
+                near(reference_eval(&base, t) * scale, scaled.eval(t * scale).unwrap(), tolerance);
+            }
+            let inserted = scaled.insert_knot(0.45 * scale).unwrap();
+            for t in samples(&base) {
+                near(inserted.eval(t * scale).unwrap(), base.eval(t).unwrap() * scale, tolerance);
+            }
+            let jet = scaled.jet(0.5 * scale).unwrap();
+            let base_jet = base.jet(0.5).unwrap();
+            // Scaling both the points and the parameter leaves the first derivative unchanged.
+            near(jet.d1, base_jet.d1, 1e-9);
         }
     }
 }
