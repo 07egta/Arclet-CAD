@@ -179,7 +179,7 @@ impl PanelState {
         let target = group_target(&groups, self.chosen_group, &bodies);
 
         ui.horizontal_wrapped(|ui| {
-            if ui_kit::button(ui, tr("arclet.panel.group_new"), Button::Primary).clicked()
+            if ui_kit::button(ui, tr("arclet.panel.group_new"), if bodies.is_empty() { Button::Enabled(false) } else { Button::Primary }).clicked()
                 && let Some(made) = self.exec(cad, "browser.group", json!({ "folder": "bodies", "component": 0, "items": bodies }))
             {
                 self.chosen_group = made.get("group").and_then(Value::as_u64);
@@ -399,7 +399,7 @@ fn measurement_rows(ui: &mut Ui, cad: &SolveApp, value: &Value) {
             lines.push(("arclet.panel.bbox", parts.join(" × ")));
         }
     }
-    lines.push(("arclet.panel.counts", format!("{} / {} / {}", total["faces"], total["edges"], total["vertices"])));
+    lines.push(("arclet.panel.counts", format!("{} / {} / {}", count(&total["faces"]), count(&total["edges"]), count(&total["vertices"]))));
     egui::Grid::new("arclet_panel_measure").num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
         for (label, text) in lines {
             ui.label(RichText::new(tr(label)).color(tokens.text_dim));
@@ -449,4 +449,9 @@ mod tests {
         // With no pick and no grouped body, nothing is current.
         assert_eq!(group_target(&groups, None, &["Sphere".to_string()]), None);
     }
+}
+
+/// A count from the measurement JSON, or a dash when the engine did not report it.
+fn count(value: &Value) -> String {
+    value.as_u64().map_or_else(|| "—".to_string(), |n| n.to_string())
 }

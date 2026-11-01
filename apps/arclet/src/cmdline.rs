@@ -64,6 +64,10 @@ impl CommandHistory {
         self.lines.is_empty()
     }
 
+    pub(crate) fn len(&self) -> usize {
+        self.lines.len()
+    }
+
     pub(crate) fn iter(&self) -> impl Iterator<Item = &HistoryLine> {
         self.lines.iter()
     }
@@ -214,8 +218,8 @@ pub(crate) fn show(ui: &mut Ui, line: &mut CommandLine, command: &mut String, fo
             .max_height(row * HISTORY_ROWS as f32)
             .auto_shrink([false, true])
             .stick_to_bottom(true)
-            .show(ui, |ui| {
-                for entry in line.history.iter() {
+            .show_rows(ui, row, line.history.len(), |ui, range| {
+                for entry in line.history.iter().skip(range.start).take(range.len()) {
                     let color = match entry.kind {
                         LineKind::Failed => tokens.error,
                         LineKind::Entered => tokens.text,

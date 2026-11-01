@@ -274,20 +274,23 @@ impl Toolbars {
             .exact_size(MAIN_WIDTH)
             .frame(Container::new(ui.ctx(), Surface::ApplicationBar).edge_frame(tokens.panel).inner_margin(egui::Margin::symmetric(4, 6)))
             .show(ui, |ui| {
-                ui.vertical_centered(|ui| {
-                    ui.spacing_mut().item_spacing.y = 2.0;
-                    for (index, row) in MAIN.iter().enumerate() {
-                        if index > 0 {
-                            ui.add_space(4.0);
-                            ui.separator();
-                            ui.add_space(4.0);
-                        }
-                        for group in row.iter() {
-                            if let Some(pick) = self.button(ui, cad, group, vec2(MAIN_BUTTON, MAIN_BUTTON)) {
-                                picked = Some(pick);
+                // Scrolls instead of clipping when the window is short (minimum 960x600).
+                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                    ui.vertical_centered(|ui| {
+                        ui.spacing_mut().item_spacing.y = 2.0;
+                        for (index, row) in MAIN.iter().enumerate() {
+                            if index > 0 {
+                                ui.add_space(4.0);
+                                ui.separator();
+                                ui.add_space(4.0);
+                            }
+                            for group in row.iter() {
+                                if let Some(pick) = self.button(ui, cad, group, vec2(MAIN_BUTTON, MAIN_BUTTON)) {
+                                    picked = Some(pick);
+                                }
                             }
                         }
-                    }
+                    })
                 });
             });
         picked
