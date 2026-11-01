@@ -570,6 +570,8 @@ impl ArcletApp {
         solidcraft_ui_egui::scenario::clear_handles();
         self.header(ui);
         self.tools(ui);
+        // Added before the command bar so the status bar sits below it.
+        crate::statusbar::show(&mut self.cad, ui);
         self.command_bar(ui);
         self.cad.ui_after_host(ui);
         self.help(&ctx);

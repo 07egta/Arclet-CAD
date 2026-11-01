@@ -4,6 +4,7 @@ mod app;
 mod classic_look;
 mod commands;
 mod platform;
+mod statusbar;
 
 #[cfg(not(target_arch = "wasm32"))]
 fn main() -> eframe::Result {
