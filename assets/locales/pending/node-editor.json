@@ -18,7 +18,7 @@
     "arclet.command.too_long": "Command names may contain at most 256 bytes.",
     "arclet.command.unavailable": "This shortcut's command is unavailable in this build.",
     "arclet.command.unknown": "Unknown command. Enter a listed name or a full command ID.",
-    "arclet.command_hint": "Line, Loft, Blend, Match, Zebra…",
+    "arclet.command_hint": "Line, Loft, Blend, Match, Zebra… (Enter repeats the last command)",
     "arclet.continuity": "Surface continuity",
     "arclet.curvature": "Curvature map",
     "arclet.curve_join": "Curve continuity",

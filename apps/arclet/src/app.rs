@@ -402,6 +402,25 @@ impl ArcletApp {
         });
     }
 
+    /// Run the command bar's text. An empty line repeats the last command, like pressing
+    /// Enter at an empty command line, so a repeated operation is one keystroke.
+    fn run_command_text(&mut self) {
+        if self.command.trim().is_empty() {
+            match self.cad.last_command.clone() {
+                Some((id, _)) => self.start(&id),
+                None => self.command_error = Some(tr("arclet.command.empty").to_string()),
+            }
+            return;
+        }
+        match commands::resolve(&self.command) {
+            Ok(id) => {
+                self.start(id);
+                self.command.clear();
+            }
+            Err(error) => self.command_error = Some(error),
+        }
+    }
+
     fn command_bar(&mut self, ui: &mut Ui) {
         if self.cad.nodes.open {
             return;
@@ -444,13 +463,7 @@ impl ArcletApp {
                     }
                     let entered = response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
                     if entered || ui_kit::button(ui, tr("arclet.run"), ui_kit::Button::Primary).clicked() {
-                        match commands::resolve(&self.command) {
-                            Ok(id) => {
-                                self.start(id);
-                                self.command.clear();
-                            }
-                            Err(error) => self.command_error = Some(error),
-                        }
+                        self.run_command_text();
                     }
                     if ui_kit::button(ui, tr("arclet.finish"), ui_kit::Button::Normal).clicked() {
                         solidcraft_ui_egui::tools::confirm_current(&mut self.cad);
@@ -840,6 +853,24 @@ mod tests {
             assert!(find_command(id).is_some(), "{id}");
         }
         assert_eq!(commands::resolve("Spline"), Ok("sketch.spline.control_point"));
+    }
+
+    #[test]
+    fn an_empty_command_line_repeats_the_last_command() {
+        let mut app = ArcletApp::with_services(Default::default());
+        app.command.clear();
+        app.run_command_text();
+        assert!(app.command_error.is_some(), "nothing to repeat yet");
+        app.command = "front".into();
+        app.run_command_text();
+        assert!(app.command_error.is_none(), "a known name starts without an error");
+        assert!(app.command.is_empty());
+        app.command_error = None;
+        app.cad.last_command = Some(("view.top".into(), "Top".into()));
+        app.command.clear();
+        app.run_command_text();
+        assert!(app.command_error.is_none());
+        assert_eq!(app.cad.last_command.as_ref().map(|(id, _)| id.as_str()), Some("view.top"));
     }
 
     #[test]
