@@ -134,6 +134,7 @@ pub struct ArcletApp {
     /// while the CAD document's save prompt is open must cause a fresh graph prompt.
     acknowledged_graph: Option<solidcraft_graph::Graph>,
     awaiting_document_quit: bool,
+    toolbars: crate::toolbars::Toolbars,
 }
 
 impl ArcletApp {
@@ -217,6 +218,7 @@ impl ArcletApp {
             graph_close_pending: false,
             acknowledged_graph: None,
             awaiting_document_quit: false,
+            toolbars: Default::default(),
         }
     }
 
@@ -413,6 +415,13 @@ impl ArcletApp {
         });
     }
 
+    fn run_pick(&mut self, pick: crate::toolbars::Pick) {
+        match pick {
+            crate::toolbars::Pick::Start(id) => self.start(id),
+            crate::toolbars::Pick::File(action) => action.run(&mut self.cad),
+        }
+    }
+
     fn tools(&mut self, ui: &mut Ui) {
         if self.cad.nodes.open {
             return;
@@ -569,6 +578,9 @@ impl ArcletApp {
         }
         solidcraft_ui_egui::scenario::clear_handles();
         self.header(ui);
+        if let Some(pick) = self.toolbars.standard(ui, &self.cad) {
+            self.run_pick(pick);
+        }
         self.tools(ui);
         if cmdline::route_letters(&ctx, &self.cad, &mut self.command) {
             self.command_focus = true;
@@ -576,6 +588,9 @@ impl ArcletApp {
         // Added before the command bar so the status bar sits below it.
         crate::statusbar::show(&mut self.cad, ui);
         self.command_bar(ui);
+        if let Some(pick) = self.toolbars.main(ui, &self.cad) {
+            self.run_pick(pick);
+        }
         self.cad.ui_after_host(ui);
         self.help(&ctx);
         let unsaved = solidcraft_ui_egui::documents::any_dirty(&self.cad) || self.cad.nodes.editor.is_dirty() || platform::has_unsaved_downloads();

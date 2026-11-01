@@ -6,6 +6,7 @@ mod cmdline;
 mod commands;
 mod platform;
 mod statusbar;
+mod toolbars;
 
 #[cfg(not(target_arch = "wasm32"))]
 fn main() -> eframe::Result {
