@@ -533,7 +533,7 @@ impl ArcletApp {
     }
 
     fn graph_allows_close(&self) -> bool {
-        if self.cad.nodes.file_busy() {
+        if self.cad.nodes.worker_busy() {
             return false;
         }
         if !self.cad.nodes.editor.is_dirty() {
@@ -582,7 +582,7 @@ impl ArcletApp {
         if self.cad.file_picker_busy() {
             return;
         }
-        let busy = self.cad.nodes.file_busy();
+        let busy = self.cad.nodes.worker_busy();
         let mut action = 0;
         let closed = ui_kit::Window::new(egui::Id::new("arclet_graph_close"), "save", tr("arclet.close.title")).cards(1.5).show_body(ctx, |ui| {
             ui.set_max_width(440.0);

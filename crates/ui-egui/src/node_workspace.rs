@@ -88,6 +88,12 @@ impl State {
         self.job.is_some() || self.preview_path.is_some()
     }
 
+    /// Only the graph's own file worker (save, load, mesh work) must finish before closing.
+    /// A CAD import started from the workspace is not graph data, so it never blocks quitting.
+    pub fn worker_busy(&self) -> bool {
+        self.job.is_some()
+    }
+
     /// Hosts already persist preferences on exit and periodically. Keep an independent graph
     /// recovery snapshot there as well; ordinary CAD files retain their existing format.
     pub(crate) fn saved_state(&self) -> Value {
@@ -252,13 +258,19 @@ pub(crate) fn tick(app: &mut SolveApp, ctx: &egui::Context) {
             app.nodes.message = Some(tr("node.workspace.cancelled").to_string());
         } else {
             match done {
-                Ok(Completed::Loaded { path, text }) => match app.nodes.editor.load_json(&text) {
-                    Ok(()) => {
-                        app.nodes.path = Some(path);
-                        app.nodes.message = Some(tr("node.workspace.loaded").to_string());
+                Ok(Completed::Loaded { path, text }) => {
+                    // Opening replaces the graph without a prompt, like a light Rhino open.
+                    // The replacement is one undo step, so unsaved edits are never lost silently.
+                    let replaced_unsaved = app.nodes.editor.is_dirty();
+                    match app.nodes.editor.load_json(&text) {
+                        Ok(()) => {
+                            app.nodes.path = Some(path);
+                            let key = if replaced_unsaved { "node.workspace.loaded_undo" } else { "node.workspace.loaded" };
+                            app.nodes.message = Some(tr(key).to_string());
+                        }
+                        Err(error) => app.nodes.editor.report_error(error),
                     }
-                    Err(error) => app.nodes.editor.report_error(error),
-                },
+                }
                 Ok(Completed::Saved { path, text, graph }) => {
                     if graph {
                         match app.nodes.editor.mark_saved_json(&text) {

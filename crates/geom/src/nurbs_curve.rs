@@ -145,6 +145,19 @@ impl NurbsCurve {
         Self::new(self.degree(), knots, self.points.iter().rev().copied().collect(), self.weights.iter().rev().copied().collect())
     }
 
+    /// The same geometry with its parameter range mapped affinely onto `[0, 1]`. Control points
+    /// and weights are unchanged, so geometric (arc-length) quantities are identical, but the raw
+    /// derivatives stay representable for extremely wide or narrow parameter ranges.
+    fn normalized(&self) -> CurveResult<Self> {
+        let [a, b] = self.domain();
+        let width = b - a;
+        if !(width > 0.0 && width.is_finite()) {
+            return invalid("the curve's parameter range must be positive and finite");
+        }
+        let knots = self.knots().iter().map(|k| ((*k - a) / width).clamp(0.0, 1.0)).collect();
+        Self::new(self.degree(), knots, self.points.clone(), self.weights.clone())
+    }
+
     /// Evaluate inside the domain; extrapolation and non-finite parameters are refused.
     pub fn eval(&self, t: f64) -> CurveResult<Vec3> {
         Ok(self.derivatives(t, 0)?[0])
@@ -397,8 +410,10 @@ pub struct JoinReport {
 /// Compare the end of `before` with the start of `after`, in their authored directions.
 pub fn measure_join(before: &NurbsCurve, after: &NurbsCurve, tolerances: JoinTolerances) -> CurveResult<JoinReport> {
     tolerances.validate()?;
-    let a = before.jet(before.domain()[1])?.arc_length()?;
-    let b = after.jet(after.domain()[0])?.arc_length()?;
+    // Measure on [0, 1] parameter ranges so the result never depends on how the curves were
+    // parameterized (arc-length quantities are invariant under an affine parameter change).
+    let a = before.normalized()?.jet(1.0)?.arc_length()?;
+    let b = after.normalized()?.jet(0.0)?.arc_length()?;
     let gap_mm = norm(b.point - a.point);
     // atan2 retains precision near both zero and 180 degrees.
     let tangent_angle_deg = norm(a.tangent.cross(b.tangent)).atan2(a.tangent.dot(b.tangent).clamp(-1.0, 1.0)).to_degrees();
@@ -1057,6 +1072,36 @@ mod tests {
             assert_eq!(jet.d1, Vec3::ZERO);
             assert_eq!(jet.d2, Vec3::ZERO);
             assert_eq!(jet.d3, Vec3::ZERO);
+        }
+    }
+
+    #[test]
+    fn join_measurement_does_not_depend_on_the_parameter_range() {
+        let cubic = |scale: f64, offset: Vec3| {
+            let mut knots = vec![0.0; 4];
+            knots.extend(std::iter::repeat_n(scale, 4));
+            let points = [Vec3::new(0.0, 0.0, 0.0), Vec3::new(1.0, 2.0, 0.5), Vec3::new(3.0, 2.5, -1.0), Vec3::new(4.0, 0.0, 2.0)];
+            NurbsCurve::new(3, knots, points.iter().map(|p| *p + offset).collect(), vec![1.0; 4]).unwrap()
+        };
+        let reference = {
+            let first = cubic(1.0, Vec3::new(0.0, 0.0, 0.0));
+            let second = cubic(1.0, Vec3::new(4.0, 0.0, 2.0));
+            measure_join(&first, &second, JoinTolerances::default()).unwrap()
+        };
+        for scale in [1e-104, 1e-50, 1e100, 1e160, 1e300] {
+            let first = cubic(scale, Vec3::new(0.0, 0.0, 0.0));
+            let second = cubic(scale, Vec3::new(4.0, 0.0, 2.0));
+            let report = measure_join(&first, &second, JoinTolerances::default()).unwrap();
+            assert!(
+                (report.curvature_jump_per_mm - reference.curvature_jump_per_mm).abs() <= 1e-9 * reference.curvature_jump_per_mm.max(1.0),
+                "scale {scale}"
+            );
+            assert!(
+                (report.curvature_change_jump_per_mm2 - reference.curvature_change_jump_per_mm2).abs()
+                    <= 1e-9 * reference.curvature_change_jump_per_mm2.max(1.0),
+                "scale {scale}"
+            );
+            assert_eq!(report.measured_order, reference.measured_order, "scale {scale}");
         }
     }
 }

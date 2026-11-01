@@ -105,6 +105,7 @@
     "node.workspace.invalid_mesh": "The generated mesh contains invalid coordinates",
     "node.workspace.invalid_open": "open must be true or false",
     "node.workspace.loaded": "Graph loaded",
+    "node.workspace.loaded_undo": "Graph loaded. Undo brings back your unsaved graph.",
     "node.workspace.model": "Model",
     "node.workspace.model_changed": "The CAD document changed. Choose Add to model again.",
     "node.workspace.nodes": "Nodes",
