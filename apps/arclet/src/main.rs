@@ -2,6 +2,7 @@
 
 mod app;
 mod commands;
+mod panels;
 mod platform;
 
 #[cfg(not(target_arch = "wasm32"))]

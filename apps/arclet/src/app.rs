@@ -13,7 +13,7 @@ use solidcraft_ui_egui::toolbar::FileAction;
 use solidcraft_ui_egui::ui_kit::{self, Container, Edge, Surface};
 use solidcraft_ui_egui::{Services, SolveApp};
 
-use crate::{commands, platform};
+use crate::{commands, panels, platform};
 
 const PREFS_KEY: &str = "arclet.workspace.v1";
 const CURVES: &[(&str, &str)] = &[
@@ -133,6 +133,7 @@ pub struct ArcletApp {
     /// while the CAD document's save prompt is open must cause a fresh graph prompt.
     acknowledged_graph: Option<solidcraft_graph::Graph>,
     awaiting_document_quit: bool,
+    panels: panels::PanelState,
 }
 
 impl ArcletApp {
@@ -213,6 +214,7 @@ impl ArcletApp {
             graph_close_pending: false,
             acknowledged_graph: None,
             awaiting_document_quit: false,
+            panels: panels::PanelState::default(),
         }
     }
 
@@ -569,6 +571,7 @@ impl ArcletApp {
         self.header(ui);
         self.tools(ui);
         self.command_bar(ui);
+        panels::show(ui, &mut self.cad, &mut self.panels);
         self.cad.ui_after_host(ui);
         self.help(&ctx);
         let unsaved = solidcraft_ui_egui::documents::any_dirty(&self.cad) || self.cad.nodes.editor.is_dirty() || platform::has_unsaved_downloads();
