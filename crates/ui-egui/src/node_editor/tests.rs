@@ -2,7 +2,7 @@ use super::*;
 
 fn frame(editor: &mut NodeEditor, ctx: &egui::Context, events: Vec<egui::Event>) {
     crate::scenario::clear_handles();
-    let _ = ctx.run_ui(
+    let mut output = ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0))),
             focused: true,
@@ -13,6 +13,7 @@ fn frame(editor: &mut NodeEditor, ctx: &egui::Context, events: Vec<egui::Event>)
             editor.show(ui);
         },
     );
+    output.textures_delta.clear();
 }
 
 fn pointer(at: egui::Pos2, button: egui::PointerButton, pressed: bool) -> Vec<egui::Event> {
@@ -162,14 +163,14 @@ fn a_failed_node_draws_an_error_while_an_independent_output_remains_available() 
     editor.finish(Ok(result), editor.revision);
     let mut shapes = Vec::new();
     for _ in 0..2 {
-        shapes = ctx
-            .run_ui(
-                egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0))), ..Default::default() },
-                |ui| {
-                    editor.show(ui);
-                },
-            )
-            .shapes;
+        let mut output = ctx.run_ui(
+            egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0))), ..Default::default() },
+            |ui| {
+                editor.show(ui);
+            },
+        );
+        output.textures_delta.clear();
+        shapes = std::mem::take(&mut output.shapes);
     }
     fn text(shape: &egui::Shape, output: &mut String) {
         match shape {
@@ -214,11 +215,12 @@ fn resizing_fills_the_workspace_and_keeps_room_for_the_inspector() {
     for size in [egui::vec2(1440.0, 900.0), egui::vec2(1920.0, 1080.0), egui::vec2(960.0, 720.0)] {
         let mut bounds = egui::Rect::NOTHING;
         for _ in 0..3 {
-            let output =
+            let mut output =
                 ctx.run_ui(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)), ..Default::default() }, |ui| {
                     bounds = ui.available_rect_before_wrap();
                     editor.show(ui);
                 });
+            output.textures_delta.clear();
             assert!(
                 output
                     .shapes

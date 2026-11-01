@@ -570,7 +570,8 @@ mod tests {
 
     #[test]
     fn recovered_dirty_flag_wins_even_when_contents_equal_a_saved_starter() {
-        let mut state = State { enabled: true, ..Default::default() };
+        let mut state = State::default();
+        state.enabled = true;
         let text = state.editor.to_json().unwrap();
         state.editor.mark_saved();
         state.restore_state(&json!({"graph":text, "path":"other.json", "dirty":true}));
