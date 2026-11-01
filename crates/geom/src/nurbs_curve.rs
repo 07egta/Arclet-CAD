@@ -913,17 +913,10 @@ mod tests {
         assert!(matches!(result, Err(CurveError::Cancelled)));
     }
 
-
     #[test]
     fn a_constant_rational_curve_never_acquires_a_tangent_from_translation() {
         let point = Vec3::new(1e12, -2e12, 3e12);
-        let curve = NurbsCurve::new(
-            2,
-            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
-            vec![point; 3],
-            vec![1.0, std::f64::consts::FRAC_1_SQRT_2, 1.0],
-        )
-        .unwrap();
+        let curve = NurbsCurve::new(2, vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0], vec![point; 3], vec![1.0, std::f64::consts::FRAC_1_SQRT_2, 1.0]).unwrap();
         for index in 0..=100 {
             let jet = curve.jet(f64::from(index) / 100.0).unwrap();
             assert_eq!(jet.point, point);
@@ -983,13 +976,7 @@ mod tests {
 
     #[test]
     fn clamped_tiny_endpoints_are_exact_in_both_directions() {
-        let curve = NurbsCurve::new(
-            1,
-            vec![0.0, 0.0, 1.0, 1.0],
-            vec![Vec3::X * 1e-230, Vec3::X],
-            vec![1e-100, 1.0],
-        )
-        .unwrap();
+        let curve = NurbsCurve::new(1, vec![0.0, 0.0, 1.0, 1.0], vec![Vec3::X * 1e-230, Vec3::X], vec![1e-100, 1.0]).unwrap();
         let reversed = curve.reversed().unwrap();
         assert_eq!(curve.eval(0.0).unwrap(), Vec3::X * 1e-230);
         assert_eq!(reversed.eval(1.0).unwrap(), Vec3::X * 1e-230);
@@ -999,13 +986,7 @@ mod tests {
 
     #[test]
     fn finite_extreme_coordinates_do_not_overflow_only_from_recentering() {
-        let curve = NurbsCurve::new(
-            1,
-            vec![0.0, 0.0, 4.0, 4.0],
-            vec![Vec3::X * -1e308, Vec3::X * 1e308],
-            vec![1.0; 2],
-        )
-        .unwrap();
+        let curve = NurbsCurve::new(1, vec![0.0, 0.0, 4.0, 4.0], vec![Vec3::X * -1e308, Vec3::X * 1e308], vec![1.0; 2]).unwrap();
         let jet = curve.jet(2.0).unwrap();
         assert_eq!(jet.point, Vec3::ZERO);
         assert!((jet.d1.x / 5e307 - 1.0).abs() < 1e-14);
@@ -1069,13 +1050,7 @@ mod tests {
     #[test]
     fn a_constant_span_is_evaluable_on_a_tiny_parameter_domain() {
         let point = Vec3::new(1e300, -1e300, 0.0);
-        let curve = NurbsCurve::new(
-            2,
-            vec![0.0, 0.0, 0.0, 1e-200, 1e-200, 1e-200],
-            vec![point; 3],
-            vec![1e-100, 1e100, 1.0],
-        )
-        .unwrap();
+        let curve = NurbsCurve::new(2, vec![0.0, 0.0, 0.0, 1e-200, 1e-200, 1e-200], vec![point; 3], vec![1e-100, 1e100, 1.0]).unwrap();
         for parameter in [0.0, 0.5e-200, 1e-200] {
             let jet = curve.jet(parameter).unwrap();
             assert_eq!(jet.point, point);
@@ -1084,5 +1059,4 @@ mod tests {
             assert_eq!(jet.d3, Vec3::ZERO);
         }
     }
-
 }

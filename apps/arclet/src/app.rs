@@ -502,11 +502,7 @@ impl ArcletApp {
         }
         // The shared document quit workflow covers CAD tabs, not the separate graph.
         // Guard both the OS close event and quit requests originating inside that workflow.
-        if self.awaiting_document_quit
-            && !self.cad.quit_requested
-            && self.cad.docs.quitting.is_none()
-            && self.cad.docs.closing.is_none()
-        {
+        if self.awaiting_document_quit && !self.cad.quit_requested && self.cad.docs.quitting.is_none() && self.cad.docs.closing.is_none() {
             self.awaiting_document_quit = false;
             self.acknowledged_graph = None;
         }
@@ -588,24 +584,22 @@ impl ArcletApp {
         }
         let busy = self.cad.nodes.file_busy();
         let mut action = 0;
-        let closed = ui_kit::Window::new(egui::Id::new("arclet_graph_close"), "save", tr("arclet.close.title"))
-            .cards(1.5)
-            .show_body(ctx, |ui| {
-                ui.set_max_width(440.0);
-                ui.label(tr(if busy { "arclet.close.busy" } else { "arclet.close.message" }));
-                ui.add_space(10.0);
-                ui.horizontal_wrapped(|ui| {
-                    if ui_kit::button(ui, tr("arclet.close.keep"), ui_kit::Button::Normal).clicked() {
-                        action = 1;
-                    }
-                    if ui_kit::button(ui, tr("arclet.close.save"), ui_kit::Button::Enabled(!busy)).clicked() {
-                        action = 2;
-                    }
-                    if ui_kit::button(ui, tr("arclet.close.without_save"), ui_kit::Button::Enabled(!busy)).clicked() {
-                        action = 3;
-                    }
-                });
+        let closed = ui_kit::Window::new(egui::Id::new("arclet_graph_close"), "save", tr("arclet.close.title")).cards(1.5).show_body(ctx, |ui| {
+            ui.set_max_width(440.0);
+            ui.label(tr(if busy { "arclet.close.busy" } else { "arclet.close.message" }));
+            ui.add_space(10.0);
+            ui.horizontal_wrapped(|ui| {
+                if ui_kit::button(ui, tr("arclet.close.keep"), ui_kit::Button::Normal).clicked() {
+                    action = 1;
+                }
+                if ui_kit::button(ui, tr("arclet.close.save"), ui_kit::Button::Enabled(!busy)).clicked() {
+                    action = 2;
+                }
+                if ui_kit::button(ui, tr("arclet.close.without_save"), ui_kit::Button::Enabled(!busy)).clicked() {
+                    action = 3;
+                }
             });
+        });
         match action {
             1 => self.cancel_graph_close(),
             2 => {
@@ -943,5 +937,4 @@ mod tests {
         assert!(app.cad.docs.closing.is_some());
         assert!(app.cad.session.is_dirty());
     }
-
 }

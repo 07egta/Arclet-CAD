@@ -558,10 +558,7 @@ mod tests {
 
     #[test]
     fn failed_close_save_never_marks_the_graph_saved() {
-        let services = crate::Services {
-            download_design: Some(Box::new(|_, _| Err("disk unavailable".into()))),
-            ..Default::default()
-        };
+        let services = crate::Services { download_design: Some(Box::new(|_, _| Err("disk unavailable".into()))), ..Default::default() };
         let mut app = SolveApp::new(Default::default(), services);
         assert!(app.nodes.editor.is_dirty());
         save_graph(&mut app, &egui::Context::default()).unwrap();
@@ -588,5 +585,4 @@ mod tests {
         assert!(app.nodes.editor.is_dirty());
         assert!(app.nodes.path.is_none());
     }
-
 }
