@@ -31,3 +31,13 @@ No cargo/rustc/rustfmt is installed and no complete base checkout could be downl
 First restore the complete source with `restore_arclet.py`; obtain the pinned Rust toolchain; compile and run the 18 new regressions plus affected existing suites; fix any compile/lint issue; then drive the newly built close/save/cancel UI. Perform a Windows launch and file round-trip before shipping a Windows binary. See NEXT_STEPS.md for exact commands and edge cases. Do not start broad new compatibility claims before these P0 checks.
 
 Keep the two new topics separate for review/PRs. The restoration branch combines them only for local integration testing. The old stable executable remains separately identifiable and is not overwritten.
+
+## Checkpoint 2026-11-02 (Rhino-style UI wave + NURBS math wave)
+Verified in this checkpoint (commands actually run, all passed):
+- `cargo test -p arclet`: 40 passed. `cargo test -p solidcraft-geom nurbs_curve`: 35 passed (adds knot insertion, degree elevation, hostile-input and scale tests; no library bug found by the 4000-case hostile run).
+- `cargo test -p solidcraft-engine sketch_rebuild`: 8 passed (Rebuild now reports mean/RMS deviation, curvature change, control-point counts).
+- `cargo clippy` on arclet, geom, engine, ui-egui with `-D warnings` (one allowed pre-existing lint, `clippy::manual_option_zip`): clean.
+Added UI (compiles and unit-tested, NOT yet checked visually or by screenshot): Rhino-style menu bar, standard toolbar, left main toolbar with flyouts, command line with history and autocomplete, status bar (only Grid Snap is wired; other snap chips are disabled and say so), right panel (Properties, Groups, Display), light-grey "classic" theme.
+Not done: 4-viewport layout (the viewport is single-camera; needs a design change), true layers, Polyline command, 3DM/Grasshopper/plugin compatibility, benchmarks, Windows/macOS builds.
+Known pre-existing failures (not from this work): `cargo xtask lists` (locale sort), `cargo xtask skills`, some ui-egui tests hitting a TexturesDelta debug assertion.
+See COMPATIBILITY_MATRIX.md for the honest feature coverage table and LICENSE_AUDIT.md for the licence review.

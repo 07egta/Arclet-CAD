@@ -360,10 +360,10 @@ impl Toolbars {
                 self.held = false;
             }
         }
-        if self.flyout.is_some_and(|(key, _)| key == id) {
-            if let Some(chosen) = self.draw_flyout(ui.ctx(), group, rect) {
-                pick = Some(chosen);
-            }
+        if self.flyout.is_some_and(|(key, _)| key == id)
+            && let Some(chosen) = self.draw_flyout(ui.ctx(), group, rect)
+        {
+            pick = Some(chosen);
         }
         pick
     }
