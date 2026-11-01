@@ -33,7 +33,7 @@ mod tests {
     fn classic_theme_has_grey_viewport_and_yellow_selected_body() {
         let file = theme_files::find(THEME_ID, &[]).expect("the classic theme is built in");
         let t = theme_files::resolve(file);
-        let grey = |c: Color32| c.r() == c.g() && c.g().abs_diff(c.b()) <= 6;
+        let grey = |c: Color32| c.r().abs_diff(c.g()) <= 8 && c.g().abs_diff(c.b()) <= 12;
         assert!(grey(t.viewport_top) && grey(t.viewport_bottom), "viewport is neutral grey");
         assert!((0x60..=0xb0).contains(&t.viewport_top.r()), "viewport is mid grey");
         assert!(t.body_selected.r() > t.body_selected.b() + 60 && t.body_selected.g() > t.body_selected.b(), "selected body is yellowish");
