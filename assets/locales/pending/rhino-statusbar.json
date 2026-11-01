@@ -1,0 +1,25 @@
+{
+  "en": {
+    "arclet.status.component": "Component",
+    "arclet.status.gumball": "Gumball",
+    "arclet.status.grid_snap": "Grid Snap",
+    "arclet.status.not_available": "not available yet",
+    "arclet.status.open_sketch": "Open a sketch to use Grid Snap",
+    "arclet.status.ortho": "Ortho",
+    "arclet.status.planar": "Planar",
+    "arclet.status.plane": "Plane",
+    "arclet.status.root": "Root",
+    "arclet.status.selected": "Selected",
+    "arclet.status.snap.cen": "Cen",
+    "arclet.status.snap.end": "End",
+    "arclet.status.snap.int": "Int",
+    "arclet.status.snap.knot": "Knot",
+    "arclet.status.snap.mid": "Mid",
+    "arclet.status.snap.near": "Near",
+    "arclet.status.snap.perp": "Perp",
+    "arclet.status.snap.point": "Point",
+    "arclet.status.snap.quad": "Quad",
+    "arclet.status.snap.tan": "Tan",
+    "arclet.status.units": "Units"
+  }
+}
