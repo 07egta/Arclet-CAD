@@ -2,6 +2,7 @@
 
 mod app;
 mod classic_look;
+mod cmdline;
 mod commands;
 mod platform;
 mod statusbar;
