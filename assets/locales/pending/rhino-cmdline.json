@@ -1,0 +1,8 @@
+{
+  "en": {
+    "arclet.cmd.entered": "Command: {text}",
+    "arclet.cmd.failed": "Error: {error}",
+    "arclet.cmd.repeated": "Repeat: {id}",
+    "arclet.cmd.started": "Started: {id}"
+  }
+}

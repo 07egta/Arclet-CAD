@@ -13,7 +13,7 @@ use solidcraft_ui_egui::toolbar::FileAction;
 use solidcraft_ui_egui::ui_kit::{self, Container, Edge, Surface};
 use solidcraft_ui_egui::{Services, SolveApp};
 
-use crate::{commands, platform};
+use crate::{cmdline, commands, platform};
 
 const PREFS_KEY: &str = "arclet.workspace.v1";
 const CURVES: &[(&str, &str)] = &[
@@ -122,6 +122,7 @@ pub struct ArcletApp {
     command: String,
     command_error: Option<String>,
     command_focus: bool,
+    cmdline: cmdline::CommandLine,
     help: bool,
     controls: Sender<ControlRequest>,
     screenshot_path: Option<String>,
@@ -204,6 +205,7 @@ impl ArcletApp {
             command: String::new(),
             command_error: None,
             command_focus: false,
+            cmdline: cmdline::CommandLine::default(),
             help: false,
             controls,
             screenshot_path: None,
@@ -469,17 +471,37 @@ impl ArcletApp {
     fn run_command_text(&mut self) {
         if self.command.trim().is_empty() {
             match self.cad.last_command.clone() {
-                Some((id, _)) => self.start(&id),
-                None => self.command_error = Some(tr("arclet.command.empty").to_string()),
+                Some((id, _)) => {
+                    self.cmdline.repeated(&id);
+                    self.start_logged(&id);
+                }
+                None => {
+                    let error = tr("arclet.command.empty").to_string();
+                    self.cmdline.failed("", &error);
+                    self.command_error = Some(error);
+                }
             }
             return;
         }
+        self.cmdline.entered(&self.command);
         match commands::resolve(&self.command) {
             Ok(id) => {
-                self.start(id);
+                self.start_logged(id);
                 self.command.clear();
             }
-            Err(error) => self.command_error = Some(error),
+            Err(error) => {
+                self.cmdline.failed(&self.command, &error);
+                self.command_error = Some(error);
+            }
+        }
+    }
+
+    /// Start `id` from the command line and log whether it started.
+    fn start_logged(&mut self, id: &str) {
+        self.start(id);
+        match self.command_error.clone() {
+            Some(error) => self.cmdline.failed(id, &error),
+            None => self.cmdline.started(id),
         }
     }
 
@@ -495,43 +517,21 @@ impl ArcletApp {
                 if let Some(error) = &self.command_error {
                     ui.label(RichText::new(error).color(tokens.error));
                 }
-                if !self.command.trim().is_empty() {
-                    ui.horizontal_wrapped(|ui| {
-                        for suggestion in commands::suggestions(&self.command) {
-                            if ui_kit::button(ui, suggestion.label, ui_kit::Button::Small).clicked() {
-                                self.start(suggestion.id);
-                                self.command.clear();
-                            }
-                        }
-                    });
+                let invalid = self.command_error.is_some();
+                match cmdline::show(ui, &mut self.cmdline, &mut self.command, &mut self.command_focus, invalid) {
+                    cmdline::Action::Nothing => {}
+                    cmdline::Action::Run => self.run_command_text(),
+                    cmdline::Action::Suggested { id, label } => {
+                        self.cmdline.entered(label);
+                        self.start_logged(id);
+                        self.command.clear();
+                    }
+                    cmdline::Action::Cancel => {
+                        self.command_error = None;
+                        cmdline::cancel_active(&mut self.cad);
+                    }
+                    cmdline::Action::Finish => solidcraft_ui_egui::tools::confirm_current(&mut self.cad),
                 }
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new(tr("arclet.command")).strong());
-                    let response = ui
-                        .allocate_ui(vec2((ui.available_width() - 170.0).max(100.0), 28.0), |ui| {
-                            ui_kit::bounded_cell_editor(
-                                ui,
-                                egui::Id::new("arclet_command_input"),
-                                &mut self.command,
-                                tr("arclet.command_hint"),
-                                self.command_error.is_some(),
-                                256,
-                            )
-                        })
-                        .inner;
-                    solidcraft_ui_egui::scenario::publish_handle("arclet:command", response.rect.center());
-                    if std::mem::take(&mut self.command_focus) {
-                        response.request_focus();
-                    }
-                    let entered = response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
-                    if entered || ui_kit::button(ui, tr("arclet.run"), ui_kit::Button::Primary).clicked() {
-                        self.run_command_text();
-                    }
-                    if ui_kit::button(ui, tr("arclet.finish"), ui_kit::Button::Normal).clicked() {
-                        solidcraft_ui_egui::tools::confirm_current(&mut self.cad);
-                    }
-                    ui.label(RichText::new("mm").color(tokens.text_dim));
-                });
             });
     }
 
@@ -568,6 +568,9 @@ impl ArcletApp {
         solidcraft_ui_egui::scenario::clear_handles();
         self.header(ui);
         self.tools(ui);
+        if cmdline::route_letters(&ctx, &self.cad, &mut self.command) {
+            self.command_focus = true;
+        }
         self.command_bar(ui);
         self.cad.ui_after_host(ui);
         self.help(&ctx);
