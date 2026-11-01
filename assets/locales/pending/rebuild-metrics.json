@@ -1,0 +1,9 @@
+{
+  "en": {
+    "curve_quality.control_counts": "Control points (source → rebuilt)",
+    "curve_quality.curvature_change": "Max curvature change (1/mm)",
+    "curve_quality.curvature_none": "No measurable curvature samples",
+    "curve_quality.mean": "Mean deviation",
+    "curve_quality.rms_deviation": "RMS deviation"
+  }
+}
