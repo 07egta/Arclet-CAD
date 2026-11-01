@@ -202,10 +202,10 @@ pub fn show(app: &mut SolveApp, ui: &mut Ui) {
                 }
             });
         });
-    if let Some((command, params)) = clicked.and_then(|chip| click(chip, settings)) {
-        if let Err(error) = app.run(command, params) {
-            app.set_status(error, true);
-        }
+    if let Some((command, params)) = clicked.and_then(|chip| click(chip, settings))
+        && let Err(error) = app.run(command, params)
+    {
+        app.set_status(error, true);
     }
 }
 

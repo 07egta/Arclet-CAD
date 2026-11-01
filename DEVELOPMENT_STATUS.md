@@ -1,4 +1,16 @@
-# Arclet CAD - reproducible development checkpoint, 2026-11-01
+# Arclet CAD - development status
+
+## 2026-11-02 - this checkout builds and passes its checks
+
+The notes below were written in an environment without a Rust toolchain. In this checkout
+(`rustc 1.99.0`) the following pass: `cargo test -p arclet` (35 binary tests and 3 coverage-matrix
+tests), `cargo test -p solidcraft-engine --lib mesh_check` (6 tests), the pending-locale test in
+`solidcraft-ui-egui`, `cargo clippy -p arclet -p solidcraft-engine --all-targets -- -D warnings`,
+`cargo fmt --all -- --check` and `cargo xtask lists`. See `TEST_RESULTS.md` for the exact commands
+and for what is still unverified (no native window launch, no screenshot, no third-party round-trip).
+`COMPATIBILITY_MATRIX.md` is the feature record; this file is the build/checkpoint history.
+
+## 2026-11-01 checkpoint (historical)
 
 ## Do not lose or restart the project
 The previous source ZIP and original Linux executable were recovered from Library. Their original files remain under `/mnt/data/arclet-recovered` in this session. This delivery embeds the previous source bundle/patches and 47 verified new baseline files. **Do not ask the owner to upload the source again.** This is not a full offline checkout: the pinned base objects and build dependencies are still required.

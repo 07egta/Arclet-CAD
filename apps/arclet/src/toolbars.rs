@@ -6,7 +6,6 @@ use std::f32::consts::{PI, TAU};
 use std::time::Duration;
 
 use egui::{Color32, Id, Painter, Rect, Shape, Stroke, Ui, pos2, vec2};
-use solidcraft_engine::find_command;
 use solidcraft_ui_egui::SolveApp;
 use solidcraft_ui_egui::i18n::tr;
 use solidcraft_ui_egui::theme::Tokens;
@@ -361,10 +360,10 @@ impl Toolbars {
                 self.held = false;
             }
         }
-        if self.flyout.is_some_and(|(key, _)| key == id) {
-            if let Some(chosen) = self.draw_flyout(ui.ctx(), group, rect) {
-                pick = Some(chosen);
-            }
+        if self.flyout.is_some_and(|(key, _)| key == id)
+            && let Some(chosen) = self.draw_flyout(ui.ctx(), group, rect)
+        {
+            pick = Some(chosen);
         }
         pick
     }
@@ -631,6 +630,7 @@ fn chevron(tip: (f32, f32), dir: (f32, f32), len: f32) -> [(f32, f32); 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use solidcraft_engine::find_command;
 
     #[test]
     fn every_toolbar_button_starts_an_engine_command() {
