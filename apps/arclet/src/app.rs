@@ -73,6 +73,49 @@ const SOLIDS: &[(&str, &str)] = &[
     ("arclet.press_pull", "solid.press_pull"),
     ("arclet.shell", "solid.shell"),
 ];
+const CURVE_SHAPES: &[(&str, &str)] = &[
+    ("arclet.arc_three_point", "sketch.arc.three_point"),
+    ("arclet.arc_center", "sketch.arc.center_point"),
+    ("arclet.arc_tangent", "sketch.arc.tangent"),
+    ("arclet.polygon", "sketch.polygon.inscribed"),
+    ("arclet.ellipse", "sketch.ellipse"),
+];
+const CURVE_EDITS: &[(&str, &str)] = &[
+    ("arclet.dimension", "sketch.dimension"),
+    ("arclet.fillet", "sketch.fillet"),
+    ("arclet.chamfer", "sketch.chamfer.equal_distance"),
+    ("arclet.mirror", "sketch.mirror"),
+    ("arclet.pattern_rect", "sketch.pattern.rectangular"),
+    ("arclet.pattern_circular", "sketch.pattern.circular"),
+];
+const SURFACE_MORE: &[(&str, &str)] = &[
+    ("arclet.ruled", "surface.ruled"),
+    ("arclet.unstitch", "surface.unstitch"),
+    ("arclet.untrim", "surface.untrim"),
+    ("arclet.extend", "surface.extend"),
+];
+const SOLID_MORE: &[(&str, &str)] = &[
+    ("arclet.cone", "solid.cone"),
+    ("arclet.torus", "solid.torus"),
+    ("arclet.pipe", "solid.pipe"),
+    ("arclet.hole", "solid.hole"),
+    ("arclet.split_body", "solid.split_body"),
+];
+const SOLID_PATTERNS: &[(&str, &str)] =
+    &[("arclet.pattern_rect", "solid.pattern.rectangular"), ("arclet.pattern_circular", "solid.pattern.circular")];
+const FILE_TOOLS: &[(&str, &str)] =
+    &[("arclet.insert_step", "file.insert_step"), ("arclet.insert_mesh", "file.insert_mesh"), ("arclet.export", "file.export")];
+const EDIT_TOOLS: &[(&str, &str)] =
+    &[("arclet.repeat", "edit.repeat"), ("arclet.delete", "selection.delete"), ("arclet.select_objects", "select.set")];
+const MESH_TOOLS: &[(&str, &str)] = &[("arclet.mesh_convert", "mesh.convert"), ("arclet.save_mesh", "file.save_mesh")];
+const RENDER_TOOLS: &[(&str, &str)] = &[
+    ("arclet.render_start", "render.start"),
+    ("arclet.render_frame", "render.camera.fit"),
+    ("arclet.render_status", "render.status"),
+    ("arclet.render_cancel", "render.cancel"),
+    ("arclet.render_export", "render.export"),
+    ("arclet.render_browser", "view.render_browser"),
+];
 
 pub struct ArcletApp {
     cad: SolveApp,
@@ -262,44 +305,14 @@ impl ArcletApp {
                         }
                     }
                     ui.separator();
-                    ui.add_enabled_ui(!self.cad.nodes.open, |ui| {
-                        ui_kit::Menu::button(ui, tr("arclet.file"), |ui| {
-                            for (label, action) in [
-                                ("arclet.new", FileAction::New),
-                                ("arclet.open", FileAction::Open),
-                                ("arclet.save", FileAction::Save),
-                                ("arclet.save_as", FileAction::SaveAs),
-                            ] {
-                                if ui_kit::button(ui, tr(label), ui_kit::Button::Enabled(action.enabled(&self.cad))).clicked() {
-                                    action.run(&mut self.cad);
-                                    ui.close();
-                                }
-                            }
-                            ui.separator();
-                            for (label, extension) in [("arclet.export_stl", "stl"), ("arclet.export_3mf", "3mf"), ("arclet.export_step", "step")] {
-                                if ui_kit::button(ui, tr(label), ui_kit::Button::Normal).clicked() {
-                                    if extension == "step" {
-                                        FileAction::Export(extension).run(&mut self.cad);
-                                    } else {
-                                        FileAction::ExportMesh(extension).run(&mut self.cad);
-                                    }
-                                    ui.close();
-                                }
-                            }
-                        });
-                        for (label, action) in [("arclet.undo", FileAction::Undo), ("arclet.redo", FileAction::Redo)] {
-                            if ui_kit::button(ui, tr(label), ui_kit::Button::Enabled(action.enabled(&self.cad))).clicked() {
-                                action.run(&mut self.cad);
-                            }
-                        }
-                        if ui_kit::button(ui, tr("arclet.save"), ui_kit::Button::Normal).clicked() {
-                            FileAction::Save.run(&mut self.cad);
+                    ui.add_enabled_ui(!self.cad.nodes.open, |ui| self.menus(ui));
+                    ui_kit::Menu::button(ui, tr("arclet.menu.help"), |ui| {
+                        if ui_kit::button(ui, tr("arclet.help"), ui_kit::Button::Normal).clicked() {
+                            self.help = !self.help;
+                            ui.close();
                         }
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui_kit::button(ui, tr("arclet.help"), ui_kit::Button::Ghost).clicked() {
-                            self.help = !self.help;
-                        }
                         if ui_kit::button(ui, tr("arclet.settings"), ui_kit::Button::Ghost).clicked() {
                             FileAction::Settings.run(&mut self.cad);
                         }
@@ -314,6 +327,86 @@ impl ArcletApp {
                     });
                 });
             });
+    }
+
+    /// The Rhino-style menu row, in the same order as Rhino's top bar. Each menu draws from
+    /// the command tables above, so every entry is one engine command id.
+    fn menus(&mut self, ui: &mut Ui) {
+        ui_kit::Menu::button(ui, tr("arclet.menu.file"), |ui| {
+            for (label, action) in [
+                ("arclet.new", FileAction::New),
+                ("arclet.open", FileAction::Open),
+                ("arclet.save", FileAction::Save),
+                ("arclet.save_as", FileAction::SaveAs),
+            ] {
+                if ui_kit::button(ui, tr(label), ui_kit::Button::Enabled(action.enabled(&self.cad))).clicked() {
+                    action.run(&mut self.cad);
+                    ui.close();
+                }
+            }
+            ui.separator();
+            for (label, extension) in [("arclet.export_stl", "stl"), ("arclet.export_3mf", "3mf"), ("arclet.export_step", "step")] {
+                if ui_kit::button(ui, tr(label), ui_kit::Button::Normal).clicked() {
+                    if extension == "step" {
+                        FileAction::Export(extension).run(&mut self.cad);
+                    } else {
+                        FileAction::ExportMesh(extension).run(&mut self.cad);
+                    }
+                    ui.close();
+                }
+            }
+            ui.separator();
+            self.tool_items(ui, &[FILE_TOOLS]);
+        });
+        ui_kit::Menu::button(ui, tr("arclet.menu.edit"), |ui| {
+            for (label, action) in [("arclet.undo", FileAction::Undo), ("arclet.redo", FileAction::Redo)] {
+                if ui_kit::button(ui, tr(label), ui_kit::Button::Enabled(action.enabled(&self.cad))).clicked() {
+                    action.run(&mut self.cad);
+                    ui.close();
+                }
+            }
+            ui.separator();
+            self.tool_items(ui, &[EDIT_TOOLS]);
+        });
+        ui_kit::Menu::button(ui, tr("arclet.menu.view"), |ui| {
+            self.tool_items(ui, &[VIEWS]);
+            ui.separator();
+            let isolate = solidcraft_ui_egui::context_menu::items(&self.cad, &solidcraft_ui_egui::context_menu::Target::Viewport)
+                .into_iter()
+                .find(|item| item.id == "ui.isolate");
+            if ui_kit::button(ui, tr("arclet.isolate"), ui_kit::Button::Enabled(isolate.as_ref().is_some_and(|item| item.enabled))).clicked()
+                && let Some(item) = isolate
+            {
+                solidcraft_ui_egui::context_menu::run_item(&mut self.cad, &item, ui.max_rect().center());
+                ui.close();
+            }
+            if ui_kit::button(ui, tr("arclet.show_all"), ui_kit::Button::Normal).clicked() {
+                if let Err(error) = self.cad.run("browser.visibility", json!({"folder": "all", "visible": true})) {
+                    self.command_error = Some(error);
+                }
+                ui.close();
+            }
+        });
+        self.tool_menu(ui, "arclet.menu.curve", &[CURVES, CURVE_SHAPES, CURVE_EDITS, CURVE_TOOLS]);
+        self.tool_menu(ui, "arclet.menu.surface", &[SURFACES, SURFACE_MORE]);
+        self.tool_menu(ui, "arclet.menu.solid", &[SOLIDS, SOLID_MORE, SOLID_PATTERNS]);
+        self.tool_menu(ui, "arclet.menu.mesh", &[MESH_TOOLS]);
+        self.tool_menu(ui, "arclet.menu.transform", &[TRANSFORMS]);
+        self.tool_menu(ui, "arclet.menu.analyze", &[ANALYSIS]);
+        self.tool_menu(ui, "arclet.menu.render", &[RENDER_TOOLS]);
+        ui_kit::Menu::button(ui, tr("arclet.menu.tools"), |ui| {
+            if ui_kit::button(ui, tr("arclet.all_tools"), ui_kit::Button::Normal).clicked() {
+                self.start("ui.palette");
+                ui.close();
+            }
+            ui.separator();
+            solidcraft_ui_egui::toolbar::selection_filter(&mut self.cad, ui);
+            ui.separator();
+            if ui_kit::button(ui, tr("arclet.clear_selection"), ui_kit::Button::Normal).clicked() {
+                self.start("select.clear");
+                ui.close();
+            }
+        });
     }
 
     fn tools(&mut self, ui: &mut Ui) {
@@ -343,47 +436,7 @@ impl ArcletApp {
                         if ui_kit::button(ui, tr("arclet.finish_sketch"), ui_kit::Button::Primary).clicked() {
                             self.cad.finish_sketch();
                         }
-                    } else {
-                        self.tool_menu(ui, "arclet.surfaces", SURFACES);
-                        self.tool_menu(ui, "arclet.solids", SOLIDS);
-                        self.tool_menu(ui, "arclet.transform", TRANSFORMS);
                     }
-                    self.tool_menu(ui, "arclet.curve_tools", CURVE_TOOLS);
-                    ui_kit::Menu::button(ui, tr("arclet.select"), |ui| {
-                        solidcraft_ui_egui::toolbar::selection_filter(&mut self.cad, ui);
-                        ui.separator();
-                        if ui_kit::button(ui, tr("arclet.clear_selection"), ui_kit::Button::Normal).clicked() {
-                            self.start("select.clear");
-                            ui.close();
-                        }
-                    });
-                    self.tool_menu(ui, "arclet.analysis", ANALYSIS);
-                    ui.separator();
-                    ui_kit::Menu::button(ui, tr("arclet.view"), |ui| {
-                        for &(label, id) in VIEWS {
-                            if tool_button(ui, label, id).clicked() {
-                                self.start(id);
-                                ui.close();
-                            }
-                        }
-                        ui.separator();
-                        let isolate = solidcraft_ui_egui::context_menu::items(&self.cad, &solidcraft_ui_egui::context_menu::Target::Viewport)
-                            .into_iter()
-                            .find(|item| item.id == "ui.isolate");
-                        if ui_kit::button(ui, tr("arclet.isolate"), ui_kit::Button::Enabled(isolate.as_ref().is_some_and(|item| item.enabled)))
-                            .clicked()
-                            && let Some(item) = isolate
-                        {
-                            solidcraft_ui_egui::context_menu::run_item(&mut self.cad, &item, ui.max_rect().center());
-                            ui.close();
-                        }
-                        if ui_kit::button(ui, tr("arclet.show_all"), ui_kit::Button::Normal).clicked() {
-                            if let Err(error) = self.cad.run("browser.visibility", json!({"folder": "all", "visible": true})) {
-                                self.command_error = Some(error);
-                            }
-                            ui.close();
-                        }
-                    });
                     if ui_kit::button(ui, tr("arclet.all_tools"), ui_kit::Button::Ghost).clicked() {
                         self.start("ui.palette");
                     }
@@ -391,15 +444,24 @@ impl ArcletApp {
             });
     }
 
-    fn tool_menu(&mut self, ui: &mut Ui, title: &str, tools: &[(&str, &str)]) {
-        ui_kit::Menu::button(ui, tr(title), |ui| {
-            for &(label, id) in tools {
+    /// Command rows for an open menu. A rule separates the groups, so one table can supply
+    /// a whole section of a menu without copying its entries.
+    fn tool_items(&mut self, ui: &mut Ui, groups: &[&[(&str, &str)]]) {
+        for (index, group) in groups.iter().enumerate() {
+            if index > 0 {
+                ui.separator();
+            }
+            for &(label, id) in group.iter() {
                 if tool_button(ui, label, id).clicked() {
                     self.start(id);
                     ui.close();
                 }
             }
-        });
+        }
+    }
+
+    fn tool_menu(&mut self, ui: &mut Ui, title: &str, groups: &[&[(&str, &str)]]) {
+        ui_kit::Menu::button(ui, tr(title), |ui| self.tool_items(ui, groups));
     }
 
     /// Run the command bar's text. An empty line repeats the last command, like pressing
@@ -849,7 +911,24 @@ mod tests {
 
     #[test]
     fn curated_geometry_tools_exist_in_the_engine() {
-        for &(_, id) in CURVES.iter().chain(CURVE_TOOLS).chain(SURFACES).chain(SOLIDS).chain(TRANSFORMS).chain(ANALYSIS).chain(VIEWS) {
+        let tables = CURVES
+            .iter()
+            .chain(CURVE_TOOLS)
+            .chain(CURVE_SHAPES)
+            .chain(CURVE_EDITS)
+            .chain(SURFACES)
+            .chain(SURFACE_MORE)
+            .chain(SOLIDS)
+            .chain(SOLID_MORE)
+            .chain(SOLID_PATTERNS)
+            .chain(TRANSFORMS)
+            .chain(ANALYSIS)
+            .chain(VIEWS)
+            .chain(FILE_TOOLS)
+            .chain(EDIT_TOOLS)
+            .chain(MESH_TOOLS)
+            .chain(RENDER_TOOLS);
+        for &(_, id) in tables {
             assert!(find_command(id).is_some(), "{id}");
         }
         assert_eq!(commands::resolve("Spline"), Ok("sketch.spline.control_point"));

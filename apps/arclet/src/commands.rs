@@ -27,28 +27,74 @@ struct Entry {
 // remain available for choosing a different sketch/solid/surface operation. Rotate uses the
 // existing Move/Copy transform tool, whose parameters include an axis and an angle.
 const ALIASES: &[(&str, &str)] = &[
+    ("align", "solid.align"),
+    ("arc", "sketch.arc.three_point"),
+    ("array", "sketch.pattern.rectangular"),
+    ("arraylinear", "sketch.pattern.rectangular"),
+    ("arraypolar", "sketch.pattern.circular"),
+    ("back", "view.back"),
     ("blend", "surface.blend"),
     ("blendsrf", "surface.blend"),
     ("boolean", "solid.combine"),
+    ("booleandifference", "solid.combine"),
+    ("booleanintersection", "solid.combine"),
+    ("booleanunion", "solid.combine"),
+    ("bottom", "view.bottom"),
     ("boundary", "surface.boundary"),
     ("box", "solid.box"),
     ("bx", "solid.box"),
     ("c", "sketch.circle.center"),
+    ("chamfer", "sketch.chamfer.equal_distance"),
+    ("chamferedge", "solid.chamfer"),
     ("ci", "sketch.circle.center"),
     ("circle", "sketch.circle.center"),
+    ("coil", "solid.coil"),
     ("comb", "inspect.curvature_comb"),
+    ("cone", "solid.cone"),
     ("continuity", "inspect.curve_continuity"),
+    ("contour", "inspect.section"),
+    ("controlpointcurve", "sketch.spline.control_point"),
+    ("curvatureanalysis", "inspect.curvature_map"),
+    ("curvaturegraph", "inspect.curvature_comb"),
+    ("curve", "sketch.spline.fit_point"),
+    ("cut", "solid.split_body"),
+    ("cyl", "solid.cylinder"),
+    ("cylinder", "solid.cylinder"),
+    ("delete", "selection.delete"),
+    ("dimlinear", "sketch.dimension"),
+    ("distance", "inspect.measure"),
+    ("draftangleanalysis", "inspect.draft"),
     ("e", "solid.extrude"),
+    ("edgesrf", "surface.boundary"),
+    ("ellipse", "sketch.ellipse"),
+    ("environmentmap", "inspect.environment_map"),
     ("ex", "solid.extrude"),
+    ("explode", "surface.unstitch"),
+    ("export", "file.export"),
+    ("extend", "sketch.extend"),
+    ("extendsrf", "surface.extend"),
     ("extrude", "solid.extrude"),
+    ("extrudecrv", "solid.extrude"),
+    ("extrudesrf", "surface.extrude"),
     ("f", "view.fit"),
     ("fair", "surface.fair"),
+    ("fillet", "sketch.fillet"),
+    ("filletedge", "solid.fillet"),
     ("fit", "view.fit"),
+    ("flip", "surface.reverse_normal"),
     ("front", "view.front"),
     ("gcon", "inspect.curve_continuity"),
+    ("group", "browser.group"),
+    ("hide", "browser.visibility"),
+    ("hole", "solid.hole"),
+    ("interpcrv", "sketch.spline.fit_point"),
+    ("intersect", "sketch.intersect"),
     ("iso", "view.isometric"),
     ("isometric", "view.isometric"),
+    ("join", "surface.stitch"),
     ("l", "sketch.line"),
+    ("left", "view.left"),
+    ("length", "inspect.measure"),
     ("lf", "surface.loft"),
     ("line", "sketch.line"),
     ("ln", "sketch.line"),
@@ -56,38 +102,78 @@ const ALIASES: &[(&str, &str)] = &[
     ("m", "solid.move"),
     ("match", "surface.match"),
     ("matchsrf", "surface.match"),
+    ("measure", "inspect.measure"),
+    ("mirror", "sketch.mirror"),
     ("move", "solid.move"),
     ("mv", "solid.move"),
+    ("networksrf", "surface.patch"),
+    ("new", "file.new"),
+    ("newfile", "file.new"),
     ("o", "sketch.offset"),
     ("of", "sketch.offset"),
     ("offset", "sketch.offset"),
+    ("offsetsrf", "surface.offset"),
+    ("open", "doc.open"),
     ("patch", "surface.patch"),
+    ("perspective", "view.perspective"),
+    ("pipe", "solid.pipe"),
+    ("pl", "sketch.chain"),
+    ("point", "sketch.point"),
+    ("polygon", "sketch.polygon.inscribed"),
+    ("polyline", "sketch.chain"),
+    ("project", "sketch.project"),
+    ("pt", "sketch.point"),
+    ("railrevolve", "surface.revolve"),
     ("rd", "edit.redo"),
     ("rebuild", "sketch.spline.rebuild"),
     ("rect", "sketch.rectangle.two_point"),
     ("rectangle", "sketch.rectangle.two_point"),
     ("redo", "edit.redo"),
+    ("repeat", "edit.repeat"),
+    ("revolve", "solid.revolve"),
+    ("rib", "solid.rib"),
     ("right", "view.right"),
     ("rot", "solid.move"),
     ("rotate", "solid.move"),
+    ("ruled", "surface.ruled"),
+    ("save", "file.save"),
+    ("saveas", "file.save_as"),
     ("sc", "solid.scale"),
     ("scale", "solid.scale"),
+    ("section", "inspect.section"),
+    ("selnone", "select.clear"),
+    ("shell", "solid.shell"),
+    ("show", "browser.visibility"),
     ("sph", "solid.sphere"),
     ("sphere", "solid.sphere"),
     ("spl", "sketch.spline.control_point"),
     ("spline", "sketch.spline.control_point"),
+    ("split", "solid.split_body"),
+    ("stitch", "surface.stitch"),
     ("sw", "surface.sweep"),
     ("sweep", "surface.sweep"),
+    ("sweep1", "surface.sweep"),
+    ("sweep2", "surface.sweep"),
+    ("text", "sketch.text"),
+    ("thicken", "surface.thicken"),
+    ("thread", "solid.thread"),
     ("top", "view.top"),
+    ("torus", "solid.torus"),
     ("tr", "sketch.trim"),
     ("trim", "sketch.trim"),
+    ("trimsrf", "surface.trim"),
     ("un", "edit.undo"),
     ("undo", "edit.undo"),
+    ("ungroup", "browser.ungroup"),
+    ("unjoin", "surface.unstitch"),
+    ("untrim", "surface.untrim"),
     ("vf", "view.front"),
     ("vi", "view.isometric"),
     ("vr", "view.right"),
     ("vt", "view.top"),
+    ("ze", "view.fit"),
     ("zebra", "inspect.zebra"),
+    ("zoomextents", "view.fit"),
 ];
 
 const COMMON_IDS: &[&str] = &[
@@ -250,6 +336,34 @@ mod tests {
     }
 
     #[test]
+    fn rhino_style_names_resolve() {
+        for (name, id) in [
+            ("arc", "sketch.arc.three_point"),
+            ("polyline", "sketch.chain"),
+            ("ellipse", "sketch.ellipse"),
+            ("polygon", "sketch.polygon.inscribed"),
+            ("point", "sketch.point"),
+            ("interpcrv", "sketch.spline.fit_point"),
+            ("controlpointcurve", "sketch.spline.control_point"),
+            ("filletedge", "solid.fillet"),
+            ("extrudesrf", "surface.extrude"),
+            ("edgesrf", "surface.boundary"),
+            ("railrevolve", "surface.revolve"),
+            ("offsetsrf", "surface.offset"),
+            ("explode", "surface.unstitch"),
+            ("booleanunion", "solid.combine"),
+            ("curvatureanalysis", "inspect.curvature_map"),
+            ("zoomextents", "view.fit"),
+            ("group", "browser.group"),
+            ("hide", "browser.visibility"),
+            ("dimlinear", "sketch.dimension"),
+            ("sweep2", "surface.sweep"),
+        ] {
+            assert_eq!(resolve(name), Ok(id), "alias {name}");
+        }
+    }
+
+    #[test]
     fn names_and_full_ids_ignore_case_and_surrounding_spaces() {
         assert_eq!(resolve("  cIrClE   "), Ok("sketch.circle.center"));
         assert_eq!(resolve("\u{2003}SOLID.EXTRUDE\u{2002}"), Ok("solid.extrude"));
@@ -259,13 +373,14 @@ mod tests {
 
     #[test]
     fn ambiguous_labels_require_a_qualified_id() {
-        let error = resolve("Fillet").unwrap_err();
+        let error = resolve("Circular Pattern").unwrap_err();
         assert!(error.contains("Ambiguous"));
-        assert!(error.contains("sketch.fillet"));
-        assert!(error.contains("solid.fillet"));
+        assert!(error.contains("sketch.pattern.circular"));
+        assert!(error.contains("solid.pattern.circular"));
+        assert_eq!(resolve("Fillet"), Ok("sketch.fillet"));
         assert_eq!(resolve("sketch.fillet"), Ok("sketch.fillet"));
         assert_eq!(resolve("solid.fillet"), Ok("solid.fillet"));
-        assert!(resolve("Extend").is_err());
+        assert_eq!(resolve("Extend"), Ok("sketch.extend"));
     }
 
     #[test]
@@ -287,7 +402,7 @@ mod tests {
 
     #[test]
     fn suggestions_are_bounded_stable_unique_and_registered() {
-        for text in ["", "s", "sketch.", "surface", "point", "Fillet", "line", "unmatched-nonsense"] {
+        for text in ["", "s", "sketch.", "surface", "point", "Circular Pattern", "line", "unmatched-nonsense"] {
             let first = suggestions(text);
             assert!(first.len() <= MAX_SUGGESTIONS);
             assert_eq!(first, suggestions(text));
@@ -308,8 +423,8 @@ mod tests {
         assert_eq!(suggestions("c").first().map(|item| item.id), Some("sketch.circle.center"));
         assert_eq!(suggestions("solid.sweep").first().map(|item| item.id), Some("solid.sweep"));
         assert_eq!(suggestions("extr").first().map(|item| item.id), Some("solid.extrude"));
-        let ambiguous = suggestions("Fillet");
-        assert!(ambiguous.iter().any(|item| item.id == "sketch.fillet"));
-        assert!(ambiguous.iter().any(|item| item.id == "solid.fillet"));
+        let ambiguous = suggestions("Circular Pattern");
+        assert!(ambiguous.iter().any(|item| item.id == "sketch.pattern.circular"));
+        assert!(ambiguous.iter().any(|item| item.id == "solid.pattern.circular"));
     }
 }
