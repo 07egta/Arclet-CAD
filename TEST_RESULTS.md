@@ -1,4 +1,37 @@
-# Verification record - 2026-11-01 continuation
+# Verification record
+
+## 2026-11-02 - built, tested and linted on Windows (supersedes "not compiled" below)
+
+Environment: Windows, `rustc 1.99.0 (b940084d7 2026-09-28)`, `cargo 1.99.0 (5f94df478 2026-08-27)`.
+
+Commands actually run in this checkout, with their results:
+
+| Command | Result |
+|---|---|
+| `cargo test -p arclet` | 35 passed (binary targets) and 3 passed (`tests/coverage_matrix.rs`); 0 failed |
+| `cargo test -p solidcraft-engine --lib mesh_check` | 6 passed |
+| `cargo test -p solidcraft-ui-egui --lib pending_messages` | 1 passed |
+| `cargo clippy -p arclet -p solidcraft-engine --all-targets -- -D warnings` | no warnings |
+| `cargo fmt --all -- --check` | clean |
+| `cargo xtask lists` | catalogs sorted; pending locale and attribution files fold cleanly |
+
+**What this proves.** The Arclet shell builds and runs its full egui frame harness. Menus are exercised
+through real frames and AccessKit hit testing: the top bar shows File, Edit, View, Curve, Surface,
+Solid, Mesh, Transform, Analyze, Render, Tools and Help in that order; every menu opens, shows its
+first entry and closes; View > Top, Iso and Fit start the engine commands; the menu bar is inert while
+the node workspace is open. Every menu entry is a registered command with English text, and the
+coverage matrix names only registered command ids. `mesh.check` classifies closed and open meshes and
+refuses a solid. The catalogs are sorted and the pending files fold.
+
+**What this does not prove.** No native window was launched and no screenshot was captured in this
+run, so first-frame behaviour, file pickers, GPU backends and how the menus feel are unverified. The
+geometry of pre-existing commands is not re-tested here. 3DM export does not exist; IGES, OBJ, STEP
+and 3DM round-trips with other software were not run. No Class-A or G3 claim is made.
+
+The sections below were written in an environment without a Rust toolchain. They are kept as
+historical evidence of the source review and the original-binary workflows, not as build results.
+
+## 2026-11-01 continuation
 
 ## Critical scope distinction
 

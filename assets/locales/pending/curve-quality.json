@@ -52,5 +52,9 @@
     "ui.surface.source": "Source surface",
     "ui.surface.target_edges": "Target edges",
     "ui.surface.too_many_picks": "The selection contains too many items"
+  },
+  "ja": {
+    "curve_quality.desktop_required": "このツールはデスクトップ版で使えます。ブラウザでは背景の形状計算がまだ使えません。",
+    "curve_quality.edit_sketch": "曲線を作り直したり点検する前に、スケッチを開くか作成してください。"
   }
 }

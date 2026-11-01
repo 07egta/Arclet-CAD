@@ -6,5 +6,13 @@
     "arclet.close.save": "Save graph",
     "arclet.close.title": "Unsaved node graph",
     "arclet.close.without_save": "Close without saving"
+  },
+  "ja": {
+    "arclet.close.busy": "ノードファイルの操作がまだ実行中です。編集を続けるか、操作が終わるまで待ってから閉じてください。",
+    "arclet.close.keep": "編集を続ける",
+    "arclet.close.message": "ノードグラフに保存していない変更があります。閉じる前にグラフを保存するか、ファイルを保存せずに閉じてください。",
+    "arclet.close.save": "グラフを保存",
+    "arclet.close.title": "保存していないノードグラフ",
+    "arclet.close.without_save": "保存せずに閉じる"
   }
 }

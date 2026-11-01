@@ -4645,3 +4645,104 @@ fn a_cut_leaves_hidden_bodies_alone() {
     let shown = setup(false);
     assert!(vol(&shown, "Below") < full - 1.0 && vol(&shown, "Above") < full - 1.0, "with nothing hidden, both are cut");
 }
+
+/// A session holding one imported mesh body with exactly these vertices and triangles.
+fn mesh_check_session(positions: &[[f64; 3]], triangles: &[[u32; 3]]) -> Session {
+    let mut doc = solidcraft_doc::Document::default();
+    doc.add_feature(
+        solidcraft_doc::FeatureKind::MeshImport {
+            file: "mesh-check.stl".into(),
+            meshes: vec![solidcraft_doc::MeshData {
+                name: "Mesh".into(),
+                positions: positions.iter().flatten().copied().collect(),
+                triangles: triangles.iter().flatten().copied().collect(),
+                color: None,
+            }],
+        },
+        Some("Mesh"),
+    )
+    .unwrap();
+    Session::new(doc)
+}
+
+const MESH_CHECK_CUBE: [[f64; 3]; 8] =
+    [[0., 0., 0.], [1., 0., 0.], [1., 1., 0.], [0., 1., 0.], [0., 0., 1.], [1., 0., 1.], [1., 1., 1.], [0., 1., 1.]];
+
+const MESH_CHECK_CUBE_TRIANGLES: [[u32; 3]; 12] =
+    [[0, 3, 2], [0, 2, 1], [4, 5, 6], [4, 6, 7], [0, 1, 5], [0, 5, 4], [1, 2, 6], [1, 6, 5], [2, 3, 7], [2, 7, 6], [3, 0, 4], [3, 4, 7]];
+
+#[test]
+fn mesh_check_reports_a_closed_cube_as_closed() {
+    let mut s = mesh_check_session(&MESH_CHECK_CUBE, &MESH_CHECK_CUBE_TRIANGLES);
+    s.selection = vec![crate::Sel::Body { name: "Mesh".into() }];
+    let v = run(&mut s, "mesh.check", json!({}));
+    assert_eq!(v["body"], "Mesh");
+    assert_eq!(v["tolerance_mm"], 0.0);
+    assert_eq!(v["vertices"], 8);
+    assert_eq!(v["triangles"], 12);
+    assert_eq!(v["degenerate_triangles"], 0);
+    assert_eq!(v["duplicate_vertices"], 0);
+    assert_eq!(v["naked_edges"], 0);
+    assert_eq!(v["non_manifold_edges"], 0);
+    assert_eq!(v["boundary_loops"], 0);
+    assert_eq!(v["closed"], true);
+}
+
+#[test]
+fn mesh_check_a_cube_missing_a_triangle_is_open() {
+    let mut triangles = MESH_CHECK_CUBE_TRIANGLES.to_vec();
+    triangles.remove(1);
+    let mut s = mesh_check_session(&MESH_CHECK_CUBE, &triangles);
+    let v = run(&mut s, "mesh.check", json!({"body": "Mesh"}));
+    assert_eq!(v["triangles"], 11);
+    assert_eq!(v["naked_edges"], 3);
+    assert_eq!(v["boundary_loops"], 1);
+    assert_eq!(v["closed"], false);
+}
+
+#[test]
+fn mesh_check_counts_degenerate_triangles() {
+    let positions = [
+        solidcraft_geom::Vec3::new(0., 0., 0.),
+        solidcraft_geom::Vec3::new(1., 0., 0.),
+        solidcraft_geom::Vec3::new(0., 1., 0.),
+        solidcraft_geom::Vec3::new(0.5, 0., 0.),
+    ];
+    let v = crate::cmd::mesh::analyze(&positions, &[[0, 1, 2], [0, 1, 1], [0, 1, 3]], 0.0);
+    assert_eq!(v["triangles"], 3);
+    assert_eq!(v["degenerate_triangles"], 2);
+}
+
+#[test]
+fn mesh_check_finds_a_duplicate_position_within_the_tolerance() {
+    let mut positions = MESH_CHECK_CUBE.to_vec();
+    positions.push([0.00001, 0.0, 0.0]);
+    let mut s = mesh_check_session(&positions, &MESH_CHECK_CUBE_TRIANGLES);
+    let exact = run(&mut s, "mesh.check", json!({"body": "Mesh"}));
+    assert_eq!(exact["duplicate_vertices"], 0);
+    let welded = run(&mut s, "mesh.check", json!({"body": "Mesh", "tolerance": "0.001 mm"}));
+    assert_eq!(welded["duplicate_vertices"], 1);
+    assert_eq!(welded["tolerance_mm"], 0.001);
+    assert_eq!(welded["closed"], true);
+}
+
+#[test]
+fn mesh_check_refuses_a_solid_body() {
+    let mut s = Session::default();
+    run(&mut s, "solid.box", json!({"length": 1, "width": 2, "height": 3, "body_name": "Block"}));
+    let err = s.execute("mesh.check", &json!({"body": "Block"})).expect_err("a solid is not a mesh").to_string();
+    assert!(err.contains("not a mesh body"), "{err}");
+}
+
+#[test]
+fn mesh_check_absurd_parameters_do_not_panic() {
+    let mut s = mesh_check_session(&MESH_CHECK_CUBE, &MESH_CHECK_CUBE_TRIANGLES);
+    for tolerance in [json!("1e300 mm"), json!("-1 mm"), json!("nan"), json!(true), json!({"x": 1}), json!([1, 2])] {
+        assert!(s.execute("mesh.check", &json!({"body": "Mesh", "tolerance": tolerance})).is_err(), "{tolerance}");
+    }
+    assert!(s.execute("mesh.check", &json!({"body": 7})).is_err());
+    assert!(s.execute("mesh.check", &json!({"body": "x".repeat(10_000)})).is_err());
+    assert!(s.execute("mesh.check", &json!({"tolerance": "0 mm"})).is_err());
+    let ok = run(&mut s, "mesh.check", json!({"body": "Mesh", "tolerance": null}));
+    assert_eq!(ok["closed"], true);
+}

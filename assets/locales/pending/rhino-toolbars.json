@@ -21,5 +21,8 @@
     "arclet.toolbar.surface_thicken": "Thicken surface",
     "arclet.toolbar.surface_trim": "Trim surface",
     "arclet.toolbar.trim_path": "Trim along path"
+  },
+  "ja": {
+    "arclet.perspective": "パース表示"
   }
 }

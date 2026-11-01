@@ -5,7 +5,7 @@ use std::sync::mpsc::{Receiver, Sender};
 
 use egui::{RichText, Ui, vec2};
 use serde_json::{Value, json};
-use solidcraft_engine::{Session, find_command};
+use solidcraft_engine::{Session, find_command, standard_view};
 use solidcraft_ui_egui::control::ControlRequest;
 use solidcraft_ui_egui::i18n::tr;
 use solidcraft_ui_egui::theme::Tokens;
@@ -27,7 +27,7 @@ const CURVE_TOOLS: &[(&str, &str)] = &[
     ("arclet.spline_five", "sketch.spline.control_point_5"),
     ("arclet.blend", "sketch.blend_curve"),
     ("arclet.rebuild", "sketch.spline.rebuild"),
-    ("arclet.curve_join", "inspect.curve_continuity"),
+    ("arclet.curve_continuity", "inspect.curve_continuity"),
 ];
 const SURFACES: &[(&str, &str)] = &[
     ("arclet.loft", "surface.loft"),
@@ -52,12 +52,33 @@ const ANALYSIS: &[(&str, &str)] = &[
     ("arclet.continuity", "inspect.continuity"),
     ("arclet.measure", "inspect.measure"),
 ];
+const ANALYZE_MORE: &[(&str, &str)] = &[
+    ("arclet.section", "inspect.section"),
+    ("arclet.isocurve", "inspect.isocurve"),
+    ("arclet.interference", "inspect.interference"),
+    ("arclet.clearance", "inspect.clearance"),
+    ("arclet.minimum_radius", "inspect.minimum_radius"),
+    ("arclet.draft", "inspect.draft"),
+    ("arclet.center_of_mass", "inspect.center_of_mass"),
+    ("arclet.compare", "inspect.compare"),
+    ("arclet.accessibility", "inspect.accessibility"),
+];
 const VIEWS: &[(&str, &str)] = &[
     ("arclet.fit", "view.fit"),
     ("arclet.iso", "view.isometric"),
     ("arclet.top", "view.top"),
     ("arclet.front", "view.front"),
     ("arclet.right", "view.right"),
+];
+const VIEW_MORE: &[(&str, &str)] = &[
+    ("arclet.home", "view.home"),
+    ("arclet.grid", "view.grid"),
+    ("arclet.normal_to", "view.normal_to"),
+    ("arclet.named_view_save", "view.save"),
+    ("arclet.named_view_apply", "view.apply"),
+    ("arclet.named_view_list", "view.list"),
+    ("arclet.visual_style", "view.visual_style"),
+    ("arclet.perspective", "view.perspective"),
 ];
 const SOLIDS: &[(&str, &str)] = &[
     ("arclet.box", "solid.box"),
@@ -107,7 +128,15 @@ const FILE_TOOLS: &[(&str, &str)] =
     &[("arclet.insert_step", "file.insert_step"), ("arclet.insert_mesh", "file.insert_mesh"), ("arclet.export", "file.export")];
 const EDIT_TOOLS: &[(&str, &str)] =
     &[("arclet.repeat", "edit.repeat"), ("arclet.delete", "selection.delete"), ("arclet.select_objects", "select.set")];
-const MESH_TOOLS: &[(&str, &str)] = &[("arclet.mesh_convert", "mesh.convert"), ("arclet.save_mesh", "file.save_mesh")];
+const EDIT_MORE: &[(&str, &str)] = &[
+    ("arclet.checkpoint", "edit.checkpoint"),
+    ("arclet.restore_checkpoint", "edit.restore_checkpoint"),
+    ("arclet.compute_all", "timeline.compute_all"),
+    ("arclet.selection_filter", "select.filter"),
+    ("arclet.rename_body", "body.rename"),
+];
+const MESH_TOOLS: &[(&str, &str)] =
+    &[("arclet.mesh_convert", "mesh.convert"), ("arclet.mesh_check", "mesh.check"), ("arclet.save_mesh", "file.save_mesh")];
 const RENDER_TOOLS: &[(&str, &str)] = &[
     ("arclet.render_start", "render.start"),
     ("arclet.render_frame", "render.camera.fit"),
@@ -291,6 +320,14 @@ impl ArcletApp {
             return;
         }
         self.cad.start(id);
+        // Standard views and Fit/Home turn the camera without running the command, so the
+        // shared shell never records them. Arclet's empty command line repeats the last command,
+        // so record these display commands once they start.
+        if (standard_view(id).is_some() || matches!(id, "view.fit" | "view.home"))
+            && let Some(spec) = find_command(id)
+        {
+            self.cad.last_command = Some((spec.id.to_owned(), spec.label.to_owned()));
+        }
     }
 
     fn header(&mut self, ui: &mut Ui) {
@@ -353,13 +390,16 @@ impl ArcletApp {
                 }
             }
             ui.separator();
-            for (label, extension) in [("arclet.export_stl", "stl"), ("arclet.export_3mf", "3mf"), ("arclet.export_step", "step")] {
-                if ui_kit::button(ui, tr(label), ui_kit::Button::Normal).clicked() {
-                    if extension == "step" {
-                        FileAction::Export(extension).run(&mut self.cad);
-                    } else {
-                        FileAction::ExportMesh(extension).run(&mut self.cad);
-                    }
+            for (label, action) in [
+                ("arclet.export_stl", FileAction::ExportMesh("stl")),
+                ("arclet.export_3mf", FileAction::ExportMesh("3mf")),
+                ("arclet.export_step", FileAction::Export("step")),
+                ("arclet.export_iges", FileAction::Export("iges")),
+                ("arclet.export_obj", FileAction::Export("obj")),
+                ("arclet.export_view_dxf", FileAction::Command("file.export_view_dxf")),
+            ] {
+                if ui_kit::button(ui, tr(label), ui_kit::Button::Enabled(action.enabled(&self.cad))).clicked() {
+                    action.run(&mut self.cad);
                     ui.close();
                 }
             }
@@ -374,10 +414,10 @@ impl ArcletApp {
                 }
             }
             ui.separator();
-            self.tool_items(ui, &[EDIT_TOOLS]);
+            self.tool_items(ui, &[EDIT_TOOLS, EDIT_MORE]);
         });
         ui_kit::Menu::button(ui, tr("arclet.menu.view"), |ui| {
-            self.tool_items(ui, &[VIEWS]);
+            self.tool_items(ui, &[VIEWS, VIEW_MORE]);
             ui.separator();
             let isolate = solidcraft_ui_egui::context_menu::items(&self.cad, &solidcraft_ui_egui::context_menu::Target::Viewport)
                 .into_iter()
@@ -400,7 +440,7 @@ impl ArcletApp {
         self.tool_menu(ui, "arclet.menu.solid", &[SOLIDS, SOLID_MORE, SOLID_PATTERNS]);
         self.tool_menu(ui, "arclet.menu.mesh", &[MESH_TOOLS]);
         self.tool_menu(ui, "arclet.menu.transform", &[TRANSFORMS]);
-        self.tool_menu(ui, "arclet.menu.analyze", &[ANALYSIS]);
+        self.tool_menu(ui, "arclet.menu.analyze", &[ANALYSIS, ANALYZE_MORE]);
         self.tool_menu(ui, "arclet.menu.render", &[RENDER_TOOLS]);
         ui_kit::Menu::button(ui, tr("arclet.menu.tools"), |ui| {
             if ui_kit::button(ui, tr("arclet.all_tools"), ui_kit::Button::Normal).clicked() {
@@ -875,6 +915,46 @@ mod tests {
             });
             self.click_at(at.unwrap_or_else(|| panic!("missing visible button {label}")));
         }
+
+        /// AccessKit buttons with meaningful bounds, in tree order.
+        fn accesskit_buttons(&self) -> Vec<(String, egui::Rect)> {
+            let mut buttons = Vec::new();
+            let Some(tree) = &self.output.accesskit_update else { return buttons };
+            for (_, node) in &tree.nodes {
+                if node.role() != egui::accesskit::Role::Button {
+                    continue;
+                }
+                let (Some(label), Some(bounds)) = (node.label(), node.bounds()) else { continue };
+                if bounds.x1 <= bounds.x0 || bounds.y1 <= bounds.y0 {
+                    continue;
+                }
+                buttons.push((
+                    label.to_owned(),
+                    egui::Rect::from_min_max(egui::pos2(bounds.x0 as f32, bounds.y0 as f32), egui::pos2(bounds.x1 as f32, bounds.y1 as f32)),
+                ));
+            }
+            buttons
+        }
+
+        fn button_count(&self, label: &str) -> usize {
+            self.accesskit_buttons().iter().filter(|(text, _)| text == label).count()
+        }
+
+        fn button_below_header(&self, label: &str) -> bool {
+            self.accesskit_buttons().iter().any(|(text, rect)| text == label && rect.center().y > 45.0)
+        }
+
+        fn press_escape(&mut self) {
+            for pressed in [true, false] {
+                self.frame(vec![egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: None,
+                    pressed,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }]);
+            }
+        }
     }
 
     #[test]
@@ -1075,5 +1155,124 @@ mod tests {
         assert!(app.cad.docs.quitting.is_some());
         assert!(app.cad.docs.closing.is_some());
         assert!(app.cad.session.is_dirty());
+    }
+
+    /// The tables each menu draws, in the order the menu draws them.
+    const MENU_TABLES: &[(&str, &[&[(&str, &str)]])] = &[
+        ("File", &[FILE_TOOLS]),
+        ("Edit", &[EDIT_TOOLS, EDIT_MORE]),
+        ("View", &[VIEWS, VIEW_MORE]),
+        ("Curve", &[CURVES, CURVE_SHAPES, CURVE_EDITS, CURVE_TOOLS]),
+        ("Surface", &[SURFACES, SURFACE_MORE]),
+        ("Solid", &[SOLIDS, SOLID_MORE, SOLID_PATTERNS]),
+        ("Mesh", &[MESH_TOOLS]),
+        ("Transform", &[TRANSFORMS]),
+        ("Analyze", &[ANALYSIS, ANALYZE_MORE]),
+        ("Render", &[RENDER_TOOLS]),
+    ];
+
+    #[test]
+    fn every_menu_entry_is_a_translated_registered_command() {
+        for (menu, groups) in MENU_TABLES {
+            let mut labels = std::collections::BTreeSet::new();
+            for group in groups.iter() {
+                for &(label, id) in group.iter() {
+                    assert!(find_command(id).is_some(), "{menu}: {id} is not registered");
+                    let text = tr(label);
+                    assert!(!text.is_empty(), "{menu}: {label} has no text");
+                    assert_ne!(text, label, "{menu}: {label} has no translation");
+                    assert!(labels.insert(text.to_owned()), "{menu}: duplicate entry {text}");
+                }
+            }
+        }
+        assert_eq!(CURVE_TOOLS.iter().find(|(_, id)| *id == "inspect.curve_continuity").map(|(label, _)| *label), Some("arclet.curve_continuity"));
+    }
+
+    #[test]
+    fn top_bar_shows_every_menu_in_order() {
+        let frames = AppFrames::new();
+        let buttons = frames.accesskit_buttons();
+        let expected = ["File", "Edit", "View", "Curve", "Surface", "Solid", "Mesh", "Transform", "Analyze", "Render", "Tools", "Help"];
+        let positions: Vec<f32> = expected
+            .iter()
+            .map(|name| {
+                buttons
+                    .iter()
+                    .filter(|(label, rect)| label == name && rect.center().y < 45.0)
+                    .map(|(_, rect)| rect.center().x)
+                    .next()
+                    .unwrap_or_else(|| panic!("missing top-bar menu button {name}"))
+            })
+            .collect();
+        assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "menu buttons are out of order: {positions:?}");
+    }
+
+    #[test]
+    fn every_menu_opens_shows_its_first_entry_and_closes() {
+        let cases = [
+            ("File", "New"),
+            ("Edit", "Undo"),
+            ("View", "Fit"),
+            ("Curve", "Line"),
+            ("Surface", "Loft"),
+            ("Solid", "Box"),
+            ("Mesh", "Convert mesh"),
+            ("Transform", "Move / Rotate"),
+            ("Analyze", "Zebra"),
+            ("Render", "Render image"),
+            ("Tools", "All tools"),
+            ("Help", "Help"),
+        ];
+        let mut frames = AppFrames::new();
+        for (menu, first) in cases {
+            let before = frames.button_count(first);
+            frames.click_button(menu);
+            frames.idle(1);
+            let after = frames.button_count(first);
+            assert!(after > before, "{menu} did not show its first entry {first} (before {before}, after {after})");
+            assert!(frames.button_below_header(first), "{menu}: {first} was not drawn below the menu bar");
+            frames.press_escape();
+            frames.idle(1);
+            assert_eq!(frames.button_count(first), before, "{menu} stayed open after Escape");
+        }
+    }
+
+    #[test]
+    fn view_menu_entries_start_the_engine_view_commands() {
+        let mut frames = AppFrames::new();
+        for (entry, id) in [("Top", "view.top"), ("Isometric", "view.isometric"), ("Fit", "view.fit")] {
+            // The standard toolbar repeats some of these labels, so the popup entry is the button
+            // that was not there before the menu opened, at the point the menu drew it.
+            let before = frames.accesskit_buttons();
+            frames.click_button("View");
+            frames.idle(1);
+            let after = frames.accesskit_buttons();
+            let at = after
+                .iter()
+                .find(|(label, rect)| label == entry && !before.iter().any(|(seen, was)| seen == label && was == rect))
+                .map(|(_, rect)| rect.center())
+                .unwrap_or_else(|| panic!("the View menu did not draw {entry}: {after:?}"));
+            frames.click_at(at);
+            frames.idle(1);
+            assert_eq!(frames.app.cad.last_command.as_ref().map(|(started, _)| started.as_str()), Some(id));
+            assert!(frames.app.command_error.is_none(), "{id} reported {:?}", frames.app.command_error);
+        }
+    }
+
+    #[test]
+    fn the_menu_bar_is_inert_while_nodes_is_open() {
+        let mut frames = AppFrames::new();
+        frames.click_handle("arclet:nodes");
+        frames.idle(2);
+        assert!(frames.app.cad.nodes.open);
+        let disabled = frames.output.accesskit_update.as_ref().is_some_and(|tree| {
+            tree.nodes.iter().any(|(_, node)| node.role() == egui::accesskit::Role::Button && node.label() == Some("File") && node.is_disabled())
+        });
+        assert!(disabled, "File must be disabled while Nodes is open");
+        let last = frames.app.cad.last_command.clone();
+        frames.click_button("File");
+        frames.idle(2);
+        assert_eq!(frames.app.cad.last_command, last);
+        assert!(!frames.button_below_header("New"), "the File menu opened while Nodes is open");
     }
 }

@@ -45,10 +45,9 @@ This is a feature inventory, not a support claim. No 3DM, Grasshopper (GH/GHX), 
 **Other limits**
 
 - Desktop only: `sketch.spline.rebuild`, `inspect.curve_continuity`, `surface.match` and `surface.fair` are blocked on WebAssembly in `app.rs`, so their `main-works` tier does not hold in the browser build.
-- The menu button "Join" (`arclet.curve_join`) runs `inspect.curve_continuity`, which is a continuity analysis. It does not join curves, so joining is listed as missing.
+- The menu button "Curve continuity" (`arclet.curve_continuity`) runs `inspect.curve_continuity`, which is a continuity analysis. It does not join curves, so joining is listed as missing.
 - `ui.isolate` is a UI context item, not one of the 503 registry IDs. It is counted as `main-works` and marked.
-- `solid.torus` is only used by the `--sample` startup flag, so it is `engine-only`.
-- The File menu's New, Open, Save, Save As and Export actions go through UI helper functions. Their IDs (`doc.open`, `file.new`, `file.save`, `file.save_as`, `file.export`, `file.save_mesh`) are matched by label and not traced in code.
+- The File menu's New, Open, Save, Save As and export actions go through UI helper functions. Their IDs (`doc.open`, `file.new`, `file.save`, `file.save_as`, `file.export`, `file.export_view_dxf`, `file.save_mesh`) are matched by label and not traced in code.
 
 ### Curve
 
@@ -56,13 +55,13 @@ This is a feature inventory, not a support claim. No 3DM, Grasshopper (GH/GHX), 
 |---|---|---|
 | Line | sketch.line | main-works |
 | Polyline (connected segments) | sketch.chain | engine-only |
-| Arc (center, 3-point, tangent) | sketch.arc.center_point, sketch.arc.three_point, sketch.arc.tangent | engine-only |
+| Arc (center, 3-point, tangent) | sketch.arc.center_point, sketch.arc.three_point, sketch.arc.tangent | main-works |
 | Circle, center and diameter | sketch.circle.center | main-works |
 | Circle, 2-point, 3-point, 2-tangent, 3-tangent | sketch.circle.two_point, sketch.circle.three_point, sketch.circle.two_tangent, sketch.circle.three_tangent | engine-only |
 | Rectangle, corner | sketch.rectangle.two_point | main-works |
 | Rectangle, center, 3-point, rounded | sketch.rectangle.center, sketch.rectangle.three_point, sketch.rectangle.rounded | engine-only |
-| Ellipse | sketch.ellipse | engine-only |
-| Polygon, inscribed, circumscribed, edge | sketch.polygon.inscribed, sketch.polygon.circumscribed, sketch.polygon.edge | engine-only |
+| Ellipse | sketch.ellipse | main-works |
+| Polygon, inscribed, circumscribed, edge | sketch.polygon.inscribed, sketch.polygon.circumscribed, sketch.polygon.edge | partial |
 | Conic | sketch.conic | engine-only |
 | Interpolated curve through points | sketch.spline.fit_point | main-works |
 | Control-point curve, degree 3 | sketch.spline.control_point | main-works |
@@ -73,8 +72,8 @@ This is a feature inventory, not a support claim. No 3DM, Grasshopper (GH/GHX), 
 | Offset curve (sketch mode) | sketch.offset | main-works |
 | Trim curve (sketch mode) | sketch.trim | main-works |
 | Trim along path | sketch.trim.path | engine-only |
-| Fillet between curves | sketch.fillet | engine-only |
-| Chamfer between curves | sketch.chamfer.distance_angle, sketch.chamfer.equal_distance, sketch.chamfer.two_distance | engine-only |
+| Fillet between curves | sketch.fillet | main-works |
+| Chamfer between curves | sketch.chamfer.distance_angle, sketch.chamfer.equal_distance, sketch.chamfer.two_distance | partial |
 | Extend curve | sketch.extend | engine-only |
 | Split or break curve | sketch.break | engine-only |
 | Join curves | — | missing |
@@ -88,10 +87,10 @@ This is a feature inventory, not a support claim. No 3DM, Grasshopper (GH/GHX), 
 
 **Top gaps**
 
-- Join curves: no join command exists. The menu's "Join" button runs a continuity analysis instead.
+- Join curves: no join command exists. The Curve menu's Curve continuity entry analyzes curve ends instead.
 - Helix, spiral, and degree change or simplify: no engine command.
 - Explode: no engine command.
-- Arc, ellipse, polygon and conic exist only in the engine, not in the menus.
+- Conic exists only in the engine, not in the menus.
 - Polyline is unconfirmed. Only the `sketch.chain` label was read, not its behaviour.
 
 ### Surface
@@ -106,13 +105,13 @@ This is a feature inventory, not a support claim. No 3DM, Grasshopper (GH/GHX), 
 | Blend between edges | surface.blend | main-works |
 | Boundary surface from closed curves | surface.boundary | main-works |
 | Edge or network surface | — | missing |
-| Ruled surface | surface.ruled | engine-only |
+| Ruled surface | surface.ruled | main-works |
 | Offset surface | surface.offset | main-works |
 | Trim surface | surface.trim | main-works |
-| Untrim surface | surface.untrim | engine-only |
-| Extend surface | surface.extend | engine-only |
+| Untrim surface | surface.untrim | main-works |
+| Extend surface | surface.extend | main-works |
 | Join (stitch) surfaces | surface.stitch | main-works |
-| Unjoin surfaces | surface.unstitch | engine-only |
+| Unjoin surfaces | surface.unstitch | main-works |
 | Thicken surface to solid | surface.thicken | main-works |
 | Fair surface | surface.fair | main-works |
 | Match surface continuity | surface.match | main-works |
@@ -129,7 +128,7 @@ This is a feature inventory, not a support claim. No 3DM, Grasshopper (GH/GHX), 
 - Fillet surface and rebuild surface: no engine command.
 - Split surface: no engine command. `solid.split_face` works on solids only.
 - Surface from mesh: no engine command.
-- Ruled, extrude, untrim, extend and unjoin exist only in the engine.
+- Extrude exists only in the engine. Ruled, untrim, extend and unjoin are in the Surface menu.
 - Two-rail sweep is not confirmed by the command label.
 
 ### Solid
@@ -139,22 +138,22 @@ This is a feature inventory, not a support claim. No 3DM, Grasshopper (GH/GHX), 
 | Box | solid.box | main-works |
 | Sphere | solid.sphere | main-works |
 | Cylinder | solid.cylinder | main-works |
-| Cone | solid.cone | engine-only |
-| Torus | solid.torus | engine-only |
+| Cone | solid.cone | main-works |
+| Torus | solid.torus | main-works |
 | Extrude | solid.extrude | main-works |
 | Revolve | solid.revolve | main-works |
 | Loft | solid.loft | main-works |
 | Sweep | solid.sweep | main-works |
-| Pipe | solid.pipe | engine-only |
+| Pipe | solid.pipe | main-works |
 | Fillet | solid.fillet | main-works |
 | Chamfer | solid.chamfer | main-works |
 | Boolean union, difference, intersection | solid.combine, solid.remove | partial |
 | Press-pull | solid.press_pull | main-works |
 | Shell | solid.shell | main-works |
 | Draft angle | solid.draft | engine-only |
-| Hole | solid.hole | engine-only |
+| Hole | solid.hole | main-works |
 | Thread | solid.thread | engine-only |
-| Split body | solid.split_body | engine-only |
+| Split body | solid.split_body | main-works |
 | Split face | solid.split_face | engine-only |
 | Offset face | solid.offset_face | engine-only |
 | Replace face | solid.replace_face | engine-only |
@@ -175,24 +174,24 @@ This is a feature inventory, not a support claim. No 3DM, Grasshopper (GH/GHX), 
 - Explode polysurface: no engine command.
 - Variable-radius fillet: no engine command.
 - Boolean: only the Combine action is in the menu. Difference and intersection are not confirmed in the menu.
-- Hole, thread, draft, split, offset face, rib, web, emboss, coil and bounding solid exist only in the engine.
+- Thread, draft, offset face, rib, web, emboss, coil and bounding solid exist only in the engine.
 
 ### Mesh
 
 | Rhino-style feature | Arclet/engine command id | Tier |
 |---|---|---|
-| Convert surface or solid to mesh | mesh.convert | engine-only |
-| Insert mesh file | file.insert_mesh | engine-only |
+| Convert surface or solid to mesh | mesh.convert | main-works |
+| Insert mesh file | file.insert_mesh | main-works |
 | Mesh repair (holes, weld, normals) | — | missing |
 | Mesh reduce, smooth, boolean | — | missing |
 | Mesh to NURBS | — | missing |
-| Mesh check (naked edges, non-manifold) | — | missing |
+| Mesh check (naked edges, non-manifold, degenerate triangles, duplicate vertices) | mesh.check | main-works |
 
 **Top gaps**
 
 - Mesh repair, reduce, boolean, smooth and mesh-to-NURBS: no engine commands.
-- Mesh check for naked edges or non-manifold edges: no engine command.
-- Mesh convert and insert exist only in the engine.
+- Mesh check reports naked and non-manifold edges, degenerate triangles, duplicate vertices, boundary loops and whether the mesh is closed. It is read-only: it does not repair, weld or reorient.
+- Mesh convert and insert are in the Mesh and File menus.
 - Mesh export to STL and 3MF is listed under File I/O.
 
 ### Transform
@@ -203,8 +202,8 @@ This is a feature inventory, not a support claim. No 3DM, Grasshopper (GH/GHX), 
 | Rotate (axis and angle, via Move/Copy tool) | solid.move | main-works |
 | Scale | solid.scale | main-works |
 | Mirror | solid.mirror | main-works |
-| Linear array (2D and 3D) | sketch.pattern.rectangular, solid.pattern.rectangular | engine-only |
-| Polar array (2D and 3D) | sketch.pattern.circular, solid.pattern.circular | engine-only |
+| Linear array (2D and 3D) | sketch.pattern.rectangular, solid.pattern.rectangular | main-works |
+| Polar array (2D and 3D) | sketch.pattern.circular, solid.pattern.circular | main-works |
 | Array along path | solid.pattern.path | engine-only |
 | Align or orient | solid.align | engine-only |
 | Transform (sketch) | sketch.transform | engine-only |
@@ -216,8 +215,7 @@ This is a feature inventory, not a support claim. No 3DM, Grasshopper (GH/GHX), 
 **Top gaps**
 
 - Twist, bend, taper, shear, flow, morph and cage deform: no engine commands.
-- Linear, polar and path arrays exist only in the engine.
-- Align or orient exists only in the engine.
+- Path arrays and Align exist only in the engine. Linear and polar arrays are in the Curve and Solid menus.
 
 ### Analyze
 
@@ -230,16 +228,16 @@ This is a feature inventory, not a support claim. No 3DM, Grasshopper (GH/GHX), 
 | Surface continuity (G0, G1, G2) | inspect.continuity | main-works |
 | Curve end continuity (G0 to G3) | inspect.curve_continuity | main-works |
 | Measure | inspect.measure | main-works |
-| Draft analysis | inspect.draft | engine-only |
-| Minimum radius | inspect.minimum_radius | engine-only |
-| Section | inspect.section | engine-only |
-| Isocurve | inspect.isocurve | engine-only |
-| Interference | inspect.interference | engine-only |
-| Clearance | inspect.clearance | engine-only |
-| Compare bodies | inspect.compare | engine-only |
-| Center of mass | inspect.center_of_mass | engine-only |
+| Draft analysis | inspect.draft | main-works |
+| Minimum radius | inspect.minimum_radius | main-works |
+| Section | inspect.section | main-works |
+| Isocurve | inspect.isocurve | main-works |
+| Interference | inspect.interference | main-works |
+| Clearance | inspect.clearance | main-works |
+| Compare bodies | inspect.compare | main-works |
+| Center of mass | inspect.center_of_mass | main-works |
 | Mass, area and volume properties | component.properties | engine-only |
-| Accessibility (pull direction) | inspect.accessibility | engine-only |
+| Accessibility (pull direction) | inspect.accessibility | main-works |
 | Parameter sweep | inspect.parameter_sweep | engine-only |
 | Deviation from mesh or scan | — | missing |
 | Object check (naked edges, self-intersection) | — | missing |
@@ -248,14 +246,13 @@ This is a feature inventory, not a support claim. No 3DM, Grasshopper (GH/GHX), 
 
 - Object check for naked or self-intersecting edges: no engine command.
 - Deviation from a mesh or scan: no engine command.
-- Section, isocurve, interference, clearance, minimum radius, draft, center of mass, accessibility and compare exist only in the engine.
-- Mass properties are only available through the component command, which is not in the menus.
+- Mass properties are only available through the component command, which is not in the menus. Section, isocurve, interference, clearance, minimum radius, draft, center of mass, accessibility and compare are in the Analyze menu.
 
 ### Dimension/Annotate
 
 | Rhino-style feature | Arclet/engine command id | Tier |
 |---|---|---|
-| Sketch dimension (linear, angle, radius) | sketch.dimension | engine-only |
+| Sketch dimension (linear, angle, radius) | sketch.dimension | main-works |
 | Radius and diameter toggle | sketch.toggle_diameter | engine-only |
 | Driven dimension | sketch.toggle_driven | engine-only |
 | Move dimension text | sketch.dimension_text | engine-only |
@@ -269,7 +266,7 @@ This is a feature inventory, not a support claim. No 3DM, Grasshopper (GH/GHX), 
 **Top gaps**
 
 - Leader or callout, hatch, model-space annotation and layout sheets: no engine commands. `sketch.drawing_bounds` only sets a sketch size.
-- Sketch dimensions and constraints exist only in the engine. No menu or toolbar item shows them.
+- Sketch dimension is in the Curve menu. Sketch constraints exist only in the engine. No menu or toolbar item shows the constraints.
 
 ### Layers/Display
 
@@ -280,10 +277,10 @@ This is a feature inventory, not a support claim. No 3DM, Grasshopper (GH/GHX), 
 | Isolate | ui.isolate | main-works |
 | Standard views and fit (top, front, right, isometric) | view.fit, view.top, view.front, view.right, view.isometric | main-works |
 | Back, bottom and left views | view.back, view.bottom, view.left | engine-only |
-| Named views (save, apply, list) | view.save, view.apply, view.list | engine-only |
-| Perspective or parallel projection | view.perspective | engine-only |
-| Grid | view.grid | engine-only |
-| Visual style (shaded, wireframe, rendered) | view.visual_style | engine-only |
+| Named views (save, apply, list) | view.save, view.apply, view.list | main-works |
+| Perspective or parallel projection | view.perspective | main-works |
+| Grid | view.grid | main-works |
+| Visual style (shaded, wireframe, rendered) | view.visual_style | main-works |
 | Ambient occlusion and ground shadow | view.ambient_occlusion, view.ground_shadow | engine-only |
 | Browser groups and folders | browser.group, browser.rename_group, browser.ungroup | engine-only |
 | Object colour and appearance | appearance.assign | engine-only |
@@ -295,7 +292,7 @@ This is a feature inventory, not a support claim. No 3DM, Grasshopper (GH/GHX), 
 - Layers with names, colours and lock states: no engine command. Browser groups are the nearest equivalent and exist only in the engine.
 - Lock and unlock objects: no engine command.
 - Show or hide is partial. The menu offers Show All only.
-- Named views, grid, perspective, visual style and browser groups exist only in the engine.
+- Named views, grid, perspective and visual style are in the View menu. Browser groups exist only in the engine.
 
 ### File I/O
 
@@ -307,31 +304,32 @@ This is a feature inventory, not a support claim. No 3DM, Grasshopper (GH/GHX), 
 | Save As | file.save_as | main-works |
 | Export STEP | file.export | main-works |
 | Export STL and 3MF (mesh) | file.save_mesh | main-works |
-| Import STEP | file.insert_step | engine-only |
-| Import mesh | file.insert_mesh | engine-only |
-| Import DXF | sketch.insert_dxf | engine-only |
-| Export DXF | sketch.export_dxf | engine-only |
-| Import SVG | sketch.insert_svg | engine-only |
+| Import STEP | file.insert_step | main-works |
+| Import mesh | file.insert_mesh | main-works |
+| IGES import and export | doc.open, file.export | main-works |
+| OBJ import and export | doc.open, file.export | main-works |
+| glTF / GLB import only | doc.open | main-works |
+| DXF sketch import and view DXF export | sketch.insert_dxf, file.export_view_dxf | main-works |
+| SVG sketch import only | doc.open | main-works |
+| PLY / XYZ / PTS point cloud import only | doc.open | main-works |
+| Rhino 3DM import only (desktop) | doc.open | main-works |
 | Recover unsaved design | doc.recover, doc.recovery_list | engine-only |
 | Send to slicer | file.send_to_slicer | engine-only |
-| Insert point cloud | pointcloud.insert | engine-only |
-| Rhino 3DM read and write | — | missing |
-| IGES import and export | — | missing |
-| OBJ, glTF, GLB | — | missing |
 | PDF or drawing export | — | missing |
 
 **Top gaps**
 
-- 3DM, IGES, OBJ, glTF and GLB: no engine commands. The matrix above makes no claim for them.
+- 3DM imports only (desktop; no export). glTF/GLB, SVG and PLY/XYZ/PTS import only. OBJ and IGES import and export.
 - PDF or drawing export: no engine command.
-- STEP and mesh import, DXF and SVG import and export, and recovery exist only in the engine.
+- Recovery and sending to a slicer exist only in the engine. DXF sketch export is not in a menu; DXF export is for the current view.
 
 ### Render
 
 | Rhino-style feature | Arclet/engine command id | Tier |
 |---|---|---|
-| Render image | render.start | engine-only |
-| Export render image | render.export | engine-only |
+| Render image | render.start | main-works |
+| Export render image | render.export | main-works |
+| Frame render subject | render.camera.fit | main-works |
 | Render settings | render.settings.get, render.settings.set | engine-only |
 | Render camera | render.camera.set | engine-only |
 | Physical material and appearance | material.create, material.assign | engine-only |
@@ -342,7 +340,7 @@ This is a feature inventory, not a support claim. No 3DM, Grasshopper (GH/GHX), 
 
 **Top gaps**
 
-- All render features are engine-only. No Arclet menu or toolbar item starts a render.
+- The Render menu starts a render, frames and exports it, and shows progress or cancels. Render settings, materials, lights, ground, backends and animation remain engine-only.
 - No render output is measured or compared in this matrix.
 - Rendering quality and speed are not measured here.
 
@@ -353,8 +351,9 @@ This is a feature inventory, not a support claim. No 3DM, Grasshopper (GH/GHX), 
 | Command bar (aliases and command names) | — (aliases in apps/arclet/src/commands.rs) | main-works |
 | Undo | edit.undo | main-works |
 | Redo | edit.redo | main-works |
-| Repeat last command | edit.repeat | engine-only |
-| Checkpoint and restore | edit.checkpoint, edit.restore_checkpoint | engine-only |
+| Repeat last command | edit.repeat | main-works |
+| Checkpoint and restore | edit.checkpoint, edit.restore_checkpoint | main-works |
+| Compute all | timeline.compute_all | main-works |
 | List and describe commands | engine.commands, engine.describe | engine-only |
 | Feature timeline (rollback, edit, suppress) | timeline.rollback, timeline.edit, timeline.suppress | engine-only |
 | Expressions and parameters | expr.evaluate, parameters.change | engine-only |
@@ -370,4 +369,4 @@ This is a feature inventory, not a support claim. No 3DM, Grasshopper (GH/GHX), 
 - Python or RhinoScript, plugins, and Grasshopper files: no engine commands. The matrix states these are unsupported.
 - Macro recording: no engine command.
 - Node graph uses its own JSON format, not Grasshopper. It is partial.
-- Repeat, checkpoints, timeline editing and parameters exist only in the engine.
+- Repeat, checkpoints and Compute all are in the Edit menu. Timeline editing and parameters exist only in the engine.

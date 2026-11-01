@@ -349,11 +349,14 @@ fn group_target(groups: &[GroupRow], chosen: Option<u64>, bodies: &[String]) -> 
 
 /// The preset `prefs::graphics_preset` names, from the same values. Manual edits show as custom.
 fn graphics_preset(ambient_occlusion: bool, display_quality: &str, supersampling: f32, adaptive: bool) -> &'static str {
-    match (ambient_occlusion, display_quality, supersampling, adaptive) {
-        (false, "normal", 1.0, _) => "performance",
-        (true, "fine", 2.0, true) => "quality",
-        _ => "custom",
+    // The presets are exact values a preset button writes, so equality is intended.
+    if !ambient_occlusion && display_quality == "normal" && supersampling == 1.0 {
+        return "performance";
     }
+    if ambient_occlusion && display_quality == "fine" && adaptive && supersampling == 2.0 {
+        return "quality";
+    }
+    "custom"
 }
 
 fn num(value: &Value) -> Option<f64> {
@@ -421,6 +424,11 @@ fn rows(ui: &mut Ui, id: &str, lines: &[(&str, String)]) {
     });
 }
 
+/// A count from the measurement JSON, or a dash when the engine did not report it.
+fn count(value: &Value) -> String {
+    value.as_u64().map_or_else(|| "—".to_string(), |n| n.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -449,9 +457,4 @@ mod tests {
         // With no pick and no grouped body, nothing is current.
         assert_eq!(group_target(&groups, None, &["Sphere".to_string()]), None);
     }
-}
-
-/// A count from the measurement JSON, or a dash when the engine did not report it.
-fn count(value: &Value) -> String {
-    value.as_u64().map_or_else(|| "—".to_string(), |n| n.to_string())
 }

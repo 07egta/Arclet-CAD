@@ -21,7 +21,6 @@
     "arclet.command_hint": "Line, Loft, Blend, Match, Zebra… (Enter repeats the last command)",
     "arclet.continuity": "Surface continuity",
     "arclet.curvature": "Curvature map",
-    "arclet.curve_join": "Curve continuity",
     "arclet.curve_tools": "Curve",
     "arclet.cylinder": "Cylinder",
     "arclet.environment": "Reflection",
@@ -223,5 +222,21 @@
     "host.recovery_unavailable": "Recovery storage is unavailable in this app. Choose an explicit recovery folder.",
     "host.recovery_parameters": "Recovery parameters must be a JSON object.",
     "host.recovery_directory": "The recovery folder must be a valid path shorter than 4096 bytes."
+  },
+  "ja": {
+    "arclet.all_tools": "すべてのツール",
+    "arclet.clear_selection": "選択を解除",
+    "arclet.command": "コマンド",
+    "arclet.command.empty": "コマンド名を入力するか、候補から選んでください。",
+    "arclet.command_hint": "Line、Loft、Blend、Match、Zebra…（Enter で直前のコマンドを繰り返す）",
+    "arclet.finish": "完了",
+    "arclet.finish_sketch": "スケッチを完了",
+    "arclet.graph_document": "ノードグラフ",
+    "arclet.help": "ヘルプ",
+    "arclet.help_title": "はじめに",
+    "arclet.isolate": "分離表示",
+    "arclet.run": "実行",
+    "arclet.settings": "設定",
+    "arclet.show_all": "すべて表示"
   }
 }
