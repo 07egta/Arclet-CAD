@@ -1,0 +1,1 @@
+| vendor/egui-winit | egui contributors | [egui-winit 0.36.2, revision 49682f8](https://github.com/emilk/egui/tree/49682f8baa058bf49e011035cfbd6e825f88a5ef/crates/egui-winit); Rust sources unchanged, Cargo feature patch documented in PATCH.md | MIT OR Apache-2.0; both license texts included |

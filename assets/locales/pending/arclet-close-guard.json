@@ -1,0 +1,10 @@
+{
+  "en": {
+    "arclet.close.busy": "A node file operation is still running. Keep editing or wait for it to finish before closing.",
+    "arclet.close.keep": "Keep editing",
+    "arclet.close.message": "The node graph has unsaved changes. Save the graph before closing, or close without saving its file.",
+    "arclet.close.save": "Save graph",
+    "arclet.close.title": "Unsaved node graph",
+    "arclet.close.without_save": "Close without saving"
+  }
+}

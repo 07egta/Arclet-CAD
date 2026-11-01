@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#101419">
+  <title>Arclet CAD</title>
+  <link data-trunk rel="rust" data-bin="arclet" data-wasm-opt="2">
+  <style>
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #101419; }
+    #arclet-canvas { display: block; width: 100%; height: 100%; outline: none; }
+    #arclet-loading { position: fixed; inset: 0; display: grid; place-items: center; padding: 32px;
+      color: #d8e0e8; font: 15px/1.6 system-ui, sans-serif; text-align: center; background: #101419; }
+  </style>
+</head>
+<body>
+  <canvas id="arclet-canvas" aria-label="Arclet CAD workspace"></canvas>
+  <div id="arclet-loading" role="status">Opening Arclet CAD…</div>
+</body>
+</html>
