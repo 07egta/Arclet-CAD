@@ -13,7 +13,7 @@ use solidcraft_ui_egui::toolbar::FileAction;
 use solidcraft_ui_egui::ui_kit::{self, Container, Edge, Surface};
 use solidcraft_ui_egui::{Services, SolveApp};
 
-use crate::{classic_look, cmdline, commands, platform};
+use crate::{classic_look, cmdline, commands, panels, platform};
 
 const PREFS_KEY: &str = "arclet.workspace.v1";
 const CURVES: &[(&str, &str)] = &[
@@ -135,6 +135,7 @@ pub struct ArcletApp {
     acknowledged_graph: Option<solidcraft_graph::Graph>,
     awaiting_document_quit: bool,
     toolbars: crate::toolbars::Toolbars,
+    panels: panels::PanelState,
 }
 
 impl ArcletApp {
@@ -219,6 +220,7 @@ impl ArcletApp {
             acknowledged_graph: None,
             awaiting_document_quit: false,
             toolbars: Default::default(),
+            panels: panels::PanelState::default(),
         }
     }
 
@@ -591,6 +593,7 @@ impl ArcletApp {
         if let Some(pick) = self.toolbars.main(ui, &self.cad) {
             self.run_pick(pick);
         }
+        panels::show(ui, &mut self.cad, &mut self.panels);
         self.cad.ui_after_host(ui);
         self.help(&ctx);
         let unsaved = solidcraft_ui_egui::documents::any_dirty(&self.cad) || self.cad.nodes.editor.is_dirty() || platform::has_unsaved_downloads();

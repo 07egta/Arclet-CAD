@@ -4,6 +4,7 @@ mod app;
 mod classic_look;
 mod cmdline;
 mod commands;
+mod panels;
 mod platform;
 mod statusbar;
 mod toolbars;
