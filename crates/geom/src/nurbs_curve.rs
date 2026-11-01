@@ -606,7 +606,10 @@ impl RebuildOptions {
         let check_work = 2 * self.check_samples * (self.check_samples - 1);
         let evaluation_cost = |degree: usize| (degree + 1) * (degree * (degree + 1) / 2 + degree + 17);
         let sampled_points = self.fit_samples + self.check_samples;
-        let basis_work = sampled_points * evaluation_cost(MAX_SPLINE_DEGREE) + (sampled_points + rows) * evaluation_cost(self.degree);
+        // Curvature comparison evaluates both curves' jets at every check sample.
+        let curvature_work = 2 * self.check_samples * evaluation_cost(MAX_SPLINE_DEGREE);
+        let basis_work =
+            sampled_points * evaluation_cost(MAX_SPLINE_DEGREE) + (sampled_points + rows) * evaluation_cost(self.degree) + curvature_work;
         if qr_work + check_work + basis_work > MAX_REBUILD_WORK {
             return too_large("the requested rebuild exceeds its combined fitting and deviation work budget");
         }
@@ -621,12 +624,23 @@ pub struct RebuildReport {
     /// closest-point geometric error; the separate deviation estimate measures that differently.
     pub parameter_rms_mm: f64,
     pub deviation: SampledDeviation,
+    /// Control points of the source curve, as given to the rebuild.
+    pub source_control_points: usize,
+    /// Control points of the rebuilt curve.
+    pub rebuilt_control_points: usize,
+    pub curvature: CurvatureDifference,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SampledDeviation {
     pub source_to_rebuilt_mm: f64,
     pub rebuilt_to_source_mm: f64,
+    /// Mean of the sampled point-to-polyline distances, one value per direction.
+    pub source_to_rebuilt_mean_mm: f64,
+    pub rebuilt_to_source_mean_mm: f64,
+    /// Root-mean-square of the sampled point-to-polyline distances, one value per direction.
+    pub source_to_rebuilt_rms_mm: f64,
+    pub rebuilt_to_source_rms_mm: f64,
     pub samples_per_curve: usize,
 }
 
@@ -635,6 +649,26 @@ impl SampledDeviation {
     pub fn max_mm(self) -> f64 {
         self.source_to_rebuilt_mm.max(self.rebuilt_to_source_mm)
     }
+
+    /// Mean over both directed sample sets. Both sets have `samples_per_curve` entries, so this
+    /// is the mean of all sampled distances. Not a guaranteed error bound.
+    pub fn mean_mm(self) -> f64 {
+        (self.source_to_rebuilt_mean_mm + self.rebuilt_to_source_mean_mm) / 2.0
+    }
+
+    /// Root-mean-square over both directed sample sets, with the same equal weighting as `mean_mm`.
+    pub fn rms_mm(self) -> f64 {
+        ((self.source_to_rebuilt_rms_mm.powi(2) + self.rebuilt_to_source_rms_mm.powi(2)) / 2.0).sqrt()
+    }
+}
+
+/// Difference of curvature vectors (1/mm) at matching normalized parameters. Samples where a
+/// curve's tangent vanishes have no defined curvature and are skipped; `samples` counts the
+/// pairs that were measured, so `max_per_mm` of `None` means nothing could be measured.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CurvatureDifference {
+    pub max_per_mm: Option<f64>,
+    pub samples: usize,
 }
 
 pub fn rebuild(source: &NurbsCurve, options: RebuildOptions, cancelled: impl Fn() -> bool) -> CurveResult<RebuildReport> {
@@ -695,8 +729,11 @@ pub fn rebuild(source: &NurbsCurve, options: RebuildOptions, cancelled: impl Fn(
         return invalid("rebuild residual is outside the finite numerical range");
     }
     let deviation = sampled_deviation(source, &curve, options.check_samples, &cancelled)?;
+    let curvature = curvature_difference(source, &curve, options.check_samples, &cancelled)?;
     check_cancelled(&cancelled)?;
-    Ok(RebuildReport { curve, parameter_rms_mm, deviation })
+    let source_control_points = source.control_points().len();
+    let rebuilt_control_points = curve.control_points().len();
+    Ok(RebuildReport { curve, parameter_rms_mm, deviation, source_control_points, rebuilt_control_points, curvature })
 }
 
 /// Uniform-parameter samples against the other curve's sampled polyline, in both directions.
@@ -706,9 +743,49 @@ pub fn sampled_deviation(source: &NurbsCurve, rebuilt: &NurbsCurve, samples: usi
     check_cancelled(&cancelled)?;
     let a = sample(source, samples, &cancelled)?;
     let b = sample(rebuilt, samples, &cancelled)?;
-    let source_to_rebuilt_mm = directed_distance(&a, &b, &cancelled)?;
-    let rebuilt_to_source_mm = directed_distance(&b, &a, &cancelled)?;
-    Ok(SampledDeviation { source_to_rebuilt_mm, rebuilt_to_source_mm, samples_per_curve: samples })
+    let forward = directed_distance(&a, &b, &cancelled)?;
+    let backward = directed_distance(&b, &a, &cancelled)?;
+    Ok(SampledDeviation {
+        source_to_rebuilt_mm: forward.max,
+        rebuilt_to_source_mm: backward.max,
+        source_to_rebuilt_mean_mm: forward.mean,
+        rebuilt_to_source_mean_mm: backward.mean,
+        source_to_rebuilt_rms_mm: forward.rms,
+        rebuilt_to_source_rms_mm: backward.rms,
+        samples_per_curve: samples,
+    })
+}
+
+/// Curvature vectors at the same normalized parameters as `sampled_deviation`, compared as
+/// `|kappa_rebuilt - kappa_source|`. The source and rebuilt samples use the same mapping.
+pub fn curvature_difference(
+    source: &NurbsCurve,
+    rebuilt: &NurbsCurve,
+    samples: usize,
+    cancelled: impl Fn() -> bool,
+) -> CurveResult<CurvatureDifference> {
+    check_sample_count(samples)?;
+    let mut max_per_mm: Option<f64> = None;
+    let mut measured = 0_usize;
+    for index in 0..samples {
+        check_cancelled(&cancelled)?;
+        let (Some(a), Some(b)) = (curvature_at(source, index, samples), curvature_at(rebuilt, index, samples)) else {
+            continue;
+        };
+        let difference = norm(b - a);
+        if !difference.is_finite() {
+            return invalid("curvature comparison overflowed");
+        }
+        max_per_mm = Some(max_per_mm.map_or(difference, |maximum| maximum.max(difference)));
+        measured += 1;
+    }
+    Ok(CurvatureDifference { max_per_mm, samples: measured })
+}
+
+fn curvature_at(curve: &NurbsCurve, index: usize, count: usize) -> Option<Vec3> {
+    let [a, b] = curve.domain();
+    let t = if index + 1 == count { b } else { a + (b - a) * (index as f64 / (count - 1) as f64) };
+    curve.jet(t).ok()?.arc_length().ok().map(|jet| jet.curvature)
 }
 
 fn check_sample_count(samples: usize) -> CurveResult<()> {
@@ -772,8 +849,17 @@ fn least_squares(mut matrix: Vec<f64>, mut rhs: Vec<Vec3>, rows: usize, columns:
     Ok(answer)
 }
 
-fn directed_distance(points: &[Vec3], polyline: &[Vec3], cancelled: &impl Fn() -> bool) -> CurveResult<f64> {
+#[derive(Clone, Copy, Debug)]
+struct DirectedStats {
+    max: f64,
+    mean: f64,
+    rms: f64,
+}
+
+fn directed_distance(points: &[Vec3], polyline: &[Vec3], cancelled: &impl Fn() -> bool) -> CurveResult<DirectedStats> {
     let mut maximum = 0.0_f64;
+    let mut total = 0.0_f64;
+    let mut squares = 0.0_f64;
     for point in points {
         check_cancelled(cancelled)?;
         let mut minimum = f64::INFINITY;
@@ -799,8 +885,16 @@ fn directed_distance(points: &[Vec3], polyline: &[Vec3], cancelled: &impl Fn() -
             minimum = minimum.min(distance);
         }
         maximum = maximum.max(minimum);
+        total += minimum;
+        squares += minimum * minimum;
     }
-    Ok(maximum)
+    let count = points.len().max(1) as f64;
+    let mean = total / count;
+    let rms = (squares / count).sqrt();
+    if !mean.is_finite() || !rms.is_finite() {
+        return invalid("deviation measurement overflowed");
+    }
+    Ok(DirectedStats { max: maximum, mean, rms })
 }
 
 /// A Bezier piece of `degree + 1` homogeneous points, raised to one more degree (NURBS Book
@@ -934,9 +1028,52 @@ mod tests {
         assert_eq!(report.curve.eval(1.0).unwrap(), source.eval(1.0).unwrap());
         assert!(report.parameter_rms_mm < 1e-10, "{report:?}");
         assert!(report.deviation.max_mm() < 1e-10);
+        assert!(report.deviation.mean_mm() < 1e-10 && report.deviation.rms_mm() < 1e-10, "{report:?}");
+        assert_eq!((report.source_control_points, report.rebuilt_control_points), (4, 4));
+        assert_eq!(report.curvature.samples, 65);
+        assert!(report.curvature.max_per_mm.unwrap() < 1e-7, "{report:?}");
         for (a, b) in report.curve.control_points().iter().zip(source.control_points()) {
             near(*a, *b, 1e-10);
         }
+    }
+
+    #[test]
+    fn rebuild_metrics_order_mean_rms_and_max_and_count_controls() {
+        let source = quarter_circle();
+        let coarse =
+            rebuild(&source, RebuildOptions { control_points: 4, fit_samples: 129, check_samples: 257, ..RebuildOptions::default() }, || false)
+                .unwrap();
+        let deviation = coarse.deviation;
+        for (mean, rms, max) in [
+            (deviation.source_to_rebuilt_mean_mm, deviation.source_to_rebuilt_rms_mm, deviation.source_to_rebuilt_mm),
+            (deviation.rebuilt_to_source_mean_mm, deviation.rebuilt_to_source_rms_mm, deviation.rebuilt_to_source_mm),
+            (deviation.mean_mm(), deviation.rms_mm(), deviation.max_mm()),
+        ] {
+            assert!(mean >= 0.0 && mean <= rms && rms <= max, "mean {mean} rms {rms} max {max}");
+        }
+        assert!(deviation.max_mm() > 0.0);
+        assert_eq!((coarse.source_control_points, coarse.rebuilt_control_points), (3, 4));
+        assert!(coarse.curvature.max_per_mm.unwrap() > 0.0);
+        assert_eq!(coarse.curvature.samples, 257);
+    }
+
+    #[test]
+    fn rebuild_with_more_controls_reduces_curvature_difference() {
+        let source = quarter_circle();
+        let options = RebuildOptions { fit_samples: 129, check_samples: 257, ..RebuildOptions::default() };
+        let coarse = rebuild(&source, RebuildOptions { control_points: 4, ..options }, || false).unwrap();
+        let fine = rebuild(&source, options, || false).unwrap();
+        let coarse_change = coarse.curvature.max_per_mm.unwrap();
+        let fine_change = fine.curvature.max_per_mm.unwrap();
+        assert!(fine_change < coarse_change, "{fine_change} vs {coarse_change}");
+        assert_eq!(fine.rebuilt_control_points, 8);
+    }
+
+    #[test]
+    fn curvature_difference_skips_unmeasurable_samples_instead_of_guessing() {
+        let degenerate = NurbsCurve::uniform(1, vec![Vec3::ZERO, Vec3::ZERO]).unwrap();
+        let difference = curvature_difference(&degenerate, &degenerate, 9, || false).unwrap();
+        assert_eq!(difference, CurvatureDifference { max_per_mm: None, samples: 0 });
     }
 
     #[test]

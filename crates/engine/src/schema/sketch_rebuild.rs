@@ -76,6 +76,10 @@ pub struct SampledDeviationResult {
     pub samples_per_curve: usize,
     /// Maximum of the two directed sampled estimates; not a certified Hausdorff bound.
     pub max_mm: f64,
+    /// Mean of all sampled point-to-polyline distances, both directions.
+    pub mean_mm: f64,
+    /// Root-mean-square of all sampled point-to-polyline distances, both directions.
+    pub rms_mm: f64,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -88,6 +92,14 @@ pub struct SplineRebuildResult {
     /// Difference at corresponding normalized parameters, not a closest-point distance.
     pub parameter_rms_mm: f64,
     pub deviation: SampledDeviationResult,
+    /// Control points on the source curve before the rebuild.
+    pub source_control_points: usize,
+    /// Control points on the rebuilt curve.
+    pub rebuilt_control_points: usize,
+    /// Max |curvature(rebuilt) - curvature(source)| in 1/mm at matching samples; null when no sample had a defined curvature.
+    pub max_curvature_change_per_mm: Option<f64>,
+    /// Number of matching sample pairs where both curvatures were defined.
+    pub curvature_samples: usize,
     pub estimate_note: String,
     /// The ordinary sketch solve report.
     pub sketch: Value,

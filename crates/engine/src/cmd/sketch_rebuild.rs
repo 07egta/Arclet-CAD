@@ -88,8 +88,14 @@ fn rebuild(s: &mut Session, p: &Value) -> Result<Value> {
             rebuilt_to_source_mm: deviation.rebuilt_to_source_mm,
             samples_per_curve: deviation.samples_per_curve,
             max_mm: deviation.max_mm(),
+            mean_mm: deviation.mean_mm(),
+            rms_mm: deviation.rms_mm(),
         },
-        estimate_note: "Deviation uses finite point-to-polyline samples in both directions; features between samples may be missed. It is not a certified Hausdorff bound. Endpoint positions are fixed; endpoint tangents are not constrained.".into(),
+        source_control_points: report.source_control_points,
+        rebuilt_control_points: report.rebuilt_control_points,
+        max_curvature_change_per_mm: report.curvature.max_per_mm,
+        curvature_samples: report.curvature.samples,
+        estimate_note: "Deviation and curvature use finite samples at matching normalized parameters; features between samples may be missed. Mean and RMS are sampled averages, not a certified Hausdorff bound. Endpoint positions are fixed; endpoint tangents are not constrained.".into(),
         sketch: info,
         created: None,
         param_warnings: Vec::new(),
@@ -241,6 +247,11 @@ mod tests {
         assert_eq!(reply["construction"], true);
         assert!(reply["parameter_rms_mm"].as_f64().unwrap() < 1e-10);
         assert!(reply["deviation"]["max_mm"].as_f64().unwrap() < 1e-10);
+        assert!(reply["deviation"]["mean_mm"].as_f64().unwrap() <= reply["deviation"]["max_mm"].as_f64().unwrap());
+        assert!(reply["deviation"]["rms_mm"].as_f64().unwrap() <= reply["deviation"]["max_mm"].as_f64().unwrap() + 1e-12);
+        assert_eq!((reply["source_control_points"].as_u64(), reply["rebuilt_control_points"].as_u64()), (Some(4), Some(4)));
+        assert!(reply["max_curvature_change_per_mm"].as_f64().unwrap() < 1e-6);
+        assert!(reply["curvature_samples"].as_u64().unwrap() > 0);
         let after = sketch_store::read(&s.doc, target).unwrap();
         assert_eq!(&after.points[..before.points.len()], before.points.as_slice());
         assert_eq!(&after.curves[..before.curves.len()], before.curves.as_slice());

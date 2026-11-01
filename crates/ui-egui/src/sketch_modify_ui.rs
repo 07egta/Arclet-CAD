@@ -1031,11 +1031,26 @@ pub(crate) fn quality_report(app: &SolveApp, ui: &mut egui::Ui, kind: &Mod, inpu
         let deviation = &report["deviation"];
         for (label, value) in [
             ("curve_quality.deviation", deviation.get("max_mm")),
+            ("curve_quality.mean", deviation.get("mean_mm")),
+            ("curve_quality.rms_deviation", deviation.get("rms_mm")),
             ("curve_quality.source_error", deviation.get("source_to_rebuilt_mm")),
             ("curve_quality.rebuilt_error", deviation.get("rebuilt_to_source_mm")),
             ("curve_quality.rms", report.get("parameter_rms_mm")),
         ] {
             metric_row(ui, label, value, "mm");
+        }
+        let curvature = report.get("max_curvature_change_per_mm");
+        if curvature.and_then(Value::as_f64).is_some_and(f64::is_finite) {
+            metric_row(ui, "curve_quality.curvature_change", curvature, "1/mm");
+        } else {
+            ui.label(crate::i18n::tr("curve_quality.curvature_none"));
+        }
+        if let (Some(source), Some(rebuilt)) =
+            (report.get("source_control_points").and_then(Value::as_u64), report.get("rebuilt_control_points").and_then(Value::as_u64))
+        {
+            ui_kit::row(ui, crate::i18n::tr("curve_quality.control_counts"), |ui| {
+                ui.label(format!("{source} → {rebuilt}"));
+            });
         }
         ui.label(crate::i18n::tr("curve_quality.estimate"));
     } else {
