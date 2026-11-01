@@ -1,0 +1,25 @@
+{
+  "en": {
+    "arclet.layout": "Layout",
+    "arclet.perspective": "Perspective",
+    "arclet.toolbar.center_of_mass": "Center of mass",
+    "arclet.toolbar.circle_three_point": "3-point circle",
+    "arclet.toolbar.circle_two_point": "2-point circle",
+    "arclet.toolbar.circle_two_tangent": "2-tangent circle",
+    "arclet.toolbar.clearance": "Clearance",
+    "arclet.toolbar.line3d": "3D line",
+    "arclet.toolbar.midline": "Midpoint line",
+    "arclet.toolbar.minimum_radius": "Minimum radius",
+    "arclet.toolbar.rect_center": "Center rectangle",
+    "arclet.toolbar.rect_rounded": "Rounded rectangle",
+    "arclet.toolbar.sketch_fillet": "Sketch fillet",
+    "arclet.toolbar.split_body": "Split body",
+    "arclet.toolbar.split_face": "Split face",
+    "arclet.toolbar.surface_loft": "Surface loft",
+    "arclet.toolbar.surface_offset": "Offset surface",
+    "arclet.toolbar.surface_sweep": "Surface sweep",
+    "arclet.toolbar.surface_thicken": "Thicken surface",
+    "arclet.toolbar.surface_trim": "Trim surface",
+    "arclet.toolbar.trim_path": "Trim along path"
+  }
+}
