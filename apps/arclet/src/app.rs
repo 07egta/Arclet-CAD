@@ -13,7 +13,7 @@ use solidcraft_ui_egui::toolbar::FileAction;
 use solidcraft_ui_egui::ui_kit::{self, Container, Edge, Surface};
 use solidcraft_ui_egui::{Services, SolveApp};
 
-use crate::{commands, platform};
+use crate::{classic_look, commands, platform};
 
 const PREFS_KEY: &str = "arclet.workspace.v1";
 const CURVES: &[(&str, &str)] = &[
@@ -199,6 +199,8 @@ impl ArcletApp {
         cad.preferences.language = "en".into();
         cad.preferences.nav = "blender".into();
         cad.preferences.check_updates = false;
+        // Arclet starts in the classic light-grey theme (see classic_look); saved prefs still win.
+        classic_look::apply_default(&mut cad.preferences);
         Self {
             cad,
             command: String::new(),
