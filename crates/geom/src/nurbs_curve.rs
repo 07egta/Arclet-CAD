@@ -1388,4 +1388,373 @@ mod tests {
             near(jet.d1, base_jet.d1, 1e-9);
         }
     }
+
+    /// Deterministic xorshift generator for the hostile-input tests below (no external crate).
+    struct Rng(u64);
+
+    impl Rng {
+        fn word(&mut self) -> u64 {
+            self.0 ^= self.0 >> 12;
+            self.0 ^= self.0 << 25;
+            self.0 ^= self.0 >> 27;
+            self.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
+        }
+
+        fn below(&mut self, n: usize) -> usize {
+            (self.word() % n as u64) as usize
+        }
+
+        fn unit(&mut self) -> f64 {
+            (self.word() >> 11) as f64 / (1u64 << 53) as f64
+        }
+
+        /// Ordinary numbers mixed with specials, subnormals, extreme magnitudes and raw bit patterns.
+        fn hostile(&mut self) -> f64 {
+            const SPECIAL: [f64; 14] = [
+                0.0,
+                -0.0,
+                1.0,
+                -1.0,
+                f64::NAN,
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+                f64::MIN_POSITIVE,
+                -f64::MIN_POSITIVE,
+                5e-324,
+                f64::MAX,
+                -f64::MAX,
+                1e300,
+                -1e300,
+            ];
+            match self.below(4) {
+                0 => SPECIAL[self.below(SPECIAL.len())],
+                1 => f64::from_bits(self.word()),
+                2 => (self.unit() * 2.0 - 1.0) * 10f64.powi(self.below(600) as i32 - 300),
+                _ => self.unit(),
+            }
+        }
+
+        fn point(&mut self) -> Vec3 {
+            Vec3::new(self.hostile(), self.hostile(), self.hostile())
+        }
+
+        /// Finite coordinates at a random magnitude between 1e-300 and 1e300.
+        fn finite_point(&mut self) -> Vec3 {
+            let scale = 10f64.powi(self.below(601) as i32 - 300);
+            Vec3::new(self.unit() * 2.0 - 1.0, self.unit() * 2.0 - 1.0, self.unit() * 2.0 - 1.0) * scale
+        }
+    }
+
+    fn finite_jet(jet: CurveJet) {
+        assert!([jet.point, jet.d1, jet.d2, jet.d3].iter().all(|v| v.is_finite()), "{jet:?}");
+    }
+
+    fn finite_join(report: JoinReport) {
+        let values = [report.gap_mm, report.tangent_angle_deg, report.curvature_jump_per_mm, report.curvature_change_jump_per_mm2];
+        assert!(values.iter().all(|v| v.is_finite()), "{report:?}");
+    }
+
+    fn finite_rebuild(report: &RebuildReport) {
+        assert!(report.parameter_rms_mm.is_finite(), "{report:?}");
+        assert!(report.deviation.max_mm().is_finite(), "{report:?}");
+        assert!(report.curve.control_points().iter().all(|p| p.is_finite()), "{report:?}");
+    }
+
+    /// Every public query on `curve` must return finite values or a typed error. Parameters outside
+    /// the domain and non-finite parameters must always be refused.
+    fn exercise_curve(curve: &NurbsCurve, rng: &mut Rng, deep: bool) {
+        let [a, b] = curve.domain();
+        let width = b - a;
+        let mut params = vec![
+            a,
+            b,
+            a + width * 0.5,
+            a - width * 1e-9,
+            b + width * 1e-9,
+            a - width,
+            b + width,
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::MAX,
+            -f64::MAX,
+            0.0,
+            f64::MIN_POSITIVE,
+        ];
+        for _ in 0..6 {
+            params.push(rng.hostile());
+            params.push(a + width * rng.unit());
+        }
+        for t in params {
+            let inside = t.is_finite() && t >= a && t <= b;
+            if let Ok(point) = curve.eval(t) {
+                assert!(inside, "eval accepted t = {t:e} outside [{a:e}, {b:e}]");
+                assert!(point.is_finite(), "{point:?}");
+            }
+            if !inside {
+                assert!(curve.eval(t).is_err() && curve.jet(t).is_err(), "t = {t:e}");
+            }
+            if let Ok(jet) = curve.jet(t) {
+                assert!(inside);
+                finite_jet(jet);
+                if let Ok(arc) = jet.arc_length() {
+                    assert!([arc.point, arc.tangent, arc.curvature, arc.curvature_change].iter().all(|v| v.is_finite()), "{arc:?}");
+                }
+            }
+        }
+        let reversed = curve.reversed();
+        if let Ok(reversed) = &reversed {
+            assert_eq!(reversed.domain(), curve.domain());
+            if let Ok(point) = reversed.eval(a + width * 0.25) {
+                assert!(point.is_finite());
+            }
+        }
+        let count = curve.control_points().len();
+        for index in [0, count.saturating_sub(1), count, usize::MAX, rng.below(count + 1)] {
+            let point = rng.point();
+            if let Ok(edited) = curve.with_control_point(index, point) {
+                assert!(index < count && point.is_finite());
+                assert_eq!(edited.control_points().len(), count);
+            }
+        }
+        let other = reversed.unwrap_or_else(|_| curve.clone());
+        let tolerances = [
+            JoinTolerances::default(),
+            JoinTolerances { gap_mm: f64::NAN, ..JoinTolerances::default() },
+            JoinTolerances { tangent_angle_deg: 180.5, ..JoinTolerances::default() },
+            JoinTolerances { curvature_per_mm: f64::INFINITY, ..JoinTolerances::default() },
+            JoinTolerances {
+                gap_mm: rng.hostile(),
+                tangent_angle_deg: rng.hostile(),
+                curvature_per_mm: rng.hostile(),
+                curvature_change_per_mm2: rng.hostile(),
+            },
+        ];
+        for tolerance in tolerances {
+            let result = measure_join(curve, &other, tolerance);
+            if tolerance.validate().is_err() {
+                assert!(result.is_err(), "{tolerance:?}");
+            }
+            if let Ok(report) = result {
+                finite_join(report);
+            }
+        }
+        for closed in [false, true] {
+            if let Ok(chain) = CurveChain::new(vec![curve.clone(), other.clone()], closed) {
+                if let Ok(joins) = chain.joins(JoinTolerances::default(), || false) {
+                    joins.into_iter().for_each(|join| finite_join(join.report));
+                }
+                assert!(matches!(chain.joins(JoinTolerances::default(), || true), Err(CurveError::Cancelled)));
+            }
+        }
+        assert!(matches!(rebuild(curve, RebuildOptions::default(), || true), Err(CurveError::Cancelled)));
+        if deep {
+            let degrees = [0, 1, 2, 3, 7, 8, usize::MAX];
+            let controls = [0, 1, 2, 3, 4, 8, 9, usize::MAX];
+            let fits = [0, 1, 2, 3, 5, 9, 33, 129, 2049, usize::MAX];
+            let checks = [0, 1, 2, 9, 65, 257, usize::MAX];
+            for _ in 0..3 {
+                let options = RebuildOptions {
+                    degree: degrees[rng.below(degrees.len())],
+                    control_points: controls[rng.below(controls.len())],
+                    fit_samples: fits[rng.below(fits.len())],
+                    check_samples: checks[rng.below(checks.len())],
+                };
+                if let Ok(report) = rebuild(curve, options, || false) {
+                    finite_rebuild(&report);
+                }
+            }
+            if let Ok(report) = rebuild(curve, RebuildOptions::default(), || false) {
+                finite_rebuild(&report);
+            }
+        }
+    }
+
+    #[test]
+    fn random_hostile_constructor_inputs_never_panic_or_return_nonfinite_geometry() {
+        let mut rng = Rng(0x5EED_0F_C0DE_1234);
+        let mut accepted = 0usize;
+        for case in 0..4000 {
+            // Mode 0: well-formed skeleton. Mode 1: skeleton with one hostile knot. Mode 2: all hostile.
+            let mode = rng.below(3);
+            let degree = if rng.below(8) == 0 { rng.below(12) } else { 1 + rng.below(7) };
+            let (a, b) = if mode == 2 {
+                (rng.hostile(), rng.hostile())
+            } else {
+                let scale = 10f64.powi(rng.below(601) as i32 - 300);
+                let a = (rng.unit() - 0.5) * scale;
+                (a, a + (0.1 + rng.unit()) * scale)
+            };
+            let mut inner: Vec<f64> = (0..rng.below(9)).map(|_| if mode == 2 { rng.hostile() } else { a + (b - a) * rng.unit() }).collect();
+            if mode != 2 {
+                inner.sort_by(f64::total_cmp);
+                if let Some(&knot) = inner.first() {
+                    for _ in 0..rng.below(degree.max(1)) {
+                        inner.push(knot);
+                    }
+                    inner.sort_by(f64::total_cmp);
+                }
+            }
+            let mut knots = vec![a; degree + 1];
+            knots.extend(inner);
+            knots.extend(std::iter::repeat_n(b, degree + 1));
+            if mode == 1 {
+                let index = rng.below(knots.len());
+                knots[index] = rng.hostile();
+            }
+            let available = knots.len().saturating_sub(degree + 1);
+            let count = if rng.below(5) == 0 { rng.below(available + 3) } else { available };
+            let points: Vec<Vec3> = (0..count).map(|_| if mode == 2 { rng.point() } else { rng.finite_point() }).collect();
+            let weights: Vec<f64> = (0..count)
+                .map(|_| {
+                    if mode == 2 {
+                        match rng.below(4) {
+                            0 => rng.hostile(),
+                            1 => 10f64.powi(rng.below(41) as i32 - 20),
+                            2 => rng.unit() + 0.5,
+                            _ => f64::MIN_POSITIVE,
+                        }
+                    } else if rng.below(8) == 0 {
+                        // Occasionally a weight ratio at the representable limit.
+                        f64::MIN_POSITIVE
+                    } else {
+                        10f64.powi(rng.below(41) as i32 - 20)
+                    }
+                })
+                .collect();
+            if let Ok(curve) = NurbsCurve::new(degree, knots, points, weights) {
+                accepted += 1;
+                exercise_curve(&curve, &mut rng, case % 4 == 0);
+            }
+        }
+        assert!(accepted > 200, "the generator should reach evaluation often, got {accepted}");
+    }
+
+    #[test]
+    fn degenerate_and_extremely_short_curves_are_refused_or_finite() {
+        let mut rng = Rng(0xD3E7_E4A7_E000_0001);
+        let points = [
+            Vec3::ZERO,
+            Vec3::new(1e300, -1e300, 1e300),
+            Vec3::new(f64::MIN_POSITIVE, 0.0, 0.0),
+            Vec3::new(1e-310, 1e-310, 0.0),
+            Vec3::new(-f64::MAX, f64::MAX, 0.0),
+        ];
+        for degree in 0..=8 {
+            for count in 0..=degree + 6 {
+                for point in points {
+                    match NurbsCurve::uniform(degree, vec![point; count]) {
+                        Ok(curve) => {
+                            exercise_curve(&curve, &mut rng, true);
+                            // A constant curve has no tangent, so no join may be measured as smooth.
+                            assert!(measure_join(&curve, &curve, JoinTolerances::default()).is_err(), "degree {degree}, count {count}");
+                        }
+                        Err(_) => assert!(count <= degree || degree == 0 || degree > MAX_SPLINE_DEGREE || count > MAX_CURVE_CONTROLS),
+                    }
+                }
+            }
+        }
+        // Two distinct points a subnormal distance apart, and two points at opposite extremes.
+        for end in [Vec3::X * f64::MIN_POSITIVE, Vec3::X * 5e-324, Vec3::new(-f64::MAX, 0.0, 0.0), Vec3::new(f64::MAX, f64::MAX, 0.0)] {
+            let short = line(Vec3::ZERO, end);
+            exercise_curve(&short, &mut rng, true);
+            let degenerate_weights = NurbsCurve::new(2, vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0], vec![Vec3::ZERO, end, end], vec![1.0, 1.0, 1.0]);
+            if let Ok(curve) = degenerate_weights {
+                exercise_curve(&curve, &mut rng, false);
+            }
+        }
+        // Identical controls with tiny rational weights around a non-identical middle control.
+        let tiny = NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![Vec3::new(1e300, 0.0, 0.0), Vec3::new(1e300, 0.0, 0.0), Vec3::new(1e300, 0.0, 0.0)],
+            vec![f64::MIN_POSITIVE, 1.0, f64::MIN_POSITIVE],
+        );
+        if let Ok(curve) = tiny {
+            exercise_curve(&curve, &mut rng, true);
+        }
+    }
+
+    #[test]
+    fn extreme_scales_and_offsets_are_finite_or_refused() {
+        let mut rng = Rng(0xC0FF_EE00_DEAD_BEEF);
+        let base = quarter_circle();
+        for scale in [5e-324, f64::MIN_POSITIVE, 1e-300, 1e-150, 1.0, 1e150, 1e300, f64::MAX / 4.0, f64::MAX] {
+            for offset in [Vec3::ZERO, Vec3::new(scale, -scale, 0.0), Vec3::new(-f64::MAX, f64::MAX, 0.0) * 0.5] {
+                let points = base.control_points().iter().map(|p| *p * scale + offset).collect();
+                if let Ok(curve) = NurbsCurve::new(base.degree(), base.knots().to_vec(), points, base.weights().to_vec()) {
+                    exercise_curve(&curve, &mut rng, scale >= 1.0);
+                }
+            }
+        }
+        exercise_curve(&base, &mut rng, true);
+    }
+
+    #[test]
+    fn rebuild_count_and_work_extremes_are_bounded() {
+        let source = quarter_circle();
+        let cases = [
+            RebuildOptions { degree: 1, control_points: 2, fit_samples: 2, check_samples: 2 },
+            RebuildOptions { degree: 1, control_points: 2, fit_samples: 3, check_samples: 2 },
+            RebuildOptions { degree: 1, control_points: 3, fit_samples: 3, check_samples: 2 },
+            RebuildOptions { degree: 7, control_points: 8, fit_samples: 8, check_samples: 2 },
+            RebuildOptions { degree: 1, control_points: MAX_REBUILD_CONTROLS, fit_samples: 2, check_samples: 2 },
+            RebuildOptions { degree: 3, control_points: 8, fit_samples: 129, check_samples: 1025 },
+            RebuildOptions { degree: 3, control_points: 8, fit_samples: 129, check_samples: 1026 },
+            RebuildOptions { degree: 3, control_points: 8, fit_samples: 129, check_samples: 1 },
+        ];
+        for options in cases {
+            match rebuild(&source, options, || false) {
+                Ok(report) => finite_rebuild(&report),
+                Err(error) => assert!(!matches!(error, CurveError::Cancelled), "{options:?}"),
+            }
+        }
+        assert!(sampled_deviation(&source, &source, 2, || false).is_ok());
+        assert!(sampled_deviation(&source, &source, 0, || false).is_err());
+        assert!(sampled_deviation(&source, &source, MAX_CHECK_SAMPLES + 1, || false).is_err());
+    }
+
+    #[test]
+    fn cancellation_at_every_checkpoint_returns_cancelled_or_finite() {
+        let curve = quarter_circle();
+        let chain = CurveChain::new(vec![curve.clone(), curve.reversed().unwrap(), curve.clone()], true).unwrap();
+        for limit in 0..600 {
+            let calls = Cell::new(0usize);
+            let cancel = || {
+                calls.set(calls.get() + 1);
+                calls.get() > limit
+            };
+            match rebuild(&curve, RebuildOptions::default(), cancel) {
+                Ok(report) => finite_rebuild(&report),
+                Err(error) => assert!(matches!(error, CurveError::Cancelled), "limit {limit}: {error:?}"),
+            }
+            let calls = Cell::new(0usize);
+            let cancel = || {
+                calls.set(calls.get() + 1);
+                calls.get() > limit
+            };
+            match sampled_deviation(&curve, &curve, 65, cancel) {
+                Ok(deviation) => assert!(deviation.max_mm().is_finite()),
+                Err(error) => assert!(matches!(error, CurveError::Cancelled), "limit {limit}: {error:?}"),
+            }
+            let calls = Cell::new(0usize);
+            let cancel = || {
+                calls.set(calls.get() + 1);
+                calls.get() > limit
+            };
+            match chain.joins(JoinTolerances::default(), cancel) {
+                Ok(joins) => joins.into_iter().for_each(|join| finite_join(join.report)),
+                Err(error) => assert!(matches!(error, CurveError::Cancelled), "limit {limit}: {error:?}"),
+            }
+        }
+        let calls = Cell::new(0usize);
+        assert!(
+            rebuild(&curve, RebuildOptions::default(), || {
+                calls.set(calls.get() + 1);
+                false
+            })
+            .is_ok()
+        );
+        assert!(calls.get() > 0);
+    }
 }
