@@ -1136,7 +1136,7 @@ pub(crate) mod tests {
     fn surface_weight_normalization_recovers_tiny_positive_weights() {
         let canonical = quarter_cylinder(8.0, 2.0, 1.0);
         let expected = canonical.jet(0.3, 0.7).unwrap();
-        for weight in [1e-200, 1e-100, 1e100, 1e200] {
+        for weight in [1e-310, 1e-200, 1e-100, 1e100, 1e200, 1e307] {
             let scaled = quarter_cylinder(8.0, 2.0, weight);
             let result = scaled.jet(0.3, 0.7).unwrap();
             assert_vector_near(result.point, expected.point, 8.0);
@@ -1168,6 +1168,25 @@ pub(crate) mod tests {
         let collapsed = NurbsSurface::new([1, 1], knots, &[origin; 4], &[1.0; 4]).unwrap();
         assert_eq!(collapsed.jet(0.5, 0.5).unwrap().point, origin);
         assert!(collapsed.jet(0.5, 0.5).unwrap().curvature().is_err());
+    }
+
+    #[test]
+    fn opposite_large_finite_surface_coordinates_do_not_overflow_position_only() {
+        // Even though du has magnitude 2e308 and cannot fit in f64,
+        // a point at the centre of the patch is finite. Point evaluation
+        // must not fail merely because subtracting the controls overflows.
+        let lo = Vec3::new(-1e308, 0.0, 0.0);
+        let hi = Vec3::new(1e308, 0.0, 0.0);
+        let patch = NurbsSurface::new(
+            [1, 1],
+            [vec![0.0, 0.0, 1.0, 1.0], vec![0.0, 0.0, 1.0, 1.0]],
+            &[lo, hi, lo + Vec3::Y, hi + Vec3::Y],
+            &[1.0; 4],
+        ).unwrap();
+        let centre = patch.eval(0.5, 0.5).unwrap();
+        assert!(centre.is_finite(), "{centre:?}");
+        assert_vector_near(centre, Vec3::new(0.0, 0.5, 0.0), 1.0);
+        assert!(patch.jet(0.5, 0.5).is_err());
     }
 
     #[test]
