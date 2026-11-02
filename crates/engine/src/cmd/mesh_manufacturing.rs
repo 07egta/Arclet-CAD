@@ -289,9 +289,10 @@ pub(super) fn check(s: &mut Session, p: &Value) -> Result<Value> {
     let thin_warning = wall["below_nozzle_diameter"] == true;
     let possible_support = orientation["possible_support_area_mm2"].as_f64().unwrap_or(0.0) > 0.0;
     let fails_bed = fit.as_ref().is_some_and(|v| v["fits_current_xy_orientation"] == false);
+    let multi_shell = topology["connected_shells"].as_u64().is_some_and(|v| v > 1);
     let verdict = if !topology_ok || self_intersections > 0 { "invalid_mesh" }
         else if !checked_intersections { "inspection_incomplete" }
-        else if thin_warning || possible_support || fails_bed || orientation["has_flat_bed_contact"] == false { "requires_review" }
+        else if multi_shell || thin_warning || possible_support || fails_bed || orientation["has_flat_bed_contact"] == false { "requires_review" }
         else { "passed_limited_screening" };
     let mut blockers = Vec::new();
     let mut warnings = Vec::new();
@@ -319,6 +320,9 @@ pub(super) fn check(s: &mut Session, p: &Value) -> Result<Value> {
     if fails_bed {
         warnings.push("bounding box exceeds specified build volume in the current orientation");
     }
+    if multi_shell {
+        warnings.push("multiple closed shells require cavity orientation, separation and containment review");
+    }
     Ok(json!({
         "body": name,
         "source": if source.body.is_mesh() { "imported_mesh" } else { "brep_tessellation" },
@@ -343,6 +347,7 @@ pub(super) fn check(s: &mut Session, p: &Value) -> Result<Value> {
         "unchecked": [
             "minimum_wall_thickness_certification",
             "complete_self_intersection_certificate",
+            "nested_shell_orientation_and_void_containment",
             "printer_firmware_and_gcode_compatibility",
             "material_specific_slicer_settings",
             "inter_part_clearance",
