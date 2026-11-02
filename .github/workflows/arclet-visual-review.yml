@@ -36,16 +36,23 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Check locale catalog integrity
+        if: ${{ always() }}
         run: cargo xtask lists
       - name: Check UI container boundaries
+        if: ${{ always() }}
         run: cargo xtask ui-containers
       - name: Run Arclet tests
+        if: ${{ always() }}
         run: cargo test --profile ci --locked -p arclet
       - name: Strict Arclet Clippy
+        if: ${{ always() }}
         run: cargo clippy --profile ci --locked -p arclet --all-targets -- -D warnings
       - name: Build the real desktop application
+        id: desktop-build
+        if: ${{ always() }}
         run: cargo build --profile ci --locked -p arclet
       - name: Capture real Arclet states under Xvfb
+        if: ${{ always() && steps.desktop-build.outcome == 'success' }}
         shell: bash
         run: |
           set -euo pipefail
