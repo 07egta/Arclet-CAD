@@ -2571,6 +2571,27 @@ pub fn fillets_kept(before: &Sketch, after: &Sketch) -> bool {
     was.iter().all(|b| now.iter().find(|a| a.arc == b.arc).is_none_or(|a| matches!(turn(b, a), Turn::Kept)))
 }
 
+/// A line direction has no geometric meaning when either line has collapsed.
+/// This check applies both to variable components and to constraints between fixed
+/// curves (which are evaluated without entering any component's Jacobian analysis).
+fn collapsed_angle_reference(sk: &Sketch, now: &State, kind: &ConstraintKind) -> bool {
+    let lines = match *kind {
+        ConstraintKind::Angle { a, b, .. }
+        | ConstraintKind::Parallel { a, b }
+        | ConstraintKind::Perpendicular { a, b } => [a, b],
+        ConstraintKind::LineAngle { l, .. } => [l, l],
+        _ => return false,
+    };
+    lines.iter().any(|&l| {
+        let (a, b) = now.line(l);
+        let original = match sk.curves.get(l).map(|c| &c.kind) {
+            Some(CurveKind::Line { a, b }) => sk.point(*a).zip(sk.point(*b)).map_or(1.0, |(a, b)| a.dist(b)),
+            _ => 1.0,
+        };
+        a.dist(b) <= (ACCEPT * original).max(f64::MIN_POSITIVE)
+    })
+}
+
 /// The turns of every filleted arc from `before` to where `sk` is now, applying the swaps.
 fn settle(sk: &mut Sketch, before: &[ArcSense]) -> Vec<(usize, Turn)> {
     let after = arc_senses(sk, &|i| sk.points.get(i).map(|p| p.pos).unwrap_or_default());
@@ -2967,27 +2988,9 @@ fn solve_inner(
         let now = State { sk, lay: &lay, x: &x };
         for (b, _) in &sub {
             let (Block::User(ci, k) | Block::TangentAt(ci, k, _)) = b else { continue };
-            // An angle requires two directions. A nearly collapsed line can satisfy its
-            // horizontal/vertical residual within tolerance while pointing anywhere, so
-            // the angle alone must not turn that degenerate pose into a solved sketch.
-            // Compare against the input length, so an already short reference still solves.
-            let angular_lines = match **k {
-                ConstraintKind::Angle { a, b, .. }
-                | ConstraintKind::Parallel { a, b }
-                | ConstraintKind::Perpendicular { a, b } => Some([a, b]),
-                ConstraintKind::LineAngle { l, .. } => Some([l, l]),
-                _ => None,
-            };
-            if angular_lines.is_some_and(|lines| {
-                lines.iter().any(|&l| {
-                    let (a, b) = now.line(l);
-                    let original = match sk.curves.get(l).map(|c| &c.kind) {
-                        Some(CurveKind::Line { a, b }) => sk.point(*a).zip(sk.point(*b)).map_or(1.0, |(a, b)| a.dist(b)),
-                        _ => 1.0,
-                    };
-                    a.dist(b) <= (ACCEPT * original).max(1e-12)
-                })
-            }) {
+            // An angle requires two nonzero directions. This geometric check
+            // prevents a vacuous zero dot/cross product from reporting success.
+            if collapsed_angle_reference(sk, &now, k) {
                 if let Some(c) = sk.constraints.get(*ci)
                     && !failing.contains(&c.id)
                 {
@@ -3057,6 +3060,20 @@ fn solve_inner(
     if !consts.is_empty() {
         let (r, _, owner) = system(sk, &lay, &consts, &mut x, false);
         check(&r, &owner, &consts, &mut failing);
+        // Constants have no Jacobian columns or variable components, but still
+        // need semantic validation (a fixed zero-length line has no angle).
+        let now = State { sk, lay: &lay, x: &x };
+        for (block, _) in &consts {
+            let (Block::User(ci, kind) | Block::TangentAt(ci, kind, _)) = block else { continue };
+            if collapsed_angle_reference(sk, &now, kind) {
+                degenerate = true;
+                if let Some(c) = sk.constraints.get(*ci)
+                    && !failing.contains(&c.id)
+                {
+                    failing.push(c.id.clone());
+                }
+            }
+        }
     }
     if degenerate {
         max_residual = max_residual.max(1.0);
@@ -3330,6 +3347,15 @@ mod typed_dimension_tests {
             assert!(report.failing.contains(&id), "{report:?}");
             assert_eq!(sk.points, before.points);
             assert_eq!(sk.curves, before.curves);
+
+            // A constraint between two fixed curves is evaluated in the constant
+            // block path rather than in a variable component.
+            sk.curves[guide].fixed = true;
+            let fixed_before = sk.clone();
+            let fixed_report = solve(&mut sk);
+            assert_eq!(fixed_report.status, SolveStatus::Failed, "{fixed_report:?}");
+            assert!(fixed_report.failing.contains(&id), "{fixed_report:?}");
+            assert_eq!(sk, fixed_before);
         }
     }
 
