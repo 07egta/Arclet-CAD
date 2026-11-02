@@ -6,7 +6,7 @@
 
 use serde_json::{Value, json};
 use solidcraft_geom::compare::closest_on_triangle;
-use solidcraft_geom::mesh_distance::{TriangleSet, closest_on_segments};
+use solidcraft_geom::mesh_distance::{closest_on_segments, TriangleSet};
 use solidcraft_geom::{Mesh, UnitVec3, Vec3};
 
 use super::measure_shape::{Shape, Slot, add_round, centre};
@@ -330,10 +330,20 @@ fn describe(s: &Session, sel: &Sel) -> Option<Item> {
                 Shape::Line { a, b } => a.dist(b),
                 _ => len,
             };
-            let mut json = json!({"type": "edge", "length_mm": length,
-                "length_method": if kernel_exact { "analytic_recognized_arc" } else if straight.is_some() { "analytic_recognized_line" } else { "sampled_polyline" },
+            let length_method = if kernel_exact {
+                "analytic_recognized_arc"
+            } else if straight.is_some() {
+                "analytic_recognized_line"
+            } else {
+                "sampled_polyline"
+            };
+            let mut json = json!({
+                "type": "edge",
+                "length_mm": length,
+                "length_method": length_method,
                 "length_exact": false,
-                "length_error_bound_mm": null});
+                "length_error_bound_mm": null,
+            });
             add_round(&mut json, &shape);
             Some(Item { geo: Geo::Points(densify(pts)), dir: straight, json, shape, slot: None })
         }
