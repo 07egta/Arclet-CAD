@@ -982,3 +982,25 @@ fn ultimate_quality_finite_aabb_midpoints_at_f64_extremes() {
     assert_eq!(Aabb2::EMPTY.center(), Vec2::ZERO);
     assert_eq!(Aabb3::EMPTY.center(), Vec3::ZERO);
 }
+
+
+#[test]
+fn ultimate_quality_vec3_norm_stays_finite_across_extreme_scales() {
+    // Hypot is an independent scaled-norm oracle, not sqrt(x*x+y*y+z*z).
+    // The squared norm would overflow at 1e200 and underflow at 1e-200.
+    for scale in [1.0e-200, 1.0e-160, 1.0, 1.0e154, 1.0e200] {
+        let vector = Vec3::new(scale, -scale, scale);
+        let actual = vector.len();
+        let reference = scale.hypot(scale).hypot(scale);
+        assert!(
+            actual.is_finite() && actual > 0.0,
+            "finite coordinate scale {scale} gave {actual}"
+        );
+        assert!(
+            ((actual - reference) / reference).abs() <= 2e-15,
+            "scale={scale}: computed {actual}, reference {reference}"
+        );
+    }
+    assert_eq!(Vec3::ZERO.len(), 0.0);
+    assert!(Vec3::new(f64::NAN, 0.0, 0.0).len().is_nan());
+}
