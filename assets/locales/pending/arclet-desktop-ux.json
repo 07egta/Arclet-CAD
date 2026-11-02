@@ -1,0 +1,32 @@
+{
+  "en": {
+    "arclet.menu.more": "More",
+    "arclet.view.four_reason": "Unavailable: the renderer supports only one camera. Switch between Top, Front, Right and Perspective for now.",
+    "arclet.view.four_views": "Four views"
+  },
+  "ar": {
+    "arclet.menu.more": "المزيد",
+    "arclet.view.four_reason": "غير متاح: المُصيّر يدعم كاميرا واحدة فقط. بدّل بين Top وFront وRight وPerspective في الوقت الحالي.",
+    "arclet.view.four_views": "أربعة عروض"
+  },
+  "he": {
+    "arclet.menu.more": "עוד",
+    "arclet.view.four_reason": "לא זמין: מנוע ההדמיה תומך במצלמה אחת בלבד. כרגע יש לעבור בין Top, Front, Right ו־Perspective.",
+    "arclet.view.four_views": "ארבע תצוגות"
+  },
+  "ja": {
+    "arclet.menu.more": "その他",
+    "arclet.view.four_reason": "未対応：描画エンジンは現在単一カメラです。当面は Top・Front・Right・Perspective を切り替えて使用してください。",
+    "arclet.view.four_views": "4ビュー"
+  },
+  "vi": {
+    "arclet.menu.more": "Thêm",
+    "arclet.view.four_reason": "Chưa khả dụng: bộ kết xuất chỉ hỗ trợ một camera. Hiện hãy chuyển giữa Top, Front, Right và Perspective.",
+    "arclet.view.four_views": "Bốn góc nhìn"
+  },
+  "zh": {
+    "arclet.menu.more": "更多",
+    "arclet.view.four_reason": "暂不可用：渲染器目前只支持一个相机。现阶段请在 Top、Front、Right 和 Perspective 之间切换。",
+    "arclet.view.four_views": "四视图"
+  }
+}

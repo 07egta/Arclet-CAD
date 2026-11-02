@@ -182,7 +182,7 @@ impl CommandLine {
 
 /// Draw the command line and report what the user asked for. `focus` is taken (cleared) when
 /// set, so the prompt takes the keyboard for the next key.
-pub(crate) fn show(ui: &mut Ui, line: &mut CommandLine, command: &mut String, focus: &mut bool, invalid: bool) -> Action {
+pub(crate) fn show(ui: &mut Ui, line: &mut CommandLine, command: &mut String, focus: &mut bool, invalid: bool, units: &str) -> Action {
     let tokens = Tokens::get();
     line.refresh(command);
     let input_id = egui::Id::new(INPUT_ID);
@@ -268,9 +268,15 @@ pub(crate) fn show(ui: &mut Ui, line: &mut CommandLine, command: &mut String, fo
         if ui_kit::button(ui, tr("arclet.finish"), ui_kit::Button::Normal).clicked() {
             action = Action::Finish;
         }
-        ui.label(RichText::new("mm").color(tokens.text_dim));
+        ui.label(RichText::new(unit_label(units)).color(tokens.text_dim));
     });
     action
+}
+
+/// Use the document's current units, rather than claiming every model is in millimetres.
+fn unit_label(units: &str) -> &str {
+    let unit = units.trim();
+    if unit.is_empty() { "—" } else { unit }
 }
 
 /// Enter runs the highlighted suggestion when there is one, else the text as typed.
@@ -361,6 +367,14 @@ mod tests {
 
     fn line(text: &str) -> HistoryLine {
         HistoryLine { kind: LineKind::Entered, text: text.to_string(), fill: String::new() }
+    }
+
+    #[test]
+    fn the_command_prompt_displays_the_active_document_units() {
+        assert_eq!(unit_label("mm"), "mm");
+        assert_eq!(unit_label("in"), "in");
+        assert_eq!(unit_label(" cm "), "cm");
+        assert_eq!(unit_label(" "), "—");
     }
 
     #[test]
