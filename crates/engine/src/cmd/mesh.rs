@@ -23,6 +23,10 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("mesh.convert", "Convert Mesh", convert)
         .icon("import")
         .params("body?: mesh body name (default: the selected mesh body); tolerance?: length expression (default 0.05 mm): reconstruct a closed constant-section mechanical mesh as editable planar and cylindrical faces, with a parametric timeline feature in the mesh body's owning component (the active component must be that component or an ancestor; otherwise activate the named component first); the active component is unchanged; name?"),
+    CommandSpec::new("mesh.repair_preview", "Preview Mesh Repair", repair_preview)
+        .icon("inspect")
+        .noundo()
+        .params("body?: imported mesh name (default selected), tolerance?: length (default 0 mm). Returns unchanged source and independent before/after diagnostic reports for exact duplicate and degenerate triangle removal. Does not modify the design."),
     CommandSpec::new("mesh.check", "Check Mesh", check)
         .icon("inspect")
         .noundo()
@@ -89,6 +93,60 @@ fn check(s: &mut Session, p: &Value) -> Result<Value> {
         fields.insert("tolerance_mm".into(), json!(tolerance));
     }
     Ok(report)
+}
+
+
+/// Read-only preview of conservative triangle cleanup. The original document and
+/// source arrays remain intact even when the result is still not a closed mesh.
+fn repair_preview(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "mesh.repair_preview";
+    let tolerance = match p.get("tolerance") {
+        None | Some(Value::Null) => "0 mm".to_owned(),
+        Some(_) => expr(p, "tolerance").ok_or_else(|| bad(cmd, "invalid tolerance"))?,
+    };
+    let tolerance = s.doc.eval(&tolerance, Kind::Length).map_err(|e| bad(cmd, format!("tolerance: {e}")))?;
+    if !tolerance.is_finite() || !(0.0..=MAX_CHECK_TOLERANCE).contains(&tolerance) {
+        return Err(bad(cmd, "tolerance must be finite and non-negative"));
+    }
+    let name = target(s, p, cmd)?;
+    let state = s.model.state();
+    let source = state.body(&name).ok_or_else(|| bad(cmd, format!("no body `{name}`")))?;
+    let (positions, triangles) = source.body.triangle_mesh().ok_or_else(|| bad(cmd, "the body must be an imported triangle mesh"))?;
+    let before = analyze(positions, triangles, tolerance);
+    let mut seen = HashSet::new();
+    let mut candidate = Vec::with_capacity(triangles.len());
+    let mut removed_degenerate = 0usize;
+    let mut removed_duplicate = 0usize;
+    for t in triangles {
+        let (Some(&a), Some(&b), Some(&c)) =
+            (positions.get(t[0] as usize), positions.get(t[1] as usize), positions.get(t[2] as usize))
+        else {
+            removed_degenerate += 1;
+            continue;
+        };
+        if t[0] == t[1] || t[1] == t[2] || t[2] == t[0] || flat(a, b, c) {
+            removed_degenerate += 1;
+            continue;
+        }
+        // Facets are identical only when all three vertex indices match,
+        // regardless of winding. Near-coincident points are NOT moved.
+        let mut key = *t;
+        key.sort_unstable();
+        if seen.insert(key) {
+            candidate.push(*t);
+        } else {
+            removed_duplicate += 1;
+        }
+    }
+    let after = analyze(positions, &candidate, tolerance);
+    let certified_by_topology = after["closed"] == true;
+    Ok(json!({
+        "body": name, "mode": "preview_only", "changed_document": false,
+        "before": before, "after": after, "removed_degenerate_triangles": removed_degenerate,
+        "removed_duplicate_faces": removed_duplicate, "max_vertex_displacement_mm": 0.0,
+        "topology_closed_after_cleanup": certified_by_topology,
+        "limitations": "No output file, hole filling, B-rep healing, self-intersection certification or source mutation. A closed topology is not a certified solid."
+    }))
 }
 
 /// The integrity report of a triangle mesh. Pure, read-only, and bounded by the two slices: a
