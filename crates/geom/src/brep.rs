@@ -573,6 +573,43 @@ mod tests {
         }
     }
     #[test]
+    fn incidence_audit_keeps_open_faces_distinct_from_closed_solids() {
+        let open = triangle();
+        assert!(open.validate().is_ok());
+        let report = open.audit_solid_topology().unwrap();
+        assert!(!report.closed_by_edge_incidence);
+        assert_eq!(report.shells[0].boundary_edges, 3);
+        assert_eq!(report.shells[0].nonmanifold_edges, 0);
+    }
+
+    #[test]
+    fn incidence_audit_checks_opposite_uses_and_nonmanifold_fans() {
+        let mut b = triangle();
+        b.shells[0].faces.push(Face {
+            loops: vec![vec![
+                EdgeUse { edge: 2, forward: false },
+                EdgeUse { edge: 1, forward: false },
+                EdgeUse { edge: 0, forward: false },
+            ]],
+            surface: b.shells[0].faces[0].surface.clone(),
+            forward: false,
+        });
+        assert!(b.validate().is_ok());
+        assert!(b.audit_solid_topology().unwrap().closed_by_edge_incidence);
+        b.shells[0].faces[1].loops[0].reverse();
+        for use_ in &mut b.shells[0].faces[1].loops[0] {
+            use_.forward = !use_.forward;
+        }
+        assert!(b.validate().is_ok());
+        let report = b.audit_solid_topology().unwrap();
+        assert_eq!(report.shells[0].orientation_conflicts, 3);
+        assert!(!report.closed_by_edge_incidence);
+        b.shells[0].faces.push(b.shells[0].faces[0].clone());
+        let report = b.audit_solid_topology().unwrap();
+        assert_eq!(report.shells[0].nonmanifold_edges, 3);
+    }
+
+    #[test]
     fn portable_open_face_round_trip_without_a_kernel() {
         let body = triangle();
         body.validate().unwrap();
