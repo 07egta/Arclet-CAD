@@ -18,7 +18,7 @@ This is not GH/GHX file compatibility or Grasshopper component/plugin compatibil
 | `Graph::connect_typed_checked(...)` | Rejects incompatible wires and cycles without mutating the previous connection. Does not replace the legacy `connect`/`connect_checked` APIs. |
 | `Graph::type_issues()` | Describes incompatible existing wires using node IDs, socket indices, names and expected/actual types. |
 | `GraphWorkspace::to_json()` / `from_json()` | Separate versioned workspace file for groups, per-node view state and external model-output references, with full validation before replacement. |
-| `GraphWorkspace::resolved_model_meshes(&evaluation)` | Returns validated, Arc-shared mesh snapshots for the CAD host to commit explicitly; does not edit or save the host CAD document. |
+| `GraphWorkspace::resolved_model_meshes(&cache)` | Requires an incremental cache for the exact current graph revision, then returns validated, Arc-shared mesh snapshots for the CAD host to commit explicitly; does not edit or save the host CAD document. |
 
 The type checker models the types implemented by the runtime (`Number`, `Boolean`, `Text`, `Point`, polyline `Curve`, triangle-mesh `Solid`, `Layers`, and polymorphic point-or-curve `Shape`). `Vector` and `Surface` have reserved type names but **do not yet have executable value payloads or surface nodes**. The type checker is conservative; a polymorphic `Shape` cannot be connected to a `Curve`-only input without a runtime type guarantee. Boolean-to-number compatibility preserves the existing numeric coercion.
 
@@ -32,7 +32,7 @@ The type checker models the types implemented by the runtime (`Number`, `Boolean
 4. Preserve existing per-node failure isolation. Before publishing, recheck the captured editor revision and cancellation token.
 5. Publish the new graph snapshot and results together, only when the entire update completed without cancellation. Cancellation/stale work leaves the previous result untouched.
 
-The cache is per workspace and remains in memory; **computed geometry is not serialized**. Host integrations should reuse one evaluator for consecutive edits, clear it on document replacement, and avoid sharing a mutable evaluator between workers. Current invalidation conservatively recomputes all descendants of an edited node, even when its actual output remains the same; a future output-fingerprint optimization can make this more selective.
+The cache is per workspace and remains in memory; **computed geometry is not serialized**. `current_for` and linked-mesh extraction reject a cache whose graph snapshot differs from the current editable graph; the host must also check its revision when it receives a worker result. Host integrations should reuse one evaluator for consecutive edits, clear it on document replacement, and avoid sharing a mutable evaluator between workers. Current invalidation conservatively recomputes all descendants of an edited node, even when its actual output remains the same; a future output-fingerprint optimization can make this more selective.
 
 The graph has an existing upper bound of 2,000 nodes and a global retained-output budget of 2,000,000 scalar/geometry units. The incremental cache reuses `Arc` mesh payloads where available, but snapshot/result ownership still has memory costs. This change does not claim measured GPU, browser, UI-latency, or real 3D-printer performance.
 
