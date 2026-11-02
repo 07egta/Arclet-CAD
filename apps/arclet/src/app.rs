@@ -1188,6 +1188,69 @@ mod tests {
     }
 
     #[test]
+    fn boolean_command_aliases_produce_distinct_real_box_volumes() {
+        use solidcraft_engine::Sel;
+
+        // 20x20x20 target, 15x15x15 tool, offset by (10, 2, 3).
+        // Intersection: 10x15x15 = 2250 mm^3; union = 9125; cut = 5750.
+        for (name, expected_volume) in [
+            ("BooleanUnion", 9125.0),
+            ("BooleanDifference", 5750.0),
+            ("BooleanIntersection", 2250.0),
+        ] {
+            let mut app = ArcletApp::with_services(Default::default());
+            app.cad.session
+                .execute(
+                    "solid.box",
+                    &json!({
+                        "corner": [0, 0, 0],
+                        "length": 20,
+                        "width": 20,
+                        "height": 20,
+                        "operation": "new",
+                        "body_name": "Target"
+                    }),
+                )
+                .expect("target box");
+            app.cad.session
+                .execute(
+                    "solid.box",
+                    &json!({
+                        "corner": [10, 2, 3],
+                        "length": 15,
+                        "width": 15,
+                        "height": 15,
+                        "operation": "new",
+                        "body_name": "Tool"
+                    }),
+                )
+                .expect("tool box");
+            app.command = name.into();
+            app.run_command_text();
+
+            let dialog = app.cad.dialog.as_mut().expect("Combine dialog");
+            dialog.inputs[0].items.push(Sel::Body { name: "Target".into() });
+            dialog.inputs[1].items.push(Sel::Body { name: "Tool".into() });
+            let commands =
+                solidcraft_ui_egui::dialogs::apply_commands(&app.cad, app.cad.dialog.as_ref().expect("selected Combine dialog"))
+                    .expect("valid Combine command parameters");
+            assert_eq!(commands.len(), 1, "{name}");
+            for (command, params) in commands {
+                app.cad.session.execute(&command, &params).unwrap_or_else(|error| panic!("{name}: {error}"));
+            }
+            let results = app.cad.session.execute("inspect.measure", &json!({})).expect("measure result");
+            assert_eq!(results["body_count"], 1, "{name}: {results}");
+            let volume = results["total"]["volume_mm3"].as_f64().expect("finite volume");
+            assert!(
+                (volume - expected_volume).abs() < expected_volume * 1e-4,
+                "{name}: got {volume} mm^3, expected {expected_volume} mm^3"
+            );
+            let failures: Vec<_> = app.cad.session.model.results.iter().filter_map(|r| r.error.as_ref()).collect();
+            assert!(failures.is_empty(), "{name}: failed timeline features {failures:?}");
+        }
+    }
+
+    #[test]
     fn curve_example_opens_rebuild_with_a_real_selected_source() {
         let mut app = ArcletApp::with_services(Default::default());
         app.curve_sample().unwrap();
