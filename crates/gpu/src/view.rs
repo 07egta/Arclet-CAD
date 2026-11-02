@@ -908,6 +908,32 @@ pub struct GpuImage {
 /// Image vertex: position (3 × f32), uv (2 × f32), opacity (f32).
 const IMG_SIZE: usize = 24;
 
+/// Exact bits of a reference-image quad. Pixel changes never invalidate its vertex buffer;
+/// only a corner or opacity edit does. The ID is the cache map key, not part of this key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ImageQuadKey {
+    corners: [[u32; 3]; 4],
+    opacity: u32,
+}
+
+fn image_quad_key(image: &GpuImage) -> ImageQuadKey {
+    ImageQuadKey {
+        corners: image.corners.map(|corner| corner.map(f32::to_bits)),
+        opacity: image.opacity.to_bits(),
+    }
+}
+
+/// Consume the previous frame's quad only when this image has identical vertex contents.
+/// Retained buffers keep their memory on the device across camera-only redraws; image order
+/// is rebuilt separately in the Frame's order (so alpha blending order is not disturbed).
+fn take_cached_image_quad<T>(
+    previous: &mut std::collections::HashMap<u64, (ImageQuadKey, T)>,
+    id: u64,
+    key: ImageQuadKey,
+) -> Option<T> {
+    previous.remove(&id).and_then(|(old_key, buffer)| (old_key == key).then_some(buffer))
+}
+
 /// A point cloud: round dots of a size on screen, depth-tested and written like the model's
 /// faces.
 #[derive(Clone)]
@@ -2044,8 +2070,8 @@ pub struct Renderer {
     sampler: wgpu::Sampler,
     /// Textures by image id: (version, bind group).
     textures: std::collections::HashMap<u64, (u64, wgpu::BindGroup)>,
-    /// This frame's quads: (image id, vertices).
-    quads: Vec<(u64, Batch)>,
+    /// Reference-image quads in compositing order, reused until corners or opacity change.
+    quads: Vec<(u64, ImageQuadKey, Batch)>,
     /// Point clouds' dots.
     point: wgpu::RenderPipeline,
     /// Point clouds by id: (version, points).
@@ -3334,9 +3360,14 @@ impl Renderer {
         }
         let ao_binds = [scene_bind(&res.model, &res.bind), scene_bind(&res.preview, &res.bind)];
         res.ao.prepare(device, encoder, ao_binds, cb.ao_radius, cb.size_px, res.target.reversed_depth(), [&res.model, &res.preview]);
-        // Images: upload new or changed textures, drop removed ones, rebuild the quads.
+        // Image pixels and geometry have independent lifetimes. Retain the last frame's
+        // vertex buffers across camera movement, even when the full view must be redrawn.
+        // A changed pixel version uploads only its texture, not the six quad vertices.
         res.textures.retain(|id, _| cb.images.iter().any(|i| i.id == *id));
-        res.quads.clear();
+        let mut old_quads: std::collections::HashMap<u64, (ImageQuadKey, Batch)> = std::mem::take(&mut res.quads)
+            .into_iter()
+            .map(|(id, key, batch)| (id, (key, batch)))
+            .collect();
         for img in &cb.images {
             let [w, h] = img.size;
             if w == 0 || h == 0 || img.rgba.len() != (w as usize) * (h as usize) * 4 {
@@ -3371,6 +3402,11 @@ impl Renderer {
                 });
                 res.textures.insert(img.id, (img.version, bind));
             }
+            let key = image_quad_key(img);
+            if let Some(batch) = take_cached_image_quad(&mut old_quads, img.id, key) {
+                res.quads.push((img.id, key, batch));
+                continue;
+            }
             let c = img.corners;
             let uv = [[0.0_f32, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]];
             let mut bytes = Vec::with_capacity(6 * IMG_SIZE);
@@ -3380,7 +3416,7 @@ impl Renderer {
                 }
             }
             if let Some(b) = upload(device, "sc_image_quad", &bytes, IMG_SIZE) {
-                res.quads.push((img.id, b));
+                res.quads.push((img.id, key, b));
             }
         }
         // Point clouds: upload new or changed ones, drop removed ones.
@@ -3678,7 +3714,7 @@ impl Renderer {
         pass.set_bind_group(0, scene_bind(pv, &res.bind), &[]);
         lines(pass, &res.line, &pv.lines);
         pass.set_bind_group(0, scene_bind(m, &res.bind), &[]);
-        for (id, q) in res.quads.iter().filter(|_| !cb.product) {
+        for (id, _, q) in res.quads.iter().filter(|_| !cb.product) {
             if let Some((_, bind)) = res.textures.get(id) {
                 pass.set_pipeline(&res.image);
                 pass.set_bind_group(1, bind, &[]);
@@ -4301,6 +4337,35 @@ mod tests {
 
     fn image(version: u64) -> super::GpuImage {
         super::GpuImage { id: 1, version, size: [2, 2], rgba: std::sync::Arc::new(vec![0; 16]), corners: [[0.0; 3]; 4], opacity: 1.0 }
+    }
+
+    /// Geometry stays resident across pixel edits or camera moves; opacity/corner edits
+    /// invalidate only that image's quad (not every image's cached buffers).
+    #[test]
+    fn reference_image_quad_buffers_have_exact_geometry_keys() {
+        use std::collections::HashMap;
+        let mut img = image(1);
+        let key = super::image_quad_key(&img);
+        let mut old = HashMap::from([(img.id, (key, 100u32))]);
+        assert_eq!(super::take_cached_image_quad(&mut old, img.id, key), Some(100));
+        assert!(old.is_empty(), "the same buffer cannot be consumed twice");
+
+        img.version = 2; // pixel data changed, but six vertices are unchanged
+        let mut old = HashMap::from([(img.id, (key, 101u32))]);
+        assert_eq!(super::take_cached_image_quad(&mut old, img.id, super::image_quad_key(&img)), Some(101));
+
+        img.corners[0][1] = 2.0;
+        let changed = super::image_quad_key(&img);
+        assert_ne!(changed, key);
+        let mut old = HashMap::from([(img.id, (key, 102u32))]);
+        assert_eq!(super::take_cached_image_quad(&mut old, img.id, changed), None);
+
+        img.corners[0][1] = 0.0;
+        img.opacity = 0.3;
+        let changed = super::image_quad_key(&img);
+        assert_ne!(changed, key);
+        let mut old = HashMap::from([(img.id, (key, 103u32))]);
+        assert_eq!(super::take_cached_image_quad(&mut old, img.id, changed), None);
     }
 
     fn access(version: u64) -> super::AccessMap {
