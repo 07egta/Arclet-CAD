@@ -11,7 +11,7 @@ use solidcraft_engine::sketch::CurveKind;
 use solidcraft_engine::view::{GridFade, GridPlane, colors, grid_ext, grid_plane, grid_step, sketch_lines_with_sampler};
 use std::hash::{Hash, Hasher};
 
-use crate::gpu::{Frame, GpuScene, GpuTarget, SceneSlot, ViewportCallback};
+use crate::gpu::{Frame, GpuScene, GpuTarget, QuadViewportCallback, SceneSlot, ViewportCallback};
 use crate::navigation::{CameraInput, NavCaps, orbit_drag};
 use crate::selection::{BoxSel, origin_quads, origin_size, ray_quad};
 use crate::theme::Tokens;
@@ -2023,7 +2023,7 @@ pub(crate) fn pick_cached(app: &mut SolveApp, proj: &Proj, pos: Pos2) -> Vec<Hit
     crate::render_workspace::active(app).hash(&mut h);
     pos.x.to_bits().hash(&mut h);
     pos.y.to_bits().hash(&mut h);
-    for v in [app.cam.yaw, app.cam.pitch, app.cam.roll, app.cam.distance, app.cam.target.x, app.cam.target.y, app.cam.target.z] {
+    for v in [proj.cam.yaw, proj.cam.pitch, proj.cam.roll, proj.cam.distance, proj.cam.target.x, proj.cam.target.y, proj.cam.target.z, proj.cam.fov] {
         v.to_bits().hash(&mut h);
     }
     app.session.revision.hash(&mut h);
@@ -2041,8 +2041,8 @@ pub(crate) fn pick_cached(app: &mut SolveApp, proj: &Proj, pos: Pos2) -> Vec<Hit
     app.session.visibility.hidden_bodies.hash(&mut h);
     app.session.visibility.hidden_occurrences.hash(&mut h);
     origin_point_shown(app).hash(&mut h);
-    app.perspective_view().hash(&mut h);
-    (proj.rect.width().to_bits(), proj.rect.height().to_bits()).hash(&mut h);
+    (proj.cam.fov > 0.0).hash(&mut h);
+    (proj.rect.min.x.to_bits(), proj.rect.min.y.to_bits(), proj.rect.width().to_bits(), proj.rect.height().to_bits()).hash(&mut h);
     crate::sketch_display::projection_key(proj, app.viewport.pixels_per_point()).hash(&mut h);
     let key = h.finish();
     if let Some((k, hits)) = &app.viewport.last_pick
@@ -3999,7 +3999,7 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
         let size_px = [rect.width() * ppp, rect.height() * ppp];
         let ssaa = supersampling(app, ui.ctx(), proj.vp.to_f32(), size_px);
         let ao_samples = ao_samples(app, ui.ctx(), proj.vp.to_f32(), size_px);
-        let cb = ViewportCallback(Frame {
+        let frame = Frame {
             ssaa,
             ao_samples,
             product: false,
@@ -4042,8 +4042,12 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
                 let c = t.body_selected;
                 [f32::from(c.r()) / 255.0, f32::from(c.g()) / 255.0, f32::from(c.b()) / 255.0]
             },
-        });
-        painter.add(egui_wgpu::Callback::new_paint_callback(rect, cb));
+        };
+        if let Some(pane) = app.quad.rendering {
+            painter.add(egui_wgpu::Callback::new_paint_callback(rect, QuadViewportCallback { pane, frame }));
+        } else {
+            painter.add(egui_wgpu::Callback::new_paint_callback(rect, ViewportCallback(frame)));
+        }
         // The graphics card had no memory for the view's frame (#7296): say once why it looks
         // coarser.
         if !app.viewport.lowered_noted && app.viewport.draw_stats.as_ref().is_some_and(|s| s.lock().is_ok_and(|s| s.lowered)) {
