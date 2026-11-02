@@ -481,6 +481,33 @@ mod manufacturing_quality_tests {
     }
 
     #[test]
+    fn two_closed_tetrahedra_touching_at_one_vertex_are_nonmanifold() {
+        // Both tetrahedra enclose positive volume and every edge has exactly
+        // two incident triangles. The sole shared vertex has two disconnected
+        // fans; edge-incidence-only closure would incorrectly accept it.
+        let vertices = vec![
+            Vec3::ZERO,
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(-1.0, 0.0, 0.0),
+            Vec3::new(0.0, -1.0, 0.0),
+            Vec3::new(0.0, 0.0, -1.0),
+        ];
+        let faces = vec![
+            [0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3],
+            [0, 4, 5], [0, 6, 4], [0, 5, 6], [4, 6, 5],
+        ];
+        let report = analyze(&vertices, &faces, 0.0);
+        assert_eq!(report["naked_edges"], 0, "{report}");
+        assert_eq!(report["non_manifold_edges"], 0, "{report}");
+        assert_eq!(report["vertex_manifold_complete"], true);
+        assert_eq!(report["non_manifold_vertices"], 1, "{report}");
+        assert_eq!(report["closed"], false);
+        assert_eq!(report["signed_volume_mm3"], Value::Null);
+    }
+
+    #[test]
     fn out_of_range_nonfinite_zero_area_and_weld_collapses_are_invalid() {
         let (positions, mut triangles) = box_mesh(20.0, 20.0, 20.0);
         triangles.push([1, 2, 99]);
