@@ -67,6 +67,7 @@ mod feature_edit;
 mod font_literals_tests;
 pub mod fonts;
 pub mod frame;
+pub mod four_viewports;
 pub mod frame_rate;
 pub mod gizmo;
 pub mod gpu;
@@ -511,6 +512,7 @@ pub struct SolveApp {
     /// A Save or Save As being written on a worker (see [`save_job`]).
     saving: Option<save_job::Saving>,
     pub viewport: viewport::ViewportState,
+    pub four_viewports: four_viewports::FourViewports,
     pub render_workspace: render_workspace::State,
     pub tool: Option<tools::Tool>,
     pub dialog: Option<dialogs::Dialog>,
@@ -744,6 +746,7 @@ impl SolveApp {
             easyprint: Default::default(),
             saving: None,
             viewport: viewport::ViewportState::default(),
+            four_viewports: Default::default(),
             render_workspace,
             tool: None,
             dialog: None,
@@ -2616,7 +2619,14 @@ impl SolveApp {
         if render_workspace::active(self) {
             render_workspace::show(self, ui);
         } else {
-            viewport::show(self, ui);
+            if self.four_viewports.enabled && !self.nodes.open && !crate::dialogs_sheet::flat_active(self) {
+                four_viewports::show(self, ui);
+            } else {
+                let mut four = std::mem::take(&mut self.four_viewports);
+                four.leave(self);
+                self.four_viewports = four;
+                viewport::show(self, ui);
+            }
         }
     }
 

@@ -16,6 +16,7 @@ use solidcraft_ui_egui::{Services, SolveApp};
 use crate::{classic_look, cmdline, commands, panels, platform};
 
 const PREFS_KEY: &str = "arclet.workspace.v1";
+const FOUR_PREFS_KEY: &str = "arclet.four_viewports.v1";
 const CURVES: &[(&str, &str)] = &[
     ("arclet.line", "sketch.line"),
     ("arclet.circle", "sketch.circle.center"),
@@ -174,6 +175,11 @@ impl ArcletApp {
             && let Some(preferences) = storage.get_string(PREFS_KEY)
         {
             app.cad.load_prefs(&preferences);
+        }
+        if let Some(storage) = cc.storage
+            && let Some(layout) = storage.get_string(FOUR_PREFS_KEY)
+        {
+            app.cad.four_viewports.load_prefs(&layout);
         }
         app.cad.nodes.enabled = true;
         app.cad.embedded = true;
@@ -424,6 +430,11 @@ impl ArcletApp {
         });
         ui_kit::Menu::button(ui, tr("arclet.menu.view"), |ui| {
             self.tool_items(ui, &[VIEWS, VIEW_MORE]);
+            ui.separator();
+            if ui_kit::button(ui, if self.cad.four_viewports.enabled { "Single view" } else { "Four views" }, ui_kit::Button::Normal).clicked() {
+                self.cad.four_viewports.enabled = !self.cad.four_viewports.enabled;
+                ui.close();
+            }
             ui.separator();
             let isolate = solidcraft_ui_egui::context_menu::items(&self.cad, &solidcraft_ui_egui::context_menu::Target::Viewport)
                 .into_iter()
@@ -821,6 +832,7 @@ impl eframe::App for ArcletApp {
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         storage.set_string(PREFS_KEY, self.cad.prefs());
+        storage.set_string(FOUR_PREFS_KEY, self.cad.four_viewports.prefs(self.cad.cam));
     }
 
     fn raw_input_hook(&mut self, _ctx: &egui::Context, input: &mut egui::RawInput) {
