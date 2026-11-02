@@ -10,6 +10,12 @@ on:
 permissions:
   contents: read
 
+# A new PR revision supersedes only older image-evidence runs for this PR;
+# unrelated missions keep their independent Actions jobs.
+concurrency:
+  group: premium-render-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   render-quality:
     runs-on: ubuntu-latest
