@@ -27,7 +27,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         .params("path: .ply, .xyz or .pts file (its points join the design as a point cloud: drawn as points, never a body; a PLY's red, green and blue are its colours) → cloud, name, points, source_points, bounds, warnings; name?; units?: mm|cm|m|in|ft (the file's length unit, default mm); max_points?: most points kept (default 5000000, at most 20000000; a larger file is thinned evenly); center?: bool (move the cloud so the middle of its base sits at the origin); point_size?: pixels (0.5…16, default 2); color_by?: file|single|height (the file's colours, the default; one colour; or a ramp by height, blue low to red high); color?: [r, g, b] 0…1 (the single colour; given alone it sets color_by single, null sets color_by file); height_range?: [low, high] design Z in mm for the height ramp, or null to work it out from the points (all but the lowest and highest 2 %)"),
     CommandSpec::new("pointcloud.edit", "Edit Point Cloud", edit)
         .icon("edit")
-        .params("cloud: id or name; name?; visible?; point_size?: pixels (0.5…16); color_by?: file|single|height (the file's colours, the default; one colour; or a ramp by height, blue low to red high); color?: [r, g, b] 0…1 (the single colour; given alone it sets color_by single, null sets color_by file); height_range?: [low, high] design Z in mm for the height ramp, or null to work it out from the points (all but the lowest and highest 2 %); units?: mm|cm|m|in|ft (the file's length unit: the points are scaled from the unit they came in as); matrix?: [12 or 16 numbers] (where the cloud sits: a rigid row-major 3x4 or 4x4 matrix, as occurrence.move takes it); tolerance? → cloud"),
+        .params("cloud: id or name; name?; visible?; point_size?: pixels (0.5…16); color_by?: file|single|height (the file's colours, the default; one colour; or a ramp by height, blue low to red high); color?: [r, g, b] 0…1 (the single colour; given alone it sets color_by single, null sets color_by file); height_range?: [low, high] design Z in mm for the height ramp, or null to work it out from the points (all but the lowest and highest 2 %); units?: mm|cm|m|in|ft (reinterpret original file units); scale?: positive uniform geometry factor (relative to the cloud origin, not its world transform, cannot be combined with units); matrix?: [12 or 16 numbers] (where the cloud sits: a rigid row-major 3x4 or 4x4 matrix, as occurrence.move takes it); tolerance? → cloud"),
     CommandSpec::new("pointcloud.delete", "Delete Point Cloud", delete).icon("delete").params("cloud: id or name → deleted"),
     CommandSpec::new("pointcloud.list", "Point Clouds", list)
         .icon("list")
@@ -219,6 +219,15 @@ fn edit(s: &mut Session, p: &Value) -> Result<Value> {
     let size = point_size(p, cmd)?;
     let colors = (color_by(p, cmd)?, color(p, cmd)?, height_range(p, cmd)?);
     let units = units_of(p, cmd)?;
+    let scale = match p.get("scale") {
+        None | Some(Value::Null) => None,
+        Some(value) => Some(value.as_f64()
+            .filter(|scale| scale.is_finite() && (1e-6..=1e6).contains(scale))
+            .ok_or_else(|| bad(cmd, "`scale` must be a positive finite factor from 1e-6 to 1e6"))?),
+    };
+    if units.is_some() && scale.is_some() {
+        return Err(bad(cmd, "change `units` and geometry `scale` in separate edits"));
+    }
     let placement = match p.get("matrix") {
         None | Some(Value::Null) => None,
         Some(m) => Some(super::component::matrix::rigid(m, super::component::matrix::tolerance(p, cmd)?, cmd)?),
@@ -239,6 +248,13 @@ fn edit(s: &mut Session, p: &Value) -> Result<Value> {
             c.points = Points::new(c.points.values().iter().map(|v| (f64::from(*v) * f) as f32).collect());
         }
         c.units = unit.into();
+    }
+    if let Some(factor) = scale
+        && factor != 1.0
+    {
+        // Uniform scaling changes the stored point offsets, not the cloud's placement,
+        // its double-precision origin, or the source file's declared measurement units.
+        c.points = Points::new(c.points.values().iter().map(|v| (f64::from(*v) * factor) as f32).collect());
     }
     if let Some(m) = placement {
         c.transform = m;
@@ -466,6 +482,28 @@ mod tests {
         let _ = std::fs::remove_dir_all(d);
     }
 
+
+
+    #[test]
+    fn uniform_scale_preserves_far_origin_file_units_and_color() {
+        let d = dir("scale");
+        let path = ply(&d, "far.ply", &[[999999.0,0.0,0.0],[999999.125,1.0,0.0]], true);
+        let mut s = Session::default();
+        let id = s.execute("pointcloud.insert", &json!({"path":path,"units":"m"})).unwrap()["cloud"].as_u64().unwrap();
+        let original = s.doc.point_clouds[0].clone();
+        assert_eq!(original.origin.x, 999999000.0);
+        s.execute("pointcloud.edit", &json!({"cloud":id,"scale":2.0})).unwrap();
+        let c = &s.doc.point_clouds[0];
+        assert_eq!(c.origin, original.origin);
+        assert_eq!(c.points.get(1), Some([250.0, 2000.0, 0.0]));
+        assert_eq!(c.colors, original.colors);
+        assert_eq!(c.units, "m");
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(s.doc.point_clouds[0], original);
+        assert!(s.execute("pointcloud.edit", &json!({"cloud":id,"scale":2.0,"units":"cm"})).is_err());
+        assert!(s.execute("pointcloud.edit", &json!({"cloud":id,"scale":0.0})).is_err());
+        let _ = std::fs::remove_dir_all(d);
+    }
 
     #[test]
     fn scan_analysis_is_read_only_and_reports_units_and_residuals() {
