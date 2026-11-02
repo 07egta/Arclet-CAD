@@ -14,6 +14,13 @@ use crate::viewport::Proj;
 
 /// Most points the CPU viewport draws of all clouds together.
 const MAX_CPU_POINTS: usize = 100_000;
+/// Shared GPU upload budget across **all** visible scans, rather than per cloud.
+/// Limits temporary conversion and cached GPU point bytes during large imports.
+const MAX_GPU_POINTS: usize = 750_000;
+
+fn gpu_stride(total: usize) -> usize {
+    total.div_ceil(MAX_GPU_POINTS).max(1)
+}
 
 /// What a cloud's dots are made from: they are made again only when one of these changes.
 #[derive(Clone, PartialEq)]
@@ -21,6 +28,7 @@ struct Key {
     points: usize,
     colors: usize,
     len: usize,
+    stride: usize,
     origin: [u64; 3],
     transform: [u64; 16],
     size: u64,
@@ -30,11 +38,12 @@ struct Key {
 }
 
 impl Key {
-    fn of(c: &PointCloud) -> Key {
+    fn of(c: &PointCloud, stride: usize) -> Key {
         Key {
             points: Arc::as_ptr(c.points.values()).cast::<f32>() as usize,
             colors: Arc::as_ptr(&c.colors.0).cast::<u8>() as usize,
             len: c.len(),
+            stride,
             origin: [c.origin.x, c.origin.y, c.origin.z].map(f64::to_bits),
             transform: std::array::from_fn(|i| c.transform[i / 4][i % 4].to_bits()),
             size: c.point_size.to_bits(),
@@ -51,11 +60,12 @@ thread_local! {
     static VERSION: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
-fn dots(c: &PointCloud) -> Vec<u8> {
-    let mut out = Vec::with_capacity(c.len() * crate::gpu::CLOUD_POINT_SIZE);
+fn dots(c: &PointCloud, stride: usize) -> Vec<u8> {
+    let mut out = Vec::with_capacity(c.len().div_ceil(stride) * crate::gpu::CLOUD_POINT_SIZE);
     let size = c.point_size as f32;
     let shade = c.shade();
-    for (i, p) in c.points.iter().enumerate() {
+    for i in (0..c.len()).step_by(stride) {
+        let Some(p) = c.points.get(i) else { continue };
         // Placed in double precision: the cloud's origin may be far from the design's.
         let local = c.origin + solidcraft_engine::geom::Vec3::new(f64::from(p[0]), f64::from(p[1]), f64::from(p[2]));
         let w = solidcraft_engine::doc::apply_point(&c.transform, local);
@@ -66,13 +76,16 @@ fn dots(c: &PointCloud) -> Vec<u8> {
 
 /// The shown point clouds as GPU dots.
 pub fn gpu_points(app: &SolveApp) -> Vec<GpuPoints> {
-    let doc = &app.session.doc;
+    let shown: Vec<&PointCloud> = solidcraft_engine::view::shown_point_clouds(&app.session).collect();
+    let total: usize = shown.iter().map(|c| c.len()).sum();
+    let stride = gpu_stride(total);
     DOTS.with(|m| {
         let mut m = m.borrow_mut();
-        m.retain(|id, _| doc.point_clouds.iter().any(|c| c.id == *id));
-        solidcraft_engine::view::shown_point_clouds(&app.session)
+        // Release large cached buffers when a scan is hidden, not just when deleted.
+        m.retain(|id, _| shown.iter().any(|c| c.id == *id));
+        shown.into_iter()
             .map(|c| {
-                let key = Key::of(c);
+                let key = Key::of(c, stride);
                 if let Some((k, version, bytes)) = m.get(&c.id)
                     && *k == key
                 {
@@ -82,7 +95,7 @@ pub fn gpu_points(app: &SolveApp) -> Vec<GpuPoints> {
                     v.set(v.get() + 1);
                     v.get()
                 });
-                let bytes = Arc::new(dots(c));
+                let bytes = Arc::new(dots(c, stride));
                 m.insert(c.id, (key, version, bytes.clone()));
                 GpuPoints { id: c.id, version, bytes }
             })
@@ -117,6 +130,16 @@ pub fn show(app: &SolveApp, painter: &Painter, proj: &Proj) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gpu_sampling_budget_is_shared_and_bounded() {
+        assert_eq!(gpu_stride(0), 1);
+        assert_eq!(gpu_stride(2), 1);
+        assert_eq!(gpu_stride(MAX_GPU_POINTS), 1);
+        assert_eq!(gpu_stride(MAX_GPU_POINTS + 1), 2);
+        assert_eq!(gpu_stride(10_000_000), 14);
+        // Deterministic per-cloud stride never discards or changes stored scan data.
+    }
 
     #[test]
     fn dots_follow_the_cloud_and_are_made_again_only_when_it_changes() {
