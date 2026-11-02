@@ -151,6 +151,7 @@ impl GraphWorkspace {
 
     /// Validate references, sizes and unique identities in editable metadata.
     pub fn validate(&self) -> Result<(), GraphError> {
+        self.graph.order()?;
         if self.graph.nodes.len() > MAX_NODES {
             return Err(GraphError::TooManyNodes);
         }
