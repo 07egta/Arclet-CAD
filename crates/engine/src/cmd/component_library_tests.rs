@@ -46,3 +46,32 @@ fn rejects_malformed_manifest_without_mutating_design() {
     assert!(target.execute("components.insert", &json!({"path":"missing.json","entry":"a","version":0,"sha256":"broken"})).is_err());
     assert_eq!(*before,*target.doc);
 }
+
+#[test]
+fn registration_creates_manifest_and_refuses_overwriting_an_existing_version() {
+    let dir = solidcraft_io::vfs::temp_dir().join(format!("arclet-register-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let part = dir.join("part.sc");
+    let manifest = dir.join("parts.json");
+    let mut source = Session::default();
+    source.execute("solid.box", &json!({"length":20,"width":20,"height":20})).unwrap();
+    source.execute("file.save", &json!({"path":part})).unwrap();
+    let mut target = Session::default();
+    let input = json!({"path":manifest,"entry":"part","version":1,"name":"Part",
+        "category":"primitives","source":"part.sc","unit":"mm",
+        "preview":{"bounds":[20,20,20],"description":"Box"}});
+    let response = target.execute("components.register", &input).unwrap();
+    assert_eq!(response["entries"],1);
+    let original = std::fs::read(&manifest).unwrap();
+    assert!(target.execute("components.register", &input).is_err());
+    assert_eq!(original, std::fs::read(&manifest).unwrap());
+    assert!(target.doc.components.is_empty());
+    let mut second = input.clone();
+    second["version"] = json!(2);
+    second["source"] = json!("part-v2.sc");
+    std::fs::copy(&part, dir.join("part-v2.sc")).unwrap();
+    target.execute("components.register", &second).unwrap();
+    let listed = target.execute("components.catalog", &json!({"path":manifest})).unwrap();
+    assert_eq!(listed["entries"].as_array().unwrap().len(),2);
+    std::fs::remove_dir_all(dir).unwrap();
+}
