@@ -603,7 +603,8 @@ mod tests {
         let report = b.audit_solid_topology().unwrap();
         assert_eq!(report.shells[0].orientation_conflicts, 3);
         assert!(!report.closed_by_edge_incidence);
-        b.shells[0].faces.push(b.shells[0].faces[0].clone());
+        let extra_face = b.shells[0].faces[0].clone();
+        b.shells[0].faces.push(extra_face);
         let report = b.audit_solid_topology().unwrap();
         assert_eq!(report.shells[0].nonmanifold_edges, 3);
     }
