@@ -1092,6 +1092,45 @@ mod tests {
     }
 
     #[test]
+    fn typed_geometry_is_committed_only_after_validation_and_can_be_undone() {
+        let mut app = ArcletApp::with_services(Default::default());
+        app.cad.run("sketch.create", json!({"plane":"XY","name":"Typed"})).unwrap();
+        let before = app.cad.session.doc.to_json();
+        app.command = "line 0,0".to_owned();
+        app.run_command_text();
+        assert!(app.guided.is_some());
+        assert_eq!(app.cad.session.doc.to_json(), before, "incomplete command must not edit the document");
+        app.command = "10mm,0".to_owned();
+        app.run_command_text();
+        assert!(app.command_error.is_none(), "{:?}", app.command_error);
+        assert!(app.guided.is_none());
+        let after = app.cad.session.doc.to_json();
+        assert_ne!(after, before);
+        app.cad.run("edit.undo", json!({})).unwrap();
+        assert_eq!(app.cad.session.doc.to_json(), before);
+        app.cad.run("edit.redo", json!({})).unwrap();
+        assert_eq!(app.cad.session.doc.to_json(), after);
+        let recovered = solidcraft_engine::doc::Document::from_json(&after).unwrap();
+        assert_eq!(recovered.to_json(), after);
+    }
+
+    #[test]
+    fn invalid_guided_coordinates_and_cancellation_keep_the_document() {
+        let mut app = ArcletApp::with_services(Default::default());
+        app.cad.run("sketch.create", json!({"plane":"XY"})).unwrap();
+        let before = app.cad.session.doc.to_json();
+        app.command = "line 0,0".to_owned();
+        app.run_command_text();
+        app.command = "NaN,1".to_owned();
+        app.run_command_text();
+        assert!(app.command_error.is_some());
+        assert_eq!(app.cad.session.doc.to_json(), before);
+        app.guided = None;
+        app.command.clear();
+        assert_eq!(app.cad.session.doc.to_json(), before);
+    }
+
+    #[test]
     fn an_empty_command_line_repeats_the_last_command() {
         let mut app = ArcletApp::with_services(Default::default());
         app.command.clear();
