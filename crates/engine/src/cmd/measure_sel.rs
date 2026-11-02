@@ -327,8 +327,8 @@ fn describe(s: &Session, sel: &Sel) -> Option<Item> {
                     _ => len,
                 };
                 let mut json = json!({"type": "edge", "length_mm": length,
-                    "length_method": if kernel_exact { "analytic_circle" } else { "sampled_polyline" },
-                    "length_exact": kernel_exact,
+                    "length_method": if kernel_exact { "analytic_recognized_circle" } else { "sampled_polyline" },
+                    "length_exact": false,
                     "length_error_bound_mm": null});
                 add_round(&mut json, &shape);
                 return Some(Item { geo: Geo::Points(points), dir: None, json, shape, slot: None });
@@ -342,11 +342,12 @@ fn describe(s: &Session, sel: &Sel) -> Option<Item> {
             };
             let length = match shape {
                 Shape::Round { radius, angle, .. } if kernel_exact => radius * angle,
+                Shape::Line { a, b } => a.dist(b),
                 _ => len,
             };
             let mut json = json!({"type": "edge", "length_mm": length,
-                "length_method": if kernel_exact { "analytic_arc" } else if straight.is_some() { "sampled_straight_edge" } else { "sampled_polyline" },
-                "length_exact": kernel_exact || straight.is_some(),
+                "length_method": if kernel_exact { "analytic_recognized_arc" } else if straight.is_some() { "analytic_recognized_line" } else { "sampled_polyline" },
+                "length_exact": false,
                 "length_error_bound_mm": null});
             add_round(&mut json, &shape);
             Some(Item { geo: Geo::Points(densify(pts)), dir: straight, json, shape, slot: None })
@@ -542,6 +543,30 @@ fn exact_linear_farthest(a: Shape, b: Shape) -> Option<(Vec3, Vec3)> {
         .max_by(|x, y| x.0.dist(x.1).total_cmp(&y.0.dist(y.1)))
 }
 
+/// A point-to-plane minimum can be calculated without face-facet distance error
+/// if the exact orthogonal projection is in the *interior* of a selected triangle.
+/// This does not extrapolate outside the trimmed face. Boundary cases continue
+/// through the general sampled closest-point search.
+fn projected_point_in_planar_face(point: Vec3, face: &Item) -> Option<Vec3> {
+    let Shape::Plane { point: on_plane, normal } = face.shape else { return None };
+    let Geo::Tris(ref tris) = face.geo else { return None };
+    if !point.is_finite() { return None; }
+    let projected = point - normal * (point - on_plane).dot(normal);
+    let epsilon = 1e-10 * (1.0 + point.len().max(on_plane.len()));
+    tris.iter().find(|tri| {
+        let [a, b, c] = **tri;
+        projected.dist(closest_on_triangle(projected, a, b, c)) <= epsilon
+    }).map(|_| projected)
+}
+
+fn exact_planar_closest(a: &Item, b: &Item) -> Option<(Vec3, Vec3)> {
+    match (a.shape, b.shape) {
+        (Shape::Point(p), Shape::Plane { .. }) => Some((p, projected_point_in_planar_face(p, b)?)),
+        (Shape::Plane { .. }, Shape::Point(p)) => Some((projected_point_in_planar_face(p, a)?, p)),
+        _ => None,
+    }
+}
+
 /// Two straight edges sharing exactly one end define rays away from that corner. Their
 /// stored directions are arbitrary, so use the rays to preserve obtuse (and straight) angles.
 /// Separate edges and coincident copies have no unique corner and keep the undirected angle.
@@ -634,11 +659,12 @@ pub(crate) fn measure_items(s: &Session, items: &Value) -> Result<Value> {
     }
     if let [a, b] = described.as_slice() {
         let analytic_min = exact_linear_closest(a.shape, b.shape);
+        let plane_min = exact_planar_closest(a, b);
         let analytic_max = exact_linear_farthest(a.shape, b.shape);
-        let near = analytic_min.or_else(|| closest(&a.geo, &b.geo));
+        let near = analytic_min.or(plane_min).or_else(|| closest(&a.geo, &b.geo));
         let far = analytic_max.or_else(|| farthest(&a.geo, &b.geo));
         let c = centre(&a.shape, &b.shape);
-        let mut min_method = if analytic_min.is_some() { "analytic_linear" } else { "sampled_geometry" };
+        let mut min_method = if analytic_min.is_some() { "analytic_linear" } else if plane_min.is_some() { "analytic_planar_interior" } else { "sampled_geometry" };
         let max_method = if analytic_max.is_some() { "analytic_linear" } else { "sampled_geometry" };
         // An exact closest or farthest distance stands only where the mesh agrees with it to
         // within its chord error (a bounded face can end before the exact value's point).
@@ -665,7 +691,7 @@ pub(crate) fn measure_items(s: &Session, items: &Value) -> Result<Value> {
             out["min"] = json!(d);
             out["min_method"] = json!(min_method);
             out["min_exact"] = json!(min_method != "sampled_geometry");
-            out["min_witness_exact"] = json!(analytic_min.is_some());
+            out["min_witness_exact"] = json!(analytic_min.is_some() || plane_min.is_some());
             if min_method == "sampled_geometry" {
                 // Sampling and surface faceting have no certified global error bound.
                 out["min_error_bound_mm"] = Value::Null;
@@ -780,6 +806,28 @@ mod inspection_tests {
         assert_eq!(cylinder["principal_magnitudes_per_mm"], json!([0.0, 0.25]));
         assert_eq!(cylinder["mean_curvature_magnitude_per_mm"], 0.125);
         assert!(analytic_curvature(FaceSurface::Sphere { center: Vec3::ZERO, radius: 0.0 }).is_none());
+    }
+
+    #[test]
+    fn point_to_planar_patch_only_projects_inside_trim() {
+        let triangle = [Vec3::ZERO, Vec3::new(10.0, 0.0, 0.0), Vec3::new(0.0, 10.0, 0.0)];
+        let face = Item {
+            geo: Geo::Tris(vec![triangle]),
+            shape: Shape::Plane { point: Vec3::ZERO, normal: UnitVec3::Z },
+            dir: None,
+            json: json!({"type": "face"}),
+            slot: None,
+        };
+        let point = |p| Item { geo: Geo::Points(vec![p]), shape: Shape::Point(p), dir: None, json: json!({"type": "vertex"}), slot: None };
+        let inside = point(Vec3::new(2.0, 3.0, 4.0));
+        let (a, b) = exact_planar_closest(&inside, &face).unwrap();
+        assert_close_mm(a.dist(b), 4.0, 1e-12);
+        assert_eq!(b, Vec3::new(2.0, 3.0, 0.0));
+        let swapped = exact_planar_closest(&face, &inside).unwrap();
+        assert_eq!(swapped, (b, a));
+        // Outside the triangle, extrapolating the infinite plane would be wrong.
+        let outside = point(Vec3::new(20.0, 20.0, 4.0));
+        assert!(exact_planar_closest(&outside, &face).is_none());
     }
 
     #[test]
