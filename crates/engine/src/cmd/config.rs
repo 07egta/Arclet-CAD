@@ -872,6 +872,116 @@ mod tests {
         assert!(s.doc.configs.rows.iter().all(|row| row.cells.is_empty()));
     }
 
+
+    #[test]
+    fn configuration_validation_reports_every_invalid_row_without_mutating_the_model() {
+        let mut s = Session::default();
+        run(&mut s, "parameters.add", json!({"name":"width","expression":"40 cm","unit":"mm"}));
+        run(&mut s, "parameters.add", json!({"name":"height","expression":"80 cm","unit":"mm"}));
+        run(&mut s, "solid.box", json!({"length":"width","width":"height","height":10}));
+        run(&mut s, "config.configure", json!({"params":["width","height"]}));
+        run(&mut s, "config.row", json!({"name":"Inches","values":{"width":"20 in","height":"1 m"}}));
+        run(&mut s, "config.row", json!({"name":"Cycle","values":{"width":"height","height":"width"}}));
+        run(&mut s, "config.row", json!({"name":"Wrong unit","values":{"width":"30 deg"}}));
+        run(&mut s, "config.row", json!({"name":"Invalid expression","values":{"height":"1/0"}}));
+        run(&mut s, "config.row", json!({"name":"Invalid geometry","values":{"width":"0 mm"}}));
+        let before = s.doc.clone();
+        let revision = s.revision;
+        let result = run(&mut s, "config.validate", json!({"details":true}));
+        assert_eq!(result["checked"], 6, "{result}");
+        assert_eq!(result["failed"], 4, "{result}");
+        assert_eq!(result["valid"], false);
+        assert_eq!(result["rows"][0]["valid"], true);
+        assert_eq!(result["rows"][1]["valid"], true);
+        assert!(result["rows"][1]["parameters"].is_array());
+        for i in 2..=5 {
+            assert_eq!(result["rows"][i]["valid"], false, "{result}");
+            assert!(result["rows"][i]["error"].as_str().is_some_and(|error| !error.is_empty()));
+        }
+        assert_eq!(s.doc, before);
+        assert_eq!(s.revision, revision);
+        assert!((volume(&mut s) - 3_200_000.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn configuration_sweep_is_cartesian_deterministic_and_rolled_back_on_failure() {
+        let mut s = Session::default();
+        run(&mut s, "parameters.add", json!({"name":"width","expression":"40 cm","unit":"mm"}));
+        run(&mut s, "parameters.add", json!({"name":"height","expression":"80 cm","unit":"mm"}));
+        run(&mut s, "parameters.add", json!({"name":"seat_height","expression":"height/2","unit":"mm"}));
+        run(&mut s, "parameters.add", json!({"name":"back_angle","expression":"15 deg","unit":"deg"}));
+        run(&mut s, "parameters.add", json!({"name":"leg_width","expression":"1 in","unit":"mm"}));
+        run(&mut s, "solid.box", json!({"length":"width","width":"height","height":10}));
+        run(&mut s, "config.configure", json!({"params":["width","height","back_angle"]}));
+        let request = json!({
+            "prefix":"Chair",
+            "axes":{"width":["40 cm","20 in"],"height":["0.8 m","90 cm"],"back_angle":["15 deg"]},
+            "preview":true
+        });
+        let before = s.doc.clone();
+        let revision = s.revision;
+        let preview = run(&mut s, "config.sweep", request.clone());
+        assert_eq!(preview["count"], 4);
+        assert_eq!(preview["preview"], true);
+        assert_eq!(s.doc, before);
+        assert_eq!(s.revision, revision);
+        let mut persist = request;
+        persist["preview"] = json!(false);
+        let generated = run(&mut s, "config.sweep", persist);
+        assert_eq!(generated["rows"][0]["name"], "Chair-001");
+        assert_eq!(generated["rows"][3]["name"], "Chair-004");
+        assert_eq!(run(&mut s, "config.validate", json!({}))["checked"], 5);
+
+        run(&mut s, "config.activate", json!({"row":"Chair-004"}));
+        let wide = s.doc.param_values().0;
+        assert!((wide["width"].v - 508.0).abs() < 1e-9);
+        assert!((wide["height"].v - 900.0).abs() < 1e-9);
+        assert!((wide["seat_height"].v - 450.0).abs() < 1e-9);
+        assert!((wide["leg_width"].v - 25.4).abs() < 1e-9);
+        let volume_wide = volume(&mut s);
+        assert!((volume_wide - 4_572_000.0).abs() < 1e-6);
+        run(&mut s, "config.activate", json!({"row":"Chair-001"}));
+        assert!((s.doc.param_values().0["width"].v - 400.0).abs() < 1e-9);
+        run(&mut s, "config.activate", json!({"row":"Chair-004"}));
+        assert_eq!(s.doc.param_values().0, wide, "a switch must not inherit values from the preceding variant");
+        assert!((volume(&mut s) - volume_wide).abs() < 1e-6);
+        assert!(s.doc.configuration_matches());
+
+        let before = s.doc.clone();
+        assert!(s.execute("config.sweep", &json!({"prefix":"Bad","axes":{"width":["0 mm"]}})).is_err());
+        assert_eq!(s.doc, before, "invalid rebuild must reject every new sweep row");
+        assert!(s.execute("config.sweep", &json!({"prefix":"Chair","axes":{"width":["10 mm"]}})).is_err());
+        assert_eq!(s.doc, before, "colliding names cannot change existing rows");
+        let widths: Vec<String> = (1..=17).map(|n| format!("{n} cm")).collect();
+        let heights: Vec<String> = (1..=8).map(|n| format!("{n} cm")).collect();
+        assert!(s.execute("config.sweep", &json!({"prefix":"Overflow","axes":{"width":widths,"height":heights}})).is_err());
+        assert_eq!(s.doc, before);
+    }
+
+    #[test]
+    fn configuration_sweep_varies_materials_and_feature_suppression_independently() {
+        let mut s = Session::default();
+        run(&mut s, "solid.box", json!({"length":10,"width":10,"height":10,"body_name":"Chair"}));
+        run(&mut s, "solid.box", json!({"length":2,"width":2,"height":10,"body_name":"Leg"}));
+        let leg = s.doc.features.last().map(|f| f.name.clone()).unwrap_or_default();
+        let body = s.model.state().bodies.first().map(|b| b.name.clone()).unwrap_or_default();
+        run(&mut s, "config.configure", json!({"features":[leg],"materials":[body]}));
+        let suppression = format!("suppress:{leg}");
+        let material = format!("material:{body}");
+        let result = run(&mut s, "config.sweep", json!({
+            "prefix":"Finish",
+            "axes":{suppression.clone():[false,true],material.clone():["steel","Aluminum"]}
+        }));
+        assert_eq!(result["count"], 4, "{result}");
+        assert_eq!(run(&mut s, "config.validate", json!({}))["failed"], 0);
+        run(&mut s, "config.activate", json!({"row":"Finish-004"}));
+        assert!(s.doc.features.last().is_some_and(|f| f.suppressed));
+        assert_eq!(s.doc.materials.get(&body).map(String::as_str), Some("Aluminum"));
+        run(&mut s, "config.activate", json!({"row":"Finish-001"}));
+        assert!(!s.doc.features.last().is_some_and(|f| f.suppressed));
+        assert_eq!(s.doc.materials.get(&body).map(String::as_str), Some("Steel"));
+    }
+
     #[test]
     fn configurations_switch_sizes_and_suppressions() {
         let mut s = Session::default();
