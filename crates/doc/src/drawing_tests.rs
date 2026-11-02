@@ -560,7 +560,7 @@ fn runtime_three_views_use_saved_paper_and_source_ids_without_schema_changes() {
     use crate::drawing::runtime::LinkedView;
     use solidcraft_geom::drawing_view::technical::{LineDisplay, ProjectionConvention};
     use solidcraft_geom::hlr;
-    use solidcraft_geom::mesh::Aabb3;
+    use solidcraft_geom::Aabb3;
     use solidcraft_geom::{Vec2, Vec3};
     let d = plate();
     let initial_file = d.to_json().unwrap();
