@@ -276,6 +276,12 @@ impl PanelState {
             {
                 self.chosen_layer = made.get("layer").and_then(Value::as_u64);
             }
+            if ui_kit::button(ui, "Delete", Button::Enabled(target != DEFAULT)).on_hover_text("Delete layer; move its objects to Default").clicked()
+                && self.exec(cad, "layer.delete", json!({ "layer": target })).is_some()
+            {
+                self.chosen_layer = Some(DEFAULT);
+                self.layer_rename = None;
+            }
             if ui_kit::button(ui, tr("arclet.layers.rename"), Button::Enabled(target != DEFAULT)).clicked()
                 && let Some(row) = rows.iter().find(|row| row.id == target)
             {
@@ -458,13 +464,19 @@ struct LayerRow {
 
 fn layer_rows(session: &Session) -> Vec<LayerRow> {
     let layers = &session.doc.layers;
+    let mut counts = std::collections::HashMap::<u64, usize>::new();
+    for id in layers.of.values() {
+        if layers.get(*id).is_some() {
+            *counts.entry(*id).or_default() += 1;
+        }
+    }
     let mut rows = vec![LayerRow {
         id: DEFAULT,
         name: tr("arclet.layers.default").to_string(),
         colour: String::new(),
         visible: true,
         locked: false,
-        count: layers.members(DEFAULT).len(),
+        count: 0,
     }];
     rows.extend(layers.items.iter().map(|l| LayerRow {
         id: l.id,
@@ -472,7 +484,7 @@ fn layer_rows(session: &Session) -> Vec<LayerRow> {
         colour: l.colour.clone(),
         visible: l.visible,
         locked: l.locked,
-        count: layers.members(l.id).len(),
+        count: counts.get(&l.id).copied().unwrap_or(0),
     }));
     rows
 }
