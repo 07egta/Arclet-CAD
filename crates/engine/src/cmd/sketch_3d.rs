@@ -67,7 +67,7 @@ fn input_frame(s: &Session, p: &Value, cmd: &str) -> Result<Option<Plane>> {
         Some(Value::String(v)) if v == "world" => Ok(None),
         Some(Value::String(v)) if v == "sketch" => {
             let id = sketch_store::target(s, p, cmd)?;
-            s.world_state().sketch(id).map(|sk| sk.plane).ok_or_else(|| bad(cmd, "the sketch plane could not be evaluated"))
+            s.world_state().sketch(id).map(|sk| Some(sk.plane)).ok_or_else(|| bad(cmd, "the sketch plane could not be evaluated"))
         }
         _ => Err(bad(cmd, "`frame` must be \"world\" or \"sketch\"")),
     }
