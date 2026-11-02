@@ -17,6 +17,7 @@ Its result contains:
   `collapsed_after_weld`, `duplicate_vertices`, `duplicate_faces`: malformed or
   duplicate geometry counters.
 - `naked_edges`, `non_manifold_edges`, `non_manifold_vertices`, `boundary_loops`: edge and vertex-fan diagnostics. A pair of otherwise closed shells touching at one vertex is rejected, even if all edges are paired.
+- `connected_shells`: count of vertex-connected shells after welding. `shell_nesting_checked` is always false; a positive combined signed volume cannot prove the correct orientation of an enclosed void. Multiple shells always trigger manual review in the manufacturing preflight, even if their surface topology is closed.
   `boundary_loops` is **the count of connected naked-edge components**; a branching
   boundary is not necessarily a simple geometric loop.
 - `signed_volume_mm3`, `surface_area_mm2`: computed from valid oriented triangles.
@@ -78,6 +79,7 @@ printer-specific G-code nor physical print success is certified by this PR.
 - Outward 20×20×20 mm cube: exactly 8,000 mm³, 2,400 mm², correct winding.
 - Reversed single triangle and fully reversed cube: invalid winding and outwardness.
 - A cube with missing faces: exposed boundary edges and a boundary component.
+- Sealed hollow 20 mm case with 16 mm inner void: two shells, net volume 3904 mm³. The model is closed but the preflight must not certify cavity nesting from winding/volume alone.
 - Two valid tetrahedra touching at one point: disconnected vertex link; not a manifold solid.
 - Duplicate face, nonmanifold edge, out-of-range index, zero-area facet,
   non-finite vertex, over-aggressive weld of a 0.02 mm high box: refuse closure.
