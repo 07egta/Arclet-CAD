@@ -1004,3 +1004,33 @@ fn ultimate_quality_vec3_norm_stays_finite_across_extreme_scales() {
     assert_eq!(Vec3::ZERO.len(), 0.0);
     assert!(Vec3::new(f64::NAN, 0.0, 0.0).len().is_nan());
 }
+
+
+#[test]
+fn ultimate_quality_aabb_center_preserves_opposite_sign_cancellation() {
+    // Independent oracle: exact Decimal arithmetic on the binary f64 endpoints,
+    // correctly rounded back to f64 gives -4.429161364691605e29. The naive
+    // low + (high-low)/2 loses 16,384 ULP for this particular finite input.
+    let low = -1.1791643339885448e34_f64;
+    let high = 1.179075750761251e34_f64;
+    let expected = -4.429161364691605e29_f64;
+    assert_eq!(
+        Aabb2 { min: Vec2::new(low, 0.0), max: Vec2::new(high, 0.0) }.center().x,
+        expected
+    );
+    assert_eq!(
+        Aabb3 { min: Vec3::new(low, 0.0, low), max: Vec3::new(high, 0.0, high) }.center(),
+        Vec3::new(expected, 0.0, expected)
+    );
+
+    // Half-summing each input can also mis-round tiny opposite-sign values:
+    // (-min_subnormal + 2*min_subnormal)/2 is a half-ULP tie -> nearest-even zero.
+    let subnormal = f64::from_bits(1);
+    assert_eq!(
+        Aabb2 {
+            min: Vec2::new(-subnormal, 0.0),
+            max: Vec2::new(2.0 * subnormal, 0.0),
+        }.center().x,
+        0.0
+    );
+}

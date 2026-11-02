@@ -44,8 +44,14 @@ impl Aabb2 {
             // The difference-based form preserves small spans; use half-sums only when
             // the span itself overflows (endpoints with opposite signs).
             let midpoint = |low: f64, high: f64| {
-                let span = high - low;
-                if span.is_finite() { low + span * 0.5 } else { low * 0.5 + high * 0.5 }
+                if low.is_sign_negative() != high.is_sign_negative() {
+                    // Opposite signs cannot overflow on addition. Sum first so
+                    // near-cancelling endpoints retain their low-order bits.
+                    (low + high) * 0.5
+                } else {
+                    // Same signs can overflow when added, but their difference is finite.
+                    low + (high - low) * 0.5
+                }
             };
             Vec2::new(midpoint(self.min.x, self.max.x), midpoint(self.min.y, self.max.y))
         }

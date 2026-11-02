@@ -96,3 +96,7 @@ Commands for reproduction:
 Do not bless robustness goldens, suppress existing tests, merge automatically
 or push directly to main. Keep the PR a draft while numerical CI or the
 end-to-end CLI workflow is failing or unverified.
+
+## Follow-up precision check (post first green run)
+
+A separate high-precision Python Decimal oracle sampled 30,000 finite sorted AABB endpoint pairs spanning ~1e-300 to 1e300. The first overflow-safe formula, low + (high-low)/2, still lost >1.5 ULP in 3,690 near-cancelling mixed-sign cases (worst 16,384 ULP). The follow-up uses (low+high)/2 where the signs differ (the sum cannot overflow), and low + (high-low)/2 where both signs agree (the difference cannot overflow). In that independent sample the revised formula differed from the correctly rounded Decimal midpoint by at most one ULP; this is NOT an exhaustive numerical proof. A deterministic binary-endpoint Rust fixture with a 16,384-ULP old error and a subnormal tie case was added. Compile/test result for this follow-up must be verified from the future branch CI; do not claim green from Python alone.
