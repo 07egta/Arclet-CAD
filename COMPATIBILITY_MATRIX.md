@@ -13,7 +13,7 @@
 | STL export | Node mesh 192 triangles exactly preserved across native save/reload; torus meshes finite and closed by edge incidence |
 | STEP | One analytic torus exported/imported/re-exported; mm units retained; representation changes; partial smoke coverage only |
 | IGES / OBJ / GLB / glTF | Not exercised in this session; no new compatibility claim |
-| 3DM | Header and top-level chunk listing only (version and chunk type codes); no geometry yet |
+| 3DM | Import (desktop only) goes through the existing cadmpeg path; no export. A separate in-house reader (`crates/io/src/rhino3dm.rs`) lists the header and top-level chunks only, no geometry yet, and is not used by import. Fidelity of the cadmpeg path is not measured |
 | GH / GHX | Unsupported in this delivery |
 | RhinoCommon / Python / .rhp / .gha binary plugins | Unsupported in this delivery |
 | G3 surface continuity | Not implemented/verified as a general capability |
