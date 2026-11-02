@@ -90,8 +90,9 @@ mod tests {
         use super::chrome::{self, Density};
         use egui::{Rect, pos2, vec2};
 
-        for (width, height, scale) in [(1280.0, 720.0, 1.0), (1366.0, 768.0, 1.25), (1920.0, 1080.0, 1.5), (2560.0, 1600.0, 2.0)] {
-            let bounds = Rect::from_min_size(pos2(0.0, 0.0), vec2(width / scale, height / scale));
+        for (width, height) in [(1280.0, 720.0), (1366.0, 768.0), (1920.0, 1080.0), (2560.0, 1600.0)] {
+            for scale in [1.0, 1.25, 1.5, 2.0] {
+                let bounds = Rect::from_min_size(pos2(0.0, 0.0), vec2(width / scale, height / scale));
             let size = vec2(248.0, 208.0);
             for anchor in [
                 Rect::from_min_size(bounds.left_top() + vec2(8.0, 80.0), vec2(36.0, 36.0)),
@@ -100,6 +101,7 @@ mod tests {
                 let at = chrome::flyout_origin(bounds, anchor, size);
                 let popup = Rect::from_min_size(at, size);
                 assert!(bounds.contains(popup.min) && bounds.contains(popup.max), "{width}x{height} at {scale}x: {popup:?}");
+                }
             }
         }
         assert_eq!(chrome::status_density(1920.0), Density::Full);
@@ -127,6 +129,8 @@ mod tests {
             ("text/app bar", t.app_bar_text, t.app_bar),
             ("selection", t.selected_ink, t.selected_bg),
             ("primary action", t.on_accent, t.accent),
+            ("error", t.error, t.panel),
+            ("warning", t.warning, t.panel),
         ] {
             assert!(contrast(ink, surface) >= 4.5, "{name} has insufficient contrast");
         }
