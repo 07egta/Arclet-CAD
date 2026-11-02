@@ -450,6 +450,57 @@ mod smart_snap_tests {
     }
 
     #[test]
+    fn extreme_zoom_levels_use_pixel_radius_not_world_distance() {
+        for zoom in [1e-12, 0.1, 1e9] {
+            let mut q = query(0.0, 0.0);
+            q.view.clip_from_world[0][0] = zoom;
+            q.settings.enabled = [SnapKind::Vertex].into_iter().collect();
+            let position = Vec3::new(0.02 / zoom, 0.0, 0.0);
+            let object = SnapObject::new("point", SnapGeometry::Anchor {
+                at: position, kind: SnapKind::Vertex, accuracy: SnapAccuracy::Analytic,
+            });
+            assert_eq!(query_snaps(&[object.clone()], &q).unwrap().candidates.len(), 1);
+            q.settings.radius_px = 4.0; // screen distance is 10 physical pixels
+            assert!(query_snaps(&[object], &q).unwrap().candidates.is_empty());
+        }
+        let mut q = query(0.0, 0.0);
+        q.view.viewport_px = [2000.0, 2000.0];
+        q.cursor_px = SnapScreenPoint { x: 1000.0, y: 1000.0 };
+        q.settings.enabled = [SnapKind::Vertex].into_iter().collect();
+        let object = SnapObject::new("point", SnapGeometry::Anchor {
+            at: Vec3::new(0.1, 0.0, 0.0), kind: SnapKind::Vertex, accuracy: SnapAccuracy::Analytic,
+        });
+        assert!(query_snaps(&[object], &q).unwrap().candidates.iter().any(|c| (c.distance_px - 10.0).abs() < 1e-12));
+    }
+
+    #[test]
+    fn intersection_is_bitwise_stable_when_input_order_reverses() {
+        let mut objects = vec![
+            segment("h", Vec3::new(-2.0, 0.0, 0.0), Vec3::new(2.0, 0.0, 0.0)),
+            segment("v", Vec3::new(0.0, -2.0, 0.0), Vec3::new(0.0, 2.0, 0.0)),
+            circle("c", Vec3::ZERO, 1.0),
+        ];
+        let q = query(0.0, 0.0);
+        let before = query_snaps(&objects, &q).unwrap();
+        objects.reverse();
+        let after = query_snaps(&objects, &q).unwrap();
+        assert_eq!(before, after);
+        assert!(before.candidates.iter().any(|c| c.kind == SnapKind::Intersection && c.at == Vec3::ZERO));
+    }
+
+    #[test]
+    fn display_polylines_never_claim_analytic_accuracy() {
+        let displayed = SnapObject::new("preview", SnapGeometry::Polyline(vec![
+            Vec3::new(-1.0, 0.0, 0.0), Vec3::new(0.0, 0.2, 0.0), Vec3::new(1.0, 0.0, 0.0),
+        ]));
+        let mut q = query(0.0, 0.2);
+        q.settings.radius_px = 100.0;
+        let candidates = query_snaps(&[displayed], &q).unwrap().candidates;
+        assert!(!candidates.is_empty());
+        assert!(candidates.iter().all(|c| c.accuracy == SnapAccuracy::DisplayApproximate));
+    }
+
+    #[test]
     fn legacy_selection_wrapper_preserves_existing_snap_metadata() {
         // Original snap_points tests above cover the actual Session geometry.
         // The wrapper must not claim that mesh-fitted legacy centres are exact.
