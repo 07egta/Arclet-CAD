@@ -11,9 +11,15 @@ use crate::{IoError, Result};
 /// Most vertices and triangles we read from one file.
 const MAX_VERTICES: usize = 20_000_000;
 const MAX_TRIANGLES: usize = 20_000_000;
+/// Reject absurdly large polygon faces before collecting their indices. Real-world meshes
+/// represent large surfaces as multiple polygons; a single 65K-gon is rarely intentional.
+const MAX_FACE_VERTICES: usize = 65_536;
 
 /// Meshes of an OBJ file and what could not be read.
 pub fn read_obj(bytes: &[u8], default_name: &str) -> Result<(Vec<MeshObject>, Vec<String>)> {
+    if bytes.len() > crate::MAX_3MF_BYTES {
+        return Err(IoError::Invalid(format!("OBJ exceeds {} bytes", crate::MAX_3MF_BYTES)));
+    }
     let text = String::from_utf8_lossy(bytes);
     let mut verts: Vec<Vec3> = Vec::new();
     // Objects: name and polygons as vertex indices into `verts`.
@@ -55,26 +61,43 @@ pub fn read_obj(bytes: &[u8], default_name: &str) -> Result<(Vec<MeshObject>, Ve
             }
             Some("f") => {
                 let n = verts.len() as i64;
-                let idx: Option<Vec<u32>> = it
-                    .map(|tok| {
-                        let i: i64 = tok.split('/').next()?.parse().ok()?;
-                        let i = if i < 0 { n + i } else { i - 1 };
-                        (0..n).contains(&i).then(|| u32::try_from(i).ok()).flatten()
-                    })
-                    .collect();
-                match idx {
-                    Some(p) if p.len() >= 3 && p.iter().all(|i| verts.get(*i as usize).is_some_and(|v| v.is_finite())) => {
-                        if let Some((_, tris)) = objects.last_mut() {
-                            for k in 1..p.len() - 1 {
-                                tris.push([p[0], p[k], p[k + 1]]);
-                            }
-                            triangles += p.len() - 2;
+                // Validate tokens incrementally: collecting an entire hostile face before
+                // checking the global triangle budget can allocate enormous intermediate lists.
+                let mut p = Vec::new();
+                let mut valid = true;
+                for tok in it {
+                    if p.len() >= MAX_FACE_VERTICES {
+                        return Err(IoError::Invalid(format!("OBJ face has more than {MAX_FACE_VERTICES} vertices")));
+                    }
+                    let index = tok
+                        .split('/')
+                        .next()
+                        .and_then(|s| s.parse::<i64>().ok())
+                        .and_then(|i| {
+                            let i = if i < 0 { n + i } else { i - 1 };
+                            (0..n).contains(&i).then(|| u32::try_from(i).ok()).flatten()
+                        });
+                    match index {
+                        Some(i) => p.push(i),
+                        None => {
+                            valid = false;
+                            break;
                         }
                     }
-                    _ => bad_lines += 1,
                 }
-                if triangles > MAX_TRIANGLES {
-                    return Err(IoError::Invalid(format!("OBJ with more than {MAX_TRIANGLES} triangles")));
+                if valid && p.len() >= 3 && p.iter().all(|i| verts.get(*i as usize).is_some_and(|v| v.is_finite())) {
+                    let face_tris = p.len() - 2;
+                    if face_tris > MAX_TRIANGLES.saturating_sub(triangles) {
+                        return Err(IoError::Invalid(format!("OBJ with more than {MAX_TRIANGLES} triangles")));
+                    }
+                    if let Some((_, tris)) = objects.last_mut() {
+                        for k in 1..p.len() - 1 {
+                            tris.push([p[0], p[k], p[k + 1]]);
+                        }
+                        triangles += face_tris;
+                    }
+                } else {
+                    bad_lines += 1;
                 }
             }
             _ => {}
@@ -128,6 +151,34 @@ mod tests {
         assert_eq!(objs[0].positions.len(), 8);
         assert_eq!(objs[1].name, "Tri");
         assert_eq!(objs[1].triangles.len(), 1);
+    }
+
+    #[test]
+    fn overlarge_obj_faces_fail_before_unbounded_index_allocation() {
+        let mut src = String::from("v 0 0 0\n");
+        src.push('f');
+        for _ in 0..=MAX_FACE_VERTICES {
+            src.push_str(" 1");
+        }
+        let err = read_obj(src.as_bytes(), "x").unwrap_err().to_string();
+        assert!(err.contains("face has more than"), "{err}");
+    }
+
+    #[test]
+    fn corpus_mm_box_preserves_name_bounds_and_topology() {
+        let fixture = include_bytes!("../../../tests/file-interoperability/fixtures/mm_box.obj");
+        let (objects, warnings) = read_obj(fixture, "unnamed").unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(objects.len(), 1);
+        let mesh = &objects[0];
+        assert_eq!(mesh.name, "Millimetre Block");
+        assert_eq!(mesh.triangles.len(), 12);
+        assert_eq!(mesh.positions.len(), 8);
+        for (axis, max) in [(0, 10.0), (1, 20.0), (2, 30.0)] {
+            let vals = mesh.positions.iter().map(|p| [p.x, p.y, p.z][axis]);
+            assert_eq!(vals.clone().fold(f64::INFINITY, f64::min), 0.0);
+            assert_eq!(vals.fold(f64::NEG_INFINITY, f64::max), max);
+        }
     }
 
     #[test]
