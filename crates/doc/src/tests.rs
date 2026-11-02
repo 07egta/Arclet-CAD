@@ -684,3 +684,179 @@ fn empty_boolean_targets_without_overlap_keep_plain_message() {
         assert_eq!(model.result(cut).unwrap().error.as_deref(), Some("there is no body to cut or intersect"));
     }
 }
+
+
+// ---------------------------------------------------------------------------------------------
+// Mission 14: explicit parametric history dependency graph / invalidation.
+
+#[test]
+fn history_dependencies_keep_ids_through_repeated_parameter_edits() {
+    let (mut doc, sketch_id) = plate_doc();
+    let extrude_id = doc.features[1].id;
+    let graph = doc.feature_dependency_graph();
+    assert!(graph.issues.is_empty(), "{:?}", graph.issues);
+    assert_eq!(graph.upstream.get(&sketch_id).map(Vec::len), Some(0));
+    assert_eq!(graph.upstream.get(&extrude_id), Some(&vec![sketch_id]));
+    assert_eq!(graph.dependents(sketch_id), vec![extrude_id]);
+
+    let mut model = Model::new();
+    model.evaluate(&doc);
+    for (width, volume) in [(50, 30_000.0), (45, 27_000.0), (40, 24_000.0)] {
+        doc.set_param("width", &format!("{width} mm"), None, None).unwrap();
+        model.evaluate(&doc);
+        assert_eq!(model.results.iter().map(|r| r.id).collect::<Vec<_>>(), vec![sketch_id, extrude_id]);
+        assert!(model.results.iter().all(|r| r.error.is_none()), "{:?}", model.results);
+        let result = model.state();
+        assert_eq!(result.bodies.len(), 1);
+        assert!(rel(measure(&result.bodies[0].body).unwrap().volume, volume) < 1e-8);
+        assert_eq!(doc.feature_dependency_graph().upstream.get(&extrude_id), Some(&vec![sketch_id]));
+    }
+}
+
+#[test]
+fn history_missing_sketch_ref_invalidates_a_cached_success_and_recovers() {
+    let (mut doc, sketch_id) = plate_doc();
+    let consumer = doc.features[1].id;
+    let mut model = Model::new();
+    model.evaluate(&doc);
+    assert!(model.result(consumer).unwrap().error.is_none());
+    let old_state = model.state();
+
+    let FeatureKind::Extrude { sketch, .. } = &mut doc.feature_mut(consumer).unwrap().kind else { panic!("extrude"); };
+    *sketch = SketchId(9_999_999);
+    let graph = doc.feature_dependency_graph();
+    assert_eq!(graph.blocking_error(consumer).is_some(), true, "{graph:?}");
+    assert_eq!(graph.issues.iter().find(|p| p.feature == consumer).map(|p| p.code), Some("missing_sketch"));
+    model.evaluate(&doc);
+    let failed = model.result(consumer).unwrap();
+    let error = failed.error.as_deref().unwrap_or_default();
+    assert!(error.contains(&format!("F{consumer}")) && error.contains("F9999999"), "{error}");
+    assert!(model.state().bodies.is_empty(), "a dangling source must not reuse the old extrusion");
+    assert_eq!(old_state.bodies.len(), 1, "the previously evaluated snapshot stays immutable");
+
+    let FeatureKind::Extrude { sketch, .. } = &mut doc.feature_mut(consumer).unwrap().kind else { panic!("extrude"); };
+    *sketch = SketchId(sketch_id);
+    model.evaluate(&doc);
+    assert!(model.results.iter().all(|r| r.error.is_none()), "{:?}", model.results);
+    assert_eq!(model.state().bodies.len(), 1);
+    assert!(rel(measure(&model.state().bodies[0].body).unwrap().volume, 24_000.0) < 1e-8);
+}
+
+#[test]
+fn history_reordering_and_suppression_report_the_affected_feature() {
+    let (mut doc, sketch_id) = plate_doc();
+    let consumer = doc.features[1].id;
+    let mut model = Model::new();
+    model.evaluate(&doc);
+
+    doc.features.swap(0, 1);
+    let graph = doc.feature_dependency_graph();
+    assert!(graph.issues.iter().any(|i| i.feature == consumer && i.target == Some(sketch_id)
+        && i.code == "future_sketch" && i.blocking));
+    model.evaluate(&doc);
+    assert!(model.result(consumer).unwrap().error.as_deref().is_some_and(|s| s.contains("after its consumer")));
+    doc.features.swap(0, 1);
+
+    doc.feature_mut(sketch_id).unwrap().suppressed = true;
+    let graph = doc.feature_dependency_graph();
+    assert!(graph.issues.iter().any(|i| i.feature == consumer && i.code == "suppressed_source" && i.blocking));
+    model.evaluate(&doc);
+    assert!(model.result(consumer).unwrap().error.as_deref().is_some_and(|s| s.contains("suppressed")));
+    assert!(model.state().bodies.is_empty());
+
+    doc.feature_mut(sketch_id).unwrap().suppressed = false;
+    model.evaluate(&doc);
+    assert!(model.results.iter().all(|r| r.error.is_none()), "{:?}", model.results);
+    assert_eq!(model.state().bodies.len(), 1);
+}
+
+#[test]
+fn history_rejects_cycles_with_the_full_feature_path() {
+    let mut doc = Document::new("invalid plane cycle");
+    let a = doc.add_feature(
+        FeatureKind::ConstructionPlane { plane: PlaneRef::Origin { name: "XY".into() } },
+        Some("Plane A"),
+    ).unwrap();
+    let b = doc.add_feature(
+        FeatureKind::ConstructionPlane { plane: PlaneRef::Construction { feature: FeatureId(a) } },
+        Some("Plane B"),
+    ).unwrap();
+    let FeatureKind::ConstructionPlane { plane } = &mut doc.feature_mut(a).unwrap().kind else { panic!("plane"); };
+    *plane = PlaneRef::Construction { feature: FeatureId(b) };
+
+    let graph = doc.feature_dependency_graph();
+    assert_eq!(graph.upstream.get(&a), Some(&vec![b]));
+    assert_eq!(graph.upstream.get(&b), Some(&vec![a]));
+    assert_eq!(graph.cycles, vec![vec![a, b, a]]);
+    assert!(graph.blocking_error(a).unwrap_or_default().contains(&format!("F{a} -> F{b} -> F{a}")));
+    assert_eq!(graph.dependents(a), vec![b]);
+
+    let mut model = Model::new();
+    model.evaluate(&doc);
+    assert!(model.result(a).unwrap().error.as_deref().is_some_and(|e| e.contains("cyclic feature dependency")));
+    assert!(model.result(b).unwrap().error.as_deref().is_some_and(|e| e.contains("cyclic feature dependency")));
+
+    let FeatureKind::ConstructionPlane { plane } = &mut doc.feature_mut(a).unwrap().kind else { panic!("plane"); };
+    *plane = PlaneRef::Origin { name: "XY".into() };
+    assert!(doc.feature_dependency_graph().cycles.is_empty());
+    model.evaluate(&doc);
+    assert!(model.results.iter().all(|r| r.error.is_none()), "{:?}", model.results);
+}
+
+#[test]
+fn history_mirror_dependencies_and_forward_seeds_preserve_old_semantics() {
+    let (mut doc, sketch_id) = plate_doc();
+    let source = doc.features[1].id;
+    let mirror = doc.add_feature(
+        FeatureKind::Mirror {
+            features: vec![FeatureId(source)],
+            plane: PlaneRef::Origin { name: "YZ".into() },
+            bodies: Vec::new(), combine: false, placements: Vec::new(),
+        },
+        Some("Mirror history"),
+    ).unwrap();
+    let graph = doc.feature_dependency_graph();
+    assert_eq!(graph.upstream.get(&mirror), Some(&vec![source]));
+    assert_eq!(graph.dependents(sketch_id), vec![source, mirror]);
+    assert!(graph.issues.is_empty(), "{:?}", graph.issues);
+
+    // Older timelines allow mirrors to replay their seeds even when the seed comes later.
+    // Report that unusual dependency, but don't turn an otherwise supported file into an
+    // unrecoverable error merely because it was reordered.
+    doc.features.swap(1, 2);
+    let graph = doc.feature_dependency_graph();
+    assert!(graph.issues.iter().any(|i| i.feature == mirror && i.target == Some(source)
+        && i.code == "forward_reference" && !i.blocking));
+    assert!(graph.blocking_error(mirror).is_none());
+}
+
+#[test]
+fn history_deep_dependencies_are_bounded_and_iterative() {
+    let mut doc = Document::new("large dependency graph");
+    let mut ids = Vec::new();
+    let first = doc.add_feature(
+        FeatureKind::ConstructionPlane { plane: PlaneRef::Origin { name: "XY".into() } },
+        Some("p0"),
+    ).unwrap();
+    ids.push(first);
+    for i in 1..256 {
+        let id = doc.add_feature(
+            FeatureKind::ConstructionPlane { plane: PlaneRef::Construction { feature: FeatureId(*ids.last().unwrap()) } },
+            Some(&format!("p{i}")),
+        ).unwrap();
+        ids.push(id);
+    }
+    let graph = doc.feature_dependency_graph();
+    assert!(graph.issues.is_empty(), "{:?}", graph.issues);
+    assert_eq!(graph.dependents(first).len(), ids.len() - 1);
+    assert!(graph.cycles.is_empty());
+    // Corrupt one ancestor to create a 256-feature cycle: diagnostics must be bounded,
+    // deterministic and include the IDs, without recursive stack growth.
+    let last = *ids.last().unwrap();
+    let FeatureKind::ConstructionPlane { plane } = &mut doc.feature_mut(first).unwrap().kind else { panic!("plane"); };
+    *plane = PlaneRef::Construction { feature: FeatureId(last) };
+    let graph = doc.feature_dependency_graph();
+    assert_eq!(graph.cycles.len(), 1);
+    assert_eq!(graph.cycles[0].len(), ids.len() + 1);
+    assert!(graph.blocking_error(first).is_some());
+}
