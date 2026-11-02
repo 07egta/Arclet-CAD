@@ -448,13 +448,18 @@ fn graph_workspace_preserves_groups_state_and_model_link_intent() {
     assert_eq!(loaded, workspace);
     assert_eq!(loaded.to_json().unwrap(), saved);
     assert_eq!(loaded.graph.evaluate().unwrap(), workspace.graph.evaluate().unwrap());
-    let original = workspace.resolved_model_meshes(&workspace.graph.evaluate().unwrap()).unwrap();
+    let mut evaluator = IncrementalEvaluator::new();
+    evaluator.update(&workspace.graph, &|| false).unwrap();
+    let original = workspace.resolved_model_meshes(&evaluator).unwrap();
     assert_eq!(original.len(), 1);
     assert_eq!(original[0].model_object_id, "arclet-object-001");
     assert_eq!(original[0].meshes.len(), 1);
     let original_x = original[0].meshes[0][0][0].x;
     workspace.graph.set_constant(circle, 0, Value::Number(25.0)).unwrap();
-    let edited = workspace.resolved_model_meshes(&workspace.graph.evaluate().unwrap()).unwrap();
+    assert!(evaluator.current_for(&workspace.graph).is_none());
+    assert!(workspace.resolved_model_meshes(&evaluator).is_err(), "stale geometry must not be exposed");
+    evaluator.update(&workspace.graph, &|| false).unwrap();
+    let edited = workspace.resolved_model_meshes(&evaluator).unwrap();
     assert!(edited[0].meshes[0][0][0].x > original_x);
 
     workspace.model_links[0].node = circle;
