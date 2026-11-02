@@ -1,0 +1,42 @@
+name: Arclet CI quality
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'apps/arclet/**'
+      - 'crates/ui-egui/**'
+      - 'assets/locales/**'
+      - '.github/workflows/arclet-ci-quality.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: arclet-ci-quality-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Rust formatting, lint and Arclet tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Linux graphics dependencies
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev mesa-vulkan-drivers
+      - name: Rust formatting
+        run: cargo fmt --all -- --check
+      - name: Catalog ordering and locale checks
+        run: cargo xtask lists
+      - name: UI container rules
+        run: cargo xtask ui-containers
+      - name: Arclet application tests
+        run: cargo test --profile ci --locked -p arclet
+      - name: Workspace Clippy
+        run: cargo clippy --workspace --all-targets --profile ci -- -D warnings

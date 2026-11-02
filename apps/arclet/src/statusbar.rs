@@ -10,7 +10,7 @@ use solidcraft_engine::geom::Vec3;
 use solidcraft_ui_egui::SolveApp;
 use solidcraft_ui_egui::i18n::tr;
 use solidcraft_ui_egui::theme::Tokens;
-use solidcraft_ui_egui::ui_kit::{Container, Edge, Surface};
+use solidcraft_ui_egui::ui_kit::{self, Button, Container, Edge, Surface};
 use solidcraft_ui_egui::viewport::Hit;
 
 /// Shown for any value the session does not have yet.
@@ -194,8 +194,16 @@ pub fn show(app: &mut SolveApp, ui: &mut Ui) {
                 ui.separator();
                 for chip in Chip::OBJECT_SNAPS.into_iter().chain(Chip::MODES) {
                     let state = chip_state(chip, settings);
-                    let button = egui::Button::new(RichText::new(tr(chip.label_id())).size(12.0)).selected(state.on).small();
-                    let response = ui.add_enabled(state.enabled, button).on_hover_text(tr(tooltip_id(chip, state)));
+                    let response = ui
+                        .add_enabled_ui(state.enabled, |ui| {
+                            ui_kit::button(
+                                ui,
+                                RichText::new(tr(chip.label_id())).size(tokens.font_body),
+                                if state.on { Button::SmallSelected } else { Button::Small },
+                            )
+                        })
+                        .inner
+                        .on_hover_text(tr(tooltip_id(chip, state)));
                     if response.clicked() {
                         clicked = Some(chip);
                     }

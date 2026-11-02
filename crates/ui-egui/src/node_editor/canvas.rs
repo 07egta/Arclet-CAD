@@ -100,7 +100,7 @@ impl NodeEditor {
                 && let Some(pointer) = ui.input(|input| input.pointer.hover_pos()).filter(|p| clip.contains(*p))
             {
                 painter.rect_stroke(Rect::from_min_size(pointer, vec2(WIDTH, 110.0)), 8, Stroke::new(1.5, t.accent), StrokeKind::Inside);
-                painter.text(pointer + vec2(14.0, 16.0), Align2::LEFT_TOP, component_label(name), FontId::proportional(14.0), t.text);
+                painter.text(pointer + vec2(14.0, 16.0), Align2::LEFT_TOP, component_label(name), FontId::proportional(t.font_heading), t.text);
             }
         });
     }
@@ -129,13 +129,13 @@ impl NodeEditor {
         painter.rect_filled(rect, 8, t.panel);
         painter.rect_stroke(rect, 8, Stroke::new(if selected || error.is_some() { 2.0 } else { 1.0 }, border), StrokeKind::Inside);
         let header = Rect::from_min_size(rect.min, vec2(WIDTH, HEADER));
-        painter.text(rect.min + vec2(14.0, 13.0), Align2::LEFT_TOP, component_label(c.name), FontId::proportional(15.0), t.text);
-        painter.text(rect.min + vec2(14.0, 33.0), Align2::LEFT_TOP, group_label(c.group), FontId::proportional(10.0), t.text_dim);
+        painter.text(rect.min + vec2(14.0, 13.0), Align2::LEFT_TOP, component_label(c.name), FontId::proportional(t.font_subtitle), t.text);
+        painter.text(rect.min + vec2(14.0, 33.0), Align2::LEFT_TOP, group_label(c.group), FontId::proportional(t.font_micro), t.text_dim);
         painter.text(
             pos2(rect.right() - 12.0, rect.top() + 14.0),
             Align2::RIGHT_TOP,
             format!("#{}", id.0.saturating_add(1)),
-            FontId::proportional(10.0),
+            FontId::proportional(t.font_micro),
             t.text_dim,
         );
         painter.line_segment([pos2(rect.left() + 10.0, header.bottom()), pos2(rect.right() - 10.0, header.bottom())], Stroke::new(1.0, t.border));
@@ -170,7 +170,7 @@ impl NodeEditor {
             let fill = if connected { t.accent } else { t.control_fill };
             painter.circle_filled(at, 5.5, fill);
             painter.circle_stroke(at, 5.5, Stroke::new(1.5, if connected { t.accent } else { t.text_dim }));
-            painter.text(at + vec2(13.0, 0.0), Align2::LEFT_CENTER, input_label(input.name), FontId::proportional(11.0), t.text_dim);
+            painter.text(at + vec2(13.0, 0.0), Align2::LEFT_CENTER, input_label(input.name), FontId::proportional(t.font_small), t.text_dim);
             let hit = Rect::from_center_size(at, vec2(22.0, 22.0));
             let response = ui.interact(hit, ui.make_persistent_id(("node-input", id.0, index)), Sense::click());
             crate::scenario::publish_target(&format!("nodes:input:{}:{index}", id.0), hit);
@@ -188,7 +188,7 @@ impl NodeEditor {
         for (output, name) in c.outputs.iter().enumerate() {
             let at = output_at(rect, output);
             painter.circle_filled(at, 5.5, t.accent);
-            painter.text(at - vec2(13.0, 0.0), Align2::RIGHT_CENTER, input_label(name), FontId::proportional(11.0), t.text);
+            painter.text(at - vec2(13.0, 0.0), Align2::RIGHT_CENTER, input_label(name), FontId::proportional(t.font_small), t.text);
             let hit = Rect::from_center_size(at, vec2(22.0, 22.0));
             let response = ui.interact(hit, ui.make_persistent_id(("node-output", id.0, output)), Sense::click());
             crate::scenario::publish_target(&format!("nodes:output:{}:{output}", id.0), hit);
@@ -226,7 +226,7 @@ impl NodeEditor {
             pos2(rect.left() + 14.0, rect.bottom() - 12.0),
             Align2::LEFT_CENTER,
             status,
-            FontId::proportional(10.0),
+            FontId::proportional(t.font_micro),
             if error.is_some() { t.error } else { t.text_dim },
         );
         if let Some(error) = error {

@@ -242,7 +242,7 @@ pub(crate) fn show(ui: &mut Ui, line: &mut CommandLine, command: &mut String, fo
         for (index, suggestion) in line.suggestions.iter().enumerate() {
             let selected = line.cursor.selected() == Some(index);
             let text = format!("{}  {}", suggestion.label, suggestion.id);
-            if ui.selectable_label(selected, text).clicked() {
+            if ui_kit::button(ui, text, if selected { ui_kit::Button::SmallSelected } else { ui_kit::Button::Ghost }).clicked() {
                 action = Action::Suggested { id: suggestion.id, label: suggestion.label };
             }
         }

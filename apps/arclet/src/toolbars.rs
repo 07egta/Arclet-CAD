@@ -250,7 +250,7 @@ impl Toolbars {
                             ui.add_space(4.0);
                         }
                         for group in row.iter() {
-                            if let Some(pick) = self.button(ui, cad, group, vec2(STANDARD_BUTTON, STANDARD_BUTTON)) {
+                            if let Some(pick) = self.toolbar_button(ui, cad, group, vec2(STANDARD_BUTTON, STANDARD_BUTTON)) {
                                 picked = Some(pick);
                             }
                         }
@@ -284,7 +284,7 @@ impl Toolbars {
                                 ui.add_space(4.0);
                             }
                             for group in row.iter() {
-                                if let Some(pick) = self.button(ui, cad, group, vec2(MAIN_BUTTON, MAIN_BUTTON)) {
+                                if let Some(pick) = self.toolbar_button(ui, cad, group, vec2(MAIN_BUTTON, MAIN_BUTTON)) {
                                     picked = Some(pick);
                                 }
                             }
@@ -296,7 +296,7 @@ impl Toolbars {
     }
 
     /// One button: paints it, handles click, right click and press-and-hold, and draws its flyout.
-    fn button(&mut self, ui: &mut Ui, cad: &SolveApp, group: &Group, size: egui::Vec2) -> Option<Pick> {
+    fn toolbar_button(&mut self, ui: &mut Ui, cad: &SolveApp, group: &Group, size: egui::Vec2) -> Option<Pick> {
         let tokens = Tokens::get();
         let (id, label) = (group.id, group.label);
         let enabled = match pick_for(id) {
