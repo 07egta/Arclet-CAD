@@ -168,14 +168,17 @@ impl SnapObject {
 /// legacy picker can fit curves and face centres to meshes, provenance is not
 /// guaranteed and all converted anchors are labelled DisplayApproximate.
 pub fn legacy_snap_objects(session: &Session, selections: &[Sel]) -> Vec<SnapObject> {
-    selections.iter().enumerate().flat_map(|(selection, sel)| {
+    let mut objects: Vec<SnapObject> = selections.iter().flat_map(|sel| {
         snap_points(session, sel).into_iter().enumerate().map(move |(index, point)| {
             SnapObject::new(
-                format!("selection:{selection}:{index}:{}", point.body),
+                format!("selection:{sel:?}:{index}:{}", point.body),
                 SnapGeometry::Anchor { at: point.at, kind: point.kind, accuracy: SnapAccuracy::DisplayApproximate },
             )
         })
-    }).collect()
+    }).collect();
+    objects.sort_by(|a, b| a.id.cmp(&b.id));
+    objects.dedup_by(|a, b| a.id == b.id);
+    objects
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -372,9 +375,15 @@ pub fn query_snaps(objects: &[SnapObject], query: &SnapQuery) -> Result<SnapResu
         return Err(SnapError::Invalid("nonfinite coordinates, plane, angle or invalid settings"));
     }
     let mut out = Collector { query, candidates: Vec::new() };
-    let active: Vec<(&SnapObject, WorldGeometry<'_>)> = objects.iter()
+    let mut active: Vec<(&SnapObject, WorldGeometry<'_>)> = objects.iter()
         .filter(|o| (o.visible || settings.include_hidden) && (!o.locked || settings.include_locked))
         .filter_map(|o| Some((o, world_geometry(o)?))).collect();
+    // Pairwise floating-point calculations must see the same orientation, no
+    // matter how the renderer or caller ordered the input object list.
+    active.sort_by(|a, b| a.0.id.cmp(&b.0.id));
+    if active.windows(2).any(|pair| pair[0].0.id == pair[1].0.id) {
+        return Err(SnapError::Invalid("snap object identifiers must be unique"));
+    }
 
     for (obj, shape) in &active {
         offer_shape(&mut out, &obj.id, shape);
