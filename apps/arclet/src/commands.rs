@@ -17,6 +17,31 @@ pub struct Suggestion {
     pub label: &'static str,
 }
 
+/// A named Boolean operation must configure the interactive Combine dialog.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BooleanMode {
+    Union,
+    Difference,
+    Intersection,
+}
+
+impl BooleanMode {
+    pub const fn dialog_index(self) -> usize {
+        match self {
+            Self::Union => 1,
+            Self::Difference => 2,
+            Self::Intersection => 3,
+        }
+    }
+}
+
+/// An explicit command-bar request; qualified registry IDs have no implicit Boolean mode.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CommandIntent {
+    pub id: &'static str,
+    pub boolean_mode: Option<BooleanMode>,
+}
+
 struct Entry {
     suggestion: Suggestion,
     id_lower: String,
@@ -102,7 +127,6 @@ const ALIASES: &[(&str, &str)] = &[
     ("emboss", "solid.emboss"),
     ("environmentmap", "inspect.environment_map"),
     ("ex", "solid.extrude"),
-    ("explode", "surface.unstitch"),
     ("export", "file.export"),
     ("extend", "sketch.extend"),
     ("extendsrf", "surface.extend"),
@@ -131,7 +155,6 @@ const ALIASES: &[(&str, &str)] = &[
     ("iso", "view.isometric"),
     ("isocurve", "inspect.isocurve"),
     ("isometric", "view.isometric"),
-    ("join", "surface.stitch"),
     ("l", "sketch.line"),
     ("left", "view.left"),
     ("length", "inspect.measure"),
@@ -237,7 +260,6 @@ const ALIASES: &[(&str, &str)] = &[
     ("un", "edit.undo"),
     ("undo", "edit.undo"),
     ("ungroup", "browser.ungroup"),
-    ("unjoin", "surface.unstitch"),
     ("untrim", "surface.untrim"),
     ("vf", "view.front"),
     ("vi", "view.isometric"),
@@ -298,6 +320,14 @@ pub fn resolve(text: &str) -> Result<&'static str, String> {
     if query.is_empty() {
         return Err(tr("arclet.command.empty").into());
     }
+    // A generic Join/Explode must not silently perform a surface operation when
+    // the user is working with sketch curves. A sketch curve join is not implemented.
+    if query == "join" {
+        return Err(tr("arclet.command.join_requires_qualified").into());
+    }
+    if matches!(query.as_str(), "explode" | "unjoin") {
+        return Err(tr("arclet.command.explode_requires_qualified").into());
+    }
     if let Some((_, id)) = ALIASES.iter().find(|(alias, _)| *alias == query) {
         return entries()
             .iter()
@@ -325,6 +355,31 @@ pub fn resolve(text: &str) -> Result<&'static str, String> {
             Err(message("arclet.command.ambiguous", &[("ids", &ids)]))
         }
     }
+}
+
+/// Preserve an explicitly named Boolean operation until the Combine dialog is shown.
+/// Generic "Boolean" and the full id "solid.combine" leave the dialog's mode editable
+/// and unchanged (Join by default); no command text executes a Boolean directly.
+pub fn resolve_intent(text: &str) -> Result<CommandIntent, String> {
+    let query = query(text)?;
+    let id = resolve(text)?;
+    let boolean_mode = match query.as_str() {
+        "booleanunion" => Some(BooleanMode::Union),
+        "booleandifference" => Some(BooleanMode::Difference),
+        "booleanintersection" => Some(BooleanMode::Intersection),
+        _ => None,
+    };
+    Ok(CommandIntent { id, boolean_mode })
+}
+
+/// A suggestion click is still a selection of its displayed command id.
+/// Only a complete, matching Boolean alias can preselect an operation; an ambiguous
+/// prefix or unrelated suggestion never changes the meaning of Combine.
+pub fn suggestion_mode(text: &str, id: &str) -> Option<BooleanMode> {
+    resolve_intent(text)
+        .ok()
+        .filter(|intent| intent.id == id)
+        .and_then(|intent| intent.boolean_mode)
 }
 
 /// At most eight stable, distinct registry suggestions. Invalid input yields no suggestions.
@@ -423,7 +478,6 @@ mod tests {
             ("extrudesrf", "surface.extrude"),
             ("edgesrf", "surface.boundary"),
             ("offsetsrf", "surface.offset"),
-            ("explode", "surface.unstitch"),
             ("booleanunion", "solid.combine"),
             ("curvatureanalysis", "inspect.curvature_map"),
             ("zoomextents", "view.fit"),
@@ -434,6 +488,40 @@ mod tests {
         ] {
             assert_eq!(resolve(name), Ok(id), "alias {name}");
         }
+    }
+
+    #[test]
+    fn boolean_aliases_preserve_their_requested_operation() {
+        for (text, mode) in [
+            ("BooleanUnion", BooleanMode::Union),
+            ("  BOOLEANdifference ", BooleanMode::Difference),
+            ("BooleanIntersection", BooleanMode::Intersection),
+        ] {
+            let intent = resolve_intent(text).expect("a registered Boolean command");
+            assert_eq!(intent.id, "solid.combine");
+            assert_eq!(intent.boolean_mode, Some(mode));
+            assert_eq!(suggestion_mode(text, "solid.combine"), Some(mode));
+            assert_eq!(suggestion_mode(text, "surface.stitch"), None);
+        }
+        for text in ["boolean", "solid.combine", "Combine"] {
+            assert_eq!(resolve_intent(text).unwrap().boolean_mode, None, "{text}");
+        }
+        for text in ["booleandif", "booleand", "garbage", "surface.stitch"] {
+            assert_eq!(suggestion_mode(text, "solid.combine"), None, "{text}");
+        }
+    }
+
+    #[test]
+    fn generic_join_and_explode_do_not_claim_unimplemented_curve_operations() {
+        for text in ["Join", "JOIN", "explode", "UnJoin"] {
+            let error = resolve(text).expect_err("a generic curve operation is not a surface operation");
+            assert!(!error.is_empty(), "{text}");
+            assert!(suggestion_mode(text, "surface.stitch").is_none());
+        }
+        assert_eq!(resolve("stitch"), Ok("surface.stitch"));
+        assert_eq!(resolve("surface.stitch"), Ok("surface.stitch"));
+        assert_eq!(resolve("surface.unstitch"), Ok("surface.unstitch"));
+        assert_eq!(resolve("booleanunion"), Ok("solid.combine"));
     }
 
     #[test]

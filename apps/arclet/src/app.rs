@@ -158,6 +158,8 @@ pub struct ArcletApp {
     screenshot_reply: Option<Receiver<Value>>,
     frame_count: u32,
     last_title: String,
+    /// The last explicit Boolean mode used by the command bar, for empty-Enter repeat.
+    last_boolean_mode: Option<commands::BooleanMode>,
     graph_close_pending: bool,
     /// A discard acknowledgement is valid for exactly one graph snapshot. Editing it
     /// while the CAD document's save prompt is open must cause a fresh graph prompt.
@@ -245,6 +247,7 @@ impl ArcletApp {
             screenshot_reply: None,
             frame_count: 0,
             last_title: String::new(),
+            last_boolean_mode: None,
             graph_close_pending: false,
             acknowledged_graph: None,
             awaiting_document_quit: false,
@@ -310,6 +313,8 @@ impl ArcletApp {
     }
 
     fn start(&mut self, id: &str) {
+        // A menu/toolbar start is an ordinary command, never a repeated Boolean alias.
+        self.last_boolean_mode = None;
         self.command_error = None;
         if matches!(id, "sketch.spline.rebuild" | "inspect.curve_continuity") && self.cad.session.active_sketch.is_none() {
             self.command_error = Some(tr("curve_quality.edit_sketch").to_string());
@@ -523,7 +528,8 @@ impl ArcletApp {
             match self.cad.last_command.clone() {
                 Some((id, _)) => {
                     self.cmdline.repeated(&id);
-                    self.start_logged(&id);
+                    let mode = if id == "solid.combine" { self.last_boolean_mode } else { None };
+                    self.start_logged(&id, mode);
                 }
                 None => {
                     let error = tr("arclet.command.empty").to_string();
@@ -534,9 +540,9 @@ impl ArcletApp {
             return;
         }
         self.cmdline.entered(&self.command);
-        match commands::resolve(&self.command) {
-            Ok(id) => {
-                self.start_logged(id);
+        match commands::resolve_intent(&self.command) {
+            Ok(intent) => {
+                self.start_logged(intent.id, intent.boolean_mode);
                 self.command.clear();
             }
             Err(error) => {
@@ -546,9 +552,26 @@ impl ArcletApp {
         }
     }
 
-    /// Start `id` from the command line and log whether it started.
-    fn start_logged(&mut self, id: &str) {
+    /// Start a command-bar intent. Boolean aliases choose the operation the user typed
+    /// before any model geometry is applied; regular menu and toolbar Combine keep Join.
+    fn start_logged(&mut self, id: &str, boolean_mode: Option<commands::BooleanMode>) {
         self.start(id);
+        if self.command_error.is_none()
+            && let Some(mode) = boolean_mode
+        {
+            if let Some(solidcraft_ui_egui::dialogs::Dialog {
+                kind: solidcraft_ui_egui::dialogs::Kind::Combine { operation, .. },
+                ..
+            }) = self.cad.dialog.as_mut()
+            {
+                *operation = mode.dialog_index();
+                self.last_boolean_mode = Some(mode);
+            } else {
+                // A busy host or an unavailable dialog cannot silently degrade
+                // Difference/Intersection into Join.
+                self.command_error = Some(tr("arclet.command.unavailable").to_string());
+            }
+        }
         match self.command_error.clone() {
             Some(error) => self.cmdline.failed(id, &error),
             None => self.cmdline.started(id),
@@ -572,8 +595,11 @@ impl ArcletApp {
                     cmdline::Action::Nothing => {}
                     cmdline::Action::Run => self.run_command_text(),
                     cmdline::Action::Suggested { id, label } => {
+                        // An exact Boolean alias keeps its operation even when clicked in
+                        // the suggestions; partial searches still choose generic Combine.
+                        let mode = commands::suggestion_mode(&self.command, id);
                         self.cmdline.entered(label);
-                        self.start_logged(id);
+                        self.start_logged(id, mode);
                         self.command.clear();
                     }
                     cmdline::Action::Cancel => {
@@ -1052,6 +1078,61 @@ mod tests {
         app.run_command_text();
         assert!(app.command_error.is_none());
         assert_eq!(app.cad.last_command.as_ref().map(|(id, _)| id.as_str()), Some("view.top"));
+    }
+
+    #[test]
+    fn boolean_command_text_configures_the_real_dialog_and_repeat_preserves_mode() {
+        use solidcraft_ui_egui::dialogs::Kind;
+
+        for (input, expected) in [
+            ("BooleanUnion", 1),
+            ("BooleanDifference", 2),
+            ("BooleanIntersection", 3),
+        ] {
+            let mut app = ArcletApp::with_services(Default::default());
+            let unchanged = app.cad.session.doc.to_json();
+            app.command = input.into();
+            app.run_command_text();
+            assert!(app.command_error.is_none(), "{input}: {:?}", app.command_error);
+            assert!(app.command.is_empty());
+            assert_eq!(app.cad.last_command.as_ref().map(|(id, _)| id.as_str()), Some("solid.combine"));
+            let Some(dialog) = app.cad.dialog.as_ref() else { panic!("{input}: no Combine dialog") };
+            let Kind::Combine { operation, .. } = &dialog.kind else { panic!("{input}: incorrect dialog kind") };
+            assert_eq!(*operation, expected, "{input} must not start Join accidentally");
+            assert_eq!(app.cad.session.doc.to_json(), unchanged, "starting the tool must not modify CAD geometry");
+
+            // Pressing Enter with an empty prompt repeats the same operation, not Join.
+            app.run_command_text();
+            let Some(dialog) = app.cad.dialog.as_ref() else { panic!("{input}: no repeated dialog") };
+            let Kind::Combine { operation, .. } = &dialog.kind else { panic!("{input}: repeat chose another tool") };
+            assert_eq!(*operation, expected, "{input}: repeat changed Boolean operation");
+            assert_eq!(app.cad.session.doc.to_json(), unchanged);
+
+            // Starting generic Combine from a toolbar/menu must reset to Join.
+            app.start("solid.combine");
+            let Some(dialog) = app.cad.dialog.as_ref() else { panic!("generic Combine has no dialog") };
+            let Kind::Combine { operation, .. } = &dialog.kind else { panic!("generic Combine chose another tool") };
+            assert_eq!(*operation, 1, "the generic Combine must remain an explicit choice");
+            assert_eq!(app.last_boolean_mode, None);
+        }
+    }
+
+    #[test]
+    fn an_ambiguous_curve_join_leaves_the_active_document_and_tool_unchanged() {
+        let mut app = ArcletApp::with_services(Default::default());
+        app.cad.run("sketch.create", json!({"plane":"XY"})).unwrap();
+        app.cad.run("sketch.line", json!({"points":[[0,0],[10,0],[10,10]]})).unwrap();
+        let before = app.cad.session.doc.to_json();
+        app.command = "Join".into();
+        app.run_command_text();
+        assert!(app.command_error.is_some());
+        assert!(app.cad.dialog.is_none());
+        assert_eq!(app.cad.session.doc.to_json(), before);
+        app.command = "explode".into();
+        app.run_command_text();
+        assert!(app.command_error.is_some());
+        assert!(app.cad.dialog.is_none());
+        assert_eq!(app.cad.session.doc.to_json(), before);
     }
 
     #[test]
