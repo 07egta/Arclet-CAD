@@ -2619,8 +2619,12 @@ mod tests {
         doc.assembly.links[1] = link(1000, 1001);
         assert!(doc.validate_mechanism().unwrap_err().to_string().contains("multiple drivers"));
         doc = valid;
-        assert_eq!(doc.occurrences.iter().find(|o| o.id == occurrence).unwrap().component != 0, true);
+        assert_ne!(doc.occurrences.iter().find(|o| o.id == occurrence).unwrap().component, 0);
         assert!(doc.validate_mechanism().is_ok());
+        doc.assembly.contact_sets.push(crate::motion::ContactSet {
+            id: 9, name: "Body contact".into(), occurrences: vec![occurrence, 999999], suppressed: false,
+        });
+        assert!(doc.validate_mechanism().unwrap_err().to_string().contains("removed occurrence"));
     }
 
 }
