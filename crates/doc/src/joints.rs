@@ -250,7 +250,7 @@ pub enum JointKind {
 impl JointKind {
     pub fn parse(s: &str) -> Option<JointKind> {
         Some(match s.to_ascii_lowercase().replace([' ', '_', '-'], "").as_str() {
-            "rigid" => JointKind::Rigid,
+            "rigid" | "fixed" | "fixedjoint" => JointKind::Rigid,
             "revolute" | "rotate" => JointKind::Revolute,
             "slider" | "slide" => JointKind::Slider,
             "cylindrical" => JointKind::Cylindrical,
@@ -2116,6 +2116,8 @@ mod reach;
 #[path = "joints_face.rs"]
 mod face;
 pub use face::{end_faces, face_name_at, named_face_spot, pin_end, round_end_at};
+#[path = "joints_integrity.rs"]
+pub mod integrity;
 #[path = "joints_relations.rs"]
 mod relations;
 pub use reach::{REACH_TOL, Reach, Reached, reach};
