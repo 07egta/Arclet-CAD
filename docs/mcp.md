@@ -176,6 +176,10 @@ however long the history is. Batches that call `file.new` or `doc.open` get the 
 not its file path. (An older app without checkpoints falls back to undoing as many steps as
 the batch added to the undo history.)
 
+Rollback does not undo file writes. A batch step that saves, exports or deletes a file leaves that
+file changed on disk even when the batch is rolled back. Guarded batches (with `if_document_id` or
+`if_revision`) are limited to 500 steps; longer edits should be split into several inspected batches.
+
 ## Camera and close-up recipe
 
 The `camera` of `screenshot` (the object `view.apply`, `view.save` and `solidcraft-cli snapshot --camera` take too) is an orbit camera, `{target, yaw, pitch, distance, fov?}`, in millimetres and **radians**. Unlike the `angle` of `solid.move`, a bare number is not degrees here. The eye is at `target + distance * (-sin(yaw) * cos(pitch), -cos(yaw) * cos(pitch), sin(pitch))`, looking at `target` with Z up on the screen. So `yaw: 0, pitch: 0` is the front view: the eye at -Y, looking along +Y, with +X to the right. A yaw of π/2 looks from -X, π from +Y and -π/2 from +X. The pitch is the elevation angle up from the XY plane, and π/2 looks straight down with +X to the right and +Y up. `fov` is the vertical field of view in radians. `0`, or no `fov`, is an orthographic view whose visible half-height is 0.4 × `distance`; with a perspective `fov` the half-height at the target is `distance * tan(fov / 2)`. `inspect.section` removes what lies on the side its normal points to: it keeps the points `p` with `n · p < d`, where `d = n · origin` (`flip: true` keeps the other side). To look into the cut, put the eye on the removed side.

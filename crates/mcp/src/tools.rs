@@ -11,6 +11,10 @@ use crate::backend::{Backend, STILL_RUNNING};
 
 /// Most commands in one `batch` call.
 const MAX_BATCH: usize = 10_000;
+/// Most commands in one guarded `batch` call (one that sends `if_document_id` or `if_revision`).
+/// A guarded batch is checked and run as one atomic desktop request, so it is kept well under
+/// `MAX_BATCH`; split a longer edit into several inspected batches.
+pub(crate) const MAX_GUARDED_BATCH: usize = 500;
 /// Largest image returned by `screenshot`.
 const MAX_IMAGE_BYTES: usize = 32 << 20;
 
@@ -617,11 +621,7 @@ fn inspect_state(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<Value, S
     let before = exec(b, "document.revision", json!({}))?;
     let measure = a.get("measure").and_then(Value::as_bool).unwrap_or(false);
     let design = b.call("document.inspect", json!({"measure": measure}))?;
-    let commands = if a.get("commands").and_then(Value::as_bool) == Some(true) {
-        Some(b.call("engine.commands", json!({}))?)
-    } else {
-        None
-    };
+    let commands = if a.get("commands").and_then(Value::as_bool) == Some(true) { Some(b.call("engine.commands", json!({}))?) } else { None };
     let feature_inputs = if a.get("feature_inputs").and_then(Value::as_bool) == Some(true) {
         Some(exec(b, "parameters.list", json!({"filter": "feature"}))?)
     } else {
@@ -844,7 +844,8 @@ fn check_batch_guard(b: &mut dyn Backend, a: &Map<String, Value>, len: usize) ->
     if !a.contains_key("if_document_id") && !a.contains_key("if_revision") {
         return None;
     }
-    let (Some(id), Some(rev)) = (a.get("if_document_id").and_then(Value::as_str).filter(|v| !v.is_empty()), a.get("if_revision").and_then(Value::as_u64))
+    let (Some(id), Some(rev)) =
+        (a.get("if_document_id").and_then(Value::as_str).filter(|v| !v.is_empty()), a.get("if_revision").and_then(Value::as_u64))
     else {
         return Some(batch_guard_error(
             len,
@@ -861,20 +862,24 @@ fn check_batch_guard(b: &mut dyn Backend, a: &Map<String, Value>, len: usize) ->
     if !b.in_process() {
         match b.call("control.capabilities", json!({})) {
             Ok(caps) if caps["atomic_batch_guards"] == true => {}
-            Ok(_) => return Some(batch_guard_error(
-                len,
-                "guard_unsupported",
-                "the connected desktop app does not advertise atomic batch guards; update the app before editing with if_revision".into(),
-                expected,
-                Value::Null,
-            )),
-            Err(e) => return Some(batch_guard_error(
-                len,
-                "guard_unsupported",
-                format!("cannot confirm atomic batch guard support on the connected desktop app: {e}"),
-                expected,
-                Value::Null,
-            )),
+            Ok(_) => {
+                return Some(batch_guard_error(
+                    len,
+                    "guard_unsupported",
+                    "the connected desktop app does not advertise atomic batch guards; update the app before editing with if_revision".into(),
+                    expected,
+                    Value::Null,
+                ));
+            }
+            Err(e) => {
+                return Some(batch_guard_error(
+                    len,
+                    "guard_unsupported",
+                    format!("cannot confirm atomic batch guard support on the connected desktop app: {e}"),
+                    expected,
+                    Value::Null,
+                ));
+            }
         }
     }
     match observed {
@@ -892,12 +897,25 @@ fn check_batch_guard(b: &mut dyn Backend, a: &Map<String, Value>, len: usize) ->
 
 /// `batch`: run steps in order, stop at the first failure and (by default) go back to the
 /// design as it was before the batch.
+///
+/// The rollback restores only the in-memory design and undo history. It does NOT undo file
+/// writes, exports, or deletions that a step made before the failure; those stay on disk.
 fn batch(b: &mut dyn Backend, a: &Map<String, Value>) -> Value {
     let Some(steps) = a.get("commands").and_then(Value::as_array) else {
         return text_result(&json!("`commands` must be an array of {command, params}"), true);
     };
     if steps.len() > MAX_BATCH {
         return text_result(&json!(format!("batch too long ({} steps, at most {MAX_BATCH})", steps.len())), true);
+    }
+    let guarded_request = a.contains_key("if_document_id") || a.contains_key("if_revision");
+    if guarded_request && steps.len() > MAX_GUARDED_BATCH {
+        return text_result(
+            &json!(format!(
+                "guarded batch too long ({} steps, at most {MAX_GUARDED_BATCH} with if_document_id/if_revision); split it into several inspected batches, or send it unguarded (up to {MAX_BATCH} steps)",
+                steps.len()
+            )),
+            true,
+        );
     }
     if let Some(refusal) = check_batch_guard(b, a, steps.len()) {
         return refusal;

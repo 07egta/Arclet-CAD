@@ -2372,7 +2372,6 @@ fn plain_headless_adds_no_notice() {
     assert_eq!(r["result"]["content"].as_array().unwrap().len(), 1);
 }
 
-
 /// The new state snapshot is opt-in and carries a token, without changing the
 /// command and inspection tools that older MCP clients rely on.
 #[test]
@@ -2433,14 +2432,19 @@ fn guarded_ai_batch_refuses_stale_state_without_mutating() {
     assert_eq!(selected["revision"], after["revision"]);
     assert!(selected["design"]["selection"].as_array().is_some_and(|s| !s.is_empty()));
     tool(&mut s, "new_design", json!({"name":"Another design"}));
-    let replaced = raw_tool(&mut s, "batch", json!({
-        "commands":[{"command":"solid.box","params":{"length":5,"width":5,"height":5}}],
-        "if_document_id":after["document_id"],"if_revision":after["revision"]
-    }));
+    let replaced = raw_tool(
+        &mut s,
+        "batch",
+        json!({
+            "commands":[{"command":"solid.box","params":{"length":5,"width":5,"height":5}}],
+            "if_document_id":after["document_id"],"if_revision":after["revision"]
+        }),
+    );
     assert_eq!(replaced["result"]["structuredContent"]["failed"]["code"], "stale_state", "{replaced}");
     assert_eq!(tool(&mut s, "measure", json!({}))["body_count"], 0);
 
-    let invalid = raw_tool(&mut s, "batch", json!({"commands":[{"command":"solid.box","params":{"length":1,"width":1,"height":1}}],"if_document_id":"x"}));
+    let invalid =
+        raw_tool(&mut s, "batch", json!({"commands":[{"command":"solid.box","params":{"length":1,"width":1,"height":1}}],"if_document_id":"x"}));
     assert_eq!(invalid["result"]["structuredContent"]["failed"]["code"], "invalid_precondition", "{invalid}");
     assert_eq!(tool(&mut s, "measure", json!({}))["body_count"], 0);
 }
@@ -2467,14 +2471,22 @@ fn guarded_ai_batch_refuses_legacy_remote_without_capabilities() {
                 }
             }
         }
-        fn has_ui(&self) -> bool { true }
-        fn describe(&self) -> String { "legacy desktop test backend".into() }
+        fn has_ui(&self) -> bool {
+            true
+        }
+        fn describe(&self) -> String {
+            "legacy desktop test backend".into()
+        }
     }
     let mut b = OldDesktop { writes: 0 };
-    let result = crate::tools::call_tool(&mut b, "batch", &json!({
-        "commands":[{"command":"solid.box","params":{"length":10,"width":10,"height":10}}],
-        "if_document_id":"old","if_revision":7
-    }));
+    let result = crate::tools::call_tool(
+        &mut b,
+        "batch",
+        &json!({
+            "commands":[{"command":"solid.box","params":{"length":10,"width":10,"height":10}}],
+            "if_document_id":"old","if_revision":7
+        }),
+    );
     assert_eq!(result["isError"], true, "{result}");
     assert_eq!(result["structuredContent"]["failed"]["code"], "guard_unsupported", "{result}");
     assert_eq!(b.writes, 0, "legacy app must receive no commands");
@@ -2495,24 +2507,32 @@ fn ai_headless_circle_extrude_resize_hole_save_reload_and_stl() {
         {"command":"sketch.finish"},
         {"command":"solid.extrude","params":{"distance":"H"}},
     ]);
-    let built = tool(&mut s, "batch", json!({
-        "commands":create,"if_document_id":token["document_id"],"if_revision":token["revision"]
-    }));
+    let built = tool(
+        &mut s,
+        "batch",
+        json!({
+            "commands":create,"if_document_id":token["document_id"],"if_revision":token["revision"]
+        }),
+    );
     assert_eq!(built["ok"], true, "{built}");
     let initial = volume(&mut s);
     assert!(rel(initial, std::f64::consts::PI * 12.0 * 12.0 * 12.0) < 1e-4, "{initial}");
 
     let token = tool(&mut s, "inspect_state", json!({}));
-    let changed = tool(&mut s, "batch", json!({
-        "if_document_id":token["document_id"],"if_revision":token["revision"],
-        "commands":[
-            {"command":"parameters.change","params":{"name":"H","expression":"20 mm"}},
-            {"command":"sketch.create","params":{"plane":"XY"}},
-            {"command":"sketch.circle.center","params":{"center":[0,0],"radius":3}},
-            {"command":"sketch.finish"},
-            {"command":"solid.extrude","params":{"distance":"H","operation":"cut"}}
-        ]
-    }));
+    let changed = tool(
+        &mut s,
+        "batch",
+        json!({
+            "if_document_id":token["document_id"],"if_revision":token["revision"],
+            "commands":[
+                {"command":"parameters.change","params":{"name":"H","expression":"20 mm"}},
+                {"command":"sketch.create","params":{"plane":"XY"}},
+                {"command":"sketch.circle.center","params":{"center":[0,0],"radius":3}},
+                {"command":"sketch.finish"},
+                {"command":"solid.extrude","params":{"distance":"H","operation":"cut"}}
+            ]
+        }),
+    );
     assert_eq!(changed["ok"], true, "{changed}");
     let expected = std::f64::consts::PI * (12.0 * 12.0 - 3.0 * 3.0) * 20.0;
     let before = tool(&mut s, "measure", json!({}));
@@ -2548,9 +2568,13 @@ fn ai_headless_circle_extrude_resize_hole_save_reload_and_stl() {
 #[test]
 fn ai_command_errors_are_structured_and_shell_execution_is_not_exposed() {
     let mut s = server();
-    let unexpected = raw_tool(&mut s, "execute", json!({
-        "command":"shell.execute", "params":{"program":"sh","args":["-c","echo unexpected"]}
-    }));
+    let unexpected = raw_tool(
+        &mut s,
+        "execute",
+        json!({
+            "command":"shell.execute", "params":{"program":"sh","args":["-c","echo unexpected"]}
+        }),
+    );
     assert_eq!(unexpected["result"]["isError"], true, "{unexpected}");
     assert_eq!(unexpected["result"]["structuredContent"]["error"]["code"], "unknown_command", "{unexpected}");
     assert_eq!(unexpected["result"]["structuredContent"]["error"]["next_action"], "list_commands", "{unexpected}");

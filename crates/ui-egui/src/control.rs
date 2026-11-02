@@ -308,6 +308,9 @@ fn host_script<'a>(app: &SolveApp, script: &'a Value) -> Result<std::borrow::Cow
 
 /// Most steps in one `engine.batch` (as in the MCP `batch` tool).
 const MAX_BATCH: usize = 10_000;
+/// Most steps in one guarded `engine.batch` (one with `if_document_id` or `if_revision`); as in
+/// the MCP `batch` tool's `MAX_GUARDED_BATCH`.
+const MAX_GUARDED_BATCH: usize = 500;
 
 /// Commands that load a file: through `engine.execute` they go to the app's file loader
 /// (`file_load::control`: off the window thread, with progress and Cancel), which a batch would
@@ -381,6 +384,13 @@ fn batch(app: &mut SolveApp, p: &Value) -> Outcome {
     let Some(steps) = p.get("commands").and_then(Value::as_array).filter(|s| s.len() <= MAX_BATCH) else {
         return err(format!("engine.batch: commands must be an array of at most {MAX_BATCH} steps"));
     };
+    let guarded_request = p.get("if_document_id").is_some() || p.get("if_revision").is_some();
+    if guarded_request && steps.len() > MAX_GUARDED_BATCH {
+        return err(format!(
+            "engine.batch: guarded batch must have at most {MAX_GUARDED_BATCH} steps with if_document_id/if_revision (got {}); split it into several inspected batches",
+            steps.len()
+        ));
+    }
     // (With the agent cursor shown, the pointer has already acted out a short summary of the
     // batch: `agent_cursor::intercept`.)
     if let Some(why) = batch_refusal(steps) {
@@ -1726,20 +1736,26 @@ mod tests {
         assert_eq!(stale["result"]["not_run"], json!([0]), "{stale}");
         assert_eq!(inspect(&mut h)["bodies"].as_array().map(Vec::len), Some(1));
 
-        let missing = batch(&mut h, json!({
-            "commands": [{"command": "solid.box", "params": {"length": 5, "width": 5, "height": 5}}],
-            "if_document_id": token["document_id"],
-        }));
+        let missing = batch(
+            &mut h,
+            json!({
+                "commands": [{"command": "solid.box", "params": {"length": 5, "width": 5, "height": 5}}],
+                "if_document_id": token["document_id"],
+            }),
+        );
         assert_eq!(missing["result"]["failed"]["code"], "invalid_precondition", "{missing}");
         assert_eq!(inspect(&mut h)["bodies"].as_array().map(Vec::len), Some(1));
 
         // Fresh token after a geometry edit permits another atomic batch.
         let current = h.call("document.revision", json!({}))["result"].clone();
-        let fresh = batch(&mut h, json!({
-            "commands": [{"command": "solid.box", "params": {"length": 5, "width": 5, "height": 5, "corner": [20, 0, 0]}}],
-            "if_document_id": current["document_id"],
-            "if_revision": current["revision"],
-        }));
+        let fresh = batch(
+            &mut h,
+            json!({
+                "commands": [{"command": "solid.box", "params": {"length": 5, "width": 5, "height": 5, "corner": [20, 0, 0]}}],
+                "if_document_id": current["document_id"],
+                "if_revision": current["revision"],
+            }),
+        );
         assert_eq!(fresh["result"]["completed"], 1, "{fresh}");
         assert_eq!(inspect(&mut h)["bodies"].as_array().map(Vec::len), Some(2));
     }
