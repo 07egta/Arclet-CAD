@@ -54,7 +54,8 @@ Arclet CAD $version - Windows x64 portable, unsigned development build
 
 Start: extract the ZIP and double-click arclet.exe.
 Requires 64-bit Windows 10/11 and a working Vulkan, DirectX 12 or OpenGL driver.
-No administrator rights and no installer are required.
+A clean Windows installation may also need the Microsoft Visual C++ Redistributable (x64).
+No installer for Arclet itself is provided; extract the archive to a writable folder.
 NOT a Melt3D or YURACAD installer.
 
 If GPU initialization fails, consult:
