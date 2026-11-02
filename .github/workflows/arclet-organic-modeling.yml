@@ -1,0 +1,36 @@
+name: Arclet Organic Modeling
+
+on:
+  pull_request:
+    paths:
+      - 'crates/geom/src/tspline/**'
+      - 'crates/ui-egui/src/organic_workbench.rs'
+      - 'crates/ui-egui/src/lib.rs'
+      - '.github/workflows/arclet-organic-modeling.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: arclet-organic-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  organic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Geometric refinement, rational controls, numerical regressions
+        run: cargo test --locked -p solidcraft-geom tspline --lib
+      - name: Check geometry crate
+        run: cargo check --locked -p solidcraft-geom
+      - name: Check desktop UI integration
+        run: cargo check --locked -p solidcraft-ui-egui
+      - name: Clippy geometry
+        run: cargo clippy --locked -p solidcraft-geom --lib -- -D warnings
