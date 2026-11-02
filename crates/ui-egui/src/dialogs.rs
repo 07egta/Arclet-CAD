@@ -4371,7 +4371,12 @@ fn dialog_commands(app: &SolveApp, d: &Dialog) -> Result<Vec<(String, Value)>, S
         }
         Kind::Scale { .. } => {
             need(0, "bodies")?;
-            ("solid.scale", json!({"bodies": sels(d, 0).body_names()}))
+            ("solid.scale", {
+                let mut p = json!({"bodies": sels(d, 0).body_names()});
+                if let Some(v) = d.extra.get("factors") { p["factors"] = v.clone(); }
+                if let Some(v) = d.extra.get("origin") { p["origin"] = v.clone(); }
+                p
+            })
         }
         Kind::OffsetFaces { .. } => {
             need(0, "faces")?;
