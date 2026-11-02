@@ -1,25 +1,37 @@
 {
   "en": {
+    "arclet.cmd.hide_history": "Hide history",
+    "arclet.cmd.show_history": "History",
     "arclet.toolbar.more_hint": "Right-click, hold, or press Shift+F10 / Alt+Down for related tools.",
     "arclet.toolbar.unavailable_context": "Unavailable with the current document or selection."
   },
   "ar": {
+    "arclet.cmd.hide_history": "إخفاء السجل",
+    "arclet.cmd.show_history": "السجل",
     "arclet.toolbar.more_hint": "انقر بالزر الأيمن أو اضغط مطولًا أو استخدم Shift+F10 أو Alt+السهم لأسفل لعرض الأدوات المرتبطة.",
     "arclet.toolbar.unavailable_context": "غير متاح مع المستند أو التحديد الحالي."
   },
   "he": {
+    "arclet.cmd.hide_history": "הסתר היסטוריה",
+    "arclet.cmd.show_history": "היסטוריה",
     "arclet.toolbar.more_hint": "לחצו לחיצה ימנית, לחצו לחיצה ארוכה או השתמשו ב־Shift+F10 / Alt+חץ למטה להצגת כלים קשורים.",
     "arclet.toolbar.unavailable_context": "לא זמין במסמך או בבחירה הנוכחיים."
   },
   "ja": {
+    "arclet.cmd.hide_history": "履歴を閉じる",
+    "arclet.cmd.show_history": "履歴",
     "arclet.toolbar.more_hint": "右クリック、長押し、Shift+F10またはAlt+↓で関連ツールを開きます。",
     "arclet.toolbar.unavailable_context": "現在の文書または選択内容では使用できません。"
   },
   "vi": {
+    "arclet.cmd.hide_history": "Ẩn lịch sử",
+    "arclet.cmd.show_history": "Lịch sử",
     "arclet.toolbar.more_hint": "Nhấp chuột phải, nhấn giữ hoặc nhấn Shift+F10 / Alt+Mũi tên xuống để xem công cụ liên quan.",
     "arclet.toolbar.unavailable_context": "Không khả dụng với tài liệu hoặc lựa chọn hiện tại."
   },
   "zh": {
+    "arclet.cmd.hide_history": "隐藏历史",
+    "arclet.cmd.show_history": "历史",
     "arclet.toolbar.more_hint": "右键单击、长按或按 Shift+F10 / Alt+向下箭头以显示相关工具。",
     "arclet.toolbar.unavailable_context": "当前文档或所选对象不支持此操作。"
   }
