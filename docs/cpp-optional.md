@@ -2,9 +2,9 @@
 
 ## Direction (decided by the project owner, 2026-11-02)
 
-- Arclet is a **desktop** application. It does not have to run in the browser, so desktop builds
-  may use C++ libraries freely where they give a real gain. The wasm build keeps the pure-Rust
-  fallback only.
+- Arclet is a **desktop-only** application. A browser (wasm) version is **not wanted**, so C++
+  libraries may be used freely where they give a real gain. Existing wasm build checks inherited
+  from SolidCraft may be left as they are, but are not a goal.
 - Reusing parts of the SolidCraft code base is allowed where it helps (Arclet is built on it).
 - Licence limits still apply until the owner changes them: no GPL/LGPL/AGPL (so no OpenCASCADE),
   and nothing whose licence grant is unclear (so no openNURBS yet). See `docs/cpp-library-survey.md`.
