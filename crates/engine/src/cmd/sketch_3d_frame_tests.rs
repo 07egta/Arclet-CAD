@@ -417,3 +417,65 @@ fn arc3d_pipes_along_the_arc() {
     let quarter = 20.0 * std::f64::consts::FRAC_PI_2;
     assert!((measure.volume - 4.0 * std::f64::consts::PI * quarter).abs() < 0.5, "{}", measure.volume);
 }
+
+
+#[test]
+fn spatial_guide_fit_points_define_reusable_construction_plane() {
+    let mut s = Session::default();
+    let guide = run(&mut s, "sketch.create", json!({"plane":"XY","name":"Spatial guides"}))["sketch"].as_u64().unwrap();
+    run(&mut s, "sketch.options", json!({"sketch_3d":true}));
+    let wire = run(&mut s, "sketch.spline3d", json!({"points":[[0,0,0],[10,0,5],[20,0,10],[20,10,20]]}))["curves"][0]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    run(&mut s, "sketch.point3d", json!({"point":[0,10,5]}));
+    let point_id = s.doc.sketch(guide).unwrap().wires.last().unwrap().id.clone();
+    run(&mut s, "sketch.finish", json!({}));
+    run(&mut s, "construct.plane.three_points", json!({
+        "a":{"sketch":guide,"point":format!("{wire}.start")},
+        "b":{"sketch":guide,"point":format!("{wire}.1")},
+        "c":{"sketch":guide,"point":point_id},
+        "name":"Guide workplane"
+    }));
+    let created = run(&mut s, "sketch.create", json!({"plane":"Guide workplane","name":"Guide profile"}));
+    let profile = created["sketch"].as_u64().unwrap();
+    let verify = |s: &Session, b: Vec3| {
+        let st = s.world_state();
+        let plane = st.sketch(profile).unwrap().plane;
+        near(plane.origin, Vec3::ZERO);
+        assert!(plane.height(b).abs() < 1e-7, "{plane:?} {b:?}");
+        assert!(plane.height(Vec3::new(0.0, 10.0, 5.0)).abs() < 1e-7);
+        assert!((plane.x.len() - 1.0).abs() < 1e-12);
+        assert!((plane.y.len() - 1.0).abs() < 1e-12);
+        assert!(plane.normal().dot(plane.x).abs() < 1e-12);
+    };
+    verify(&s, Vec3::new(10.0, 0.0, 5.0));
+    run(&mut s, "sketch.finish", json!({}));
+    run(&mut s, "sketch.edit", json!({"sketch":guide}));
+    run(&mut s, "sketch.move3d", json!({"wire":wire,"index":1,"by":[0,2,0]}));
+    verify(&s, Vec3::new(10.0, 2.0, 5.0));
+    let restored = Session::new(solidcraft_doc::Document::from_json(&s.doc.to_json()).unwrap());
+    verify(&restored, Vec3::new(10.0, 2.0, 5.0));
+}
+
+#[test]
+fn spatial_guide_invalid_fit_point_reference_is_atomic() {
+    let mut s = Session::default();
+    let guide = run(&mut s, "sketch.create", json!({"plane":"XY","name":"Guide"}))["sketch"].as_u64().unwrap();
+    run(&mut s, "sketch.options", json!({"sketch_3d":true}));
+    let wire = run(&mut s, "sketch.line3d", json!({"points":[[0,0,1],[3,4,5]]}))["curves"][0].as_str().unwrap().to_owned();
+    run(&mut s, "sketch.finish", json!({}));
+    let original = s.doc.to_json();
+    let history = (s.undo.len(), s.redo.len());
+    for invalid in [format!("{wire}.7"), format!("{wire}.through"), wire.clone()] {
+        let result = s.execute("construct.plane.three_points", &json!({
+            "a":{"sketch":guide,"point":invalid},
+            "b":{"point":[0,0,0]},
+            "c":{"point":[0,10,0]},
+            "name":"Invalid plane"
+        }));
+        assert!(result.is_err(), "{invalid}: {result:?}");
+        assert_eq!(s.doc.to_json(), original);
+        assert_eq!((s.undo.len(), s.redo.len()), history);
+    }
+}
