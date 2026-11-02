@@ -151,11 +151,14 @@ impl IncrementalEvaluator {
             }
         }
 
+        // Snapshot cloning may be nontrivial on large graphs. Do it before
+        // the final revision check so an edit during the clone is discarded.
+        let snapshot = graph.clone();
         if obsolete() {
             return Err(GraphError::Cancelled);
         }
-        // Publish atomically: failed work has not mutated the previous snapshot.
-        self.previous = Some(graph.clone());
+        // Publish together: failed work has not mutated the previous cache.
+        self.previous = Some(snapshot);
         self.result = next;
         self.retained_before = retained_before;
         Ok(stats)
