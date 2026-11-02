@@ -27,6 +27,7 @@ mod clipboard;
 mod compare;
 mod component;
 mod component_clone;
+mod component_library;
 mod component_clone_assembly;
 mod construct;
 mod delete;
@@ -308,6 +309,7 @@ pub fn command_specs() -> Vec<&'static CommandSpec> {
     v.extend(frame::COMMANDS.iter());
     v.extend(component::COMMANDS.iter());
     v.extend(component_link::COMMANDS.iter());
+    v.extend(component_library::COMMANDS.iter());
     v.extend(joints::COMMANDS.iter());
     v.extend(clearance::COMMANDS.iter());
     v.extend(motion::COMMANDS.iter());
