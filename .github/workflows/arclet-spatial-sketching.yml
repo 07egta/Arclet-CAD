@@ -5,10 +5,12 @@ on:
     branches: [main]
     paths:
       - 'crates/engine/src/cmd/sketch_3d.rs'
+      - 'crates/engine/src/cmd/construct.rs'
       - 'crates/engine/src/cmd/sketch_3d_frame_tests.rs'
       - 'crates/doc/src/construct.rs'
       - 'crates/sketch/src/wire.rs'
       - 'crates/geom/src/plane.rs'
+      - 'crates/geom/src/tests.rs'
       - '.github/workflows/arclet-spatial-sketching.yml'
 
 permissions:
@@ -28,9 +30,11 @@ jobs:
         with:
           components: rustfmt
       - uses: Swatinem/rust-cache@v2
+      - name: Rust formatting
+        run: cargo fmt --all -- --check
+      - name: Numeric workplane regression
+        run: cargo test --profile ci --locked -p solidcraft-geom --lib spatial_workplane_axes_remain_orthonormal_and_recover_large_world_coordinates
       - name: 3D sketching, references, workplanes, spatial path regressions
         run: |
           cargo test --profile ci --locked -p solidcraft-engine --lib sketch_3d::frame_tests::
           cargo test --profile ci --locked -p solidcraft-sketch --lib wire::tests::
-      - name: Format
-        run: cargo fmt --all -- --check
