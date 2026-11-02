@@ -183,6 +183,8 @@ pub(crate) fn analyze(positions: &[Vec3], triangles: &[[u32; 3]], tolerance: f64
     }
     let non_manifold_vertices = (triangles.len() <= MAX_VERTEX_LINK_TRIANGLES)
         .then(|| count_non_manifold_vertices(&valid_faces));
+    let connected_shells = (triangles.len() <= MAX_VERTEX_LINK_TRIANGLES)
+        .then(|| count_connected_shells(&valid_faces));
     let topology_closed =
         !triangles.is_empty() && degenerate_triangles == 0 && nonfinite_vertices == 0
         && duplicate_faces == 0 && naked_edges == 0 && non_manifold_edges == 0
@@ -212,6 +214,8 @@ pub(crate) fn analyze(positions: &[Vec3], triangles: &[[u32; 3]], tolerance: f64
         "non_manifold_edges": non_manifold_edges,
         "non_manifold_vertices": non_manifold_vertices,
         "vertex_manifold_complete": non_manifold_vertices.is_some(),
+        "connected_shells": connected_shells,
+        "shell_nesting_checked": false,
         "winding_conflicts": winding_conflicts,
         "boundary_loops": boundary_loops(&incidence, unique),
         "topologically_closed": topology_closed,
@@ -221,6 +225,36 @@ pub(crate) fn analyze(positions: &[Vec3], triangles: &[[u32; 3]], tolerance: f64
         "surface_area_mm2": area_mm2.is_finite().then_some(area_mm2),
         "closed": closed,
     })
+}
+
+/// Connected components by triangle vertices, after optional welding. Distinct
+/// nested surfaces (a hollow sealed case) remain distinct shells. Their relative
+/// containment/orientation is not proved just by a positive total signed volume.
+fn count_connected_shells(triangles: &[[usize; 3]]) -> usize {
+    let mut id: HashMap<usize, usize> = HashMap::new();
+    let mut parents = Vec::new();
+    for tri in triangles {
+        let mut ids = [0usize; 3];
+        for (slot, vertex) in ids.iter_mut().zip(tri) {
+            *slot = *id.entry(*vertex).or_insert_with(|| {
+                let n = parents.len();
+                parents.push(n);
+                n
+            });
+        }
+        for &vertex in ids.iter().skip(1) {
+            let a = root(&mut parents, ids[0]);
+            let b = root(&mut parents, vertex);
+            if let Some(parent) = parents.get_mut(b) {
+                *parent = a;
+            }
+        }
+    }
+    let mut representatives = HashSet::new();
+    for i in 0..parents.len() {
+        representatives.insert(root(&mut parents, i));
+    }
+    representatives.len()
 }
 
 /// The link of every vertex in an orientable closed triangle surface is one
