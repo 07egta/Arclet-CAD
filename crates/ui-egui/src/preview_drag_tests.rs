@@ -149,7 +149,8 @@ fn distance_results_reject_other_setups_and_obsolete_errors() {
     let mut join = current.clone();
     join[0].1["operation"] = json!("join");
     assert!(as_new_body(&join).is_some());
-    assert!(stream_key(&join, s.revision, colors()).is_none(), "tool previews retain their upstream streaming path");
+    assert!(stream_key(&join, s.revision, colors()).is_some(), "join tools stream only when their context is unchanged");
+    assert_ne!(stream_key(&join, s.revision, colors()), stream_key(&current, s.revision, colors()));
 }
 
 /// A fillet's radius dragged (or typed): each finished preview shows while the next radius
