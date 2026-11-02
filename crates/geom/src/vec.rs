@@ -107,7 +107,15 @@ impl Vec3 {
         Vec3::new(self.y * o.z - self.z * o.y, self.z * o.x - self.x * o.z, self.x * o.y - self.y * o.x)
     }
     pub fn len(self) -> f64 {
-        self.len2().sqrt()
+        // Squaring a finite coordinate can overflow (1e200) or underflow
+        // (1e-200), even when the true Euclidean norm is representable.
+        // Preserve the inexpensive original path for normal CAD magnitudes.
+        let squared = self.len2();
+        if squared.is_finite() && squared >= f64::MIN_POSITIVE {
+            squared.sqrt()
+        } else {
+            self.x.hypot(self.y).hypot(self.z)
+        }
     }
     pub fn len2(self) -> f64 {
         self.dot(self)

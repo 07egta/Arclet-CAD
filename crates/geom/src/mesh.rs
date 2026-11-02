@@ -39,7 +39,25 @@ impl Aabb3 {
         Aabb3 { min: self.min.min(o.min), max: self.max.max(o.max) }
     }
     pub fn center(&self) -> Vec3 {
-        if self.is_empty() { Vec3::ZERO } else { (self.min + self.max) * 0.5 }
+        if self.is_empty() {
+            Vec3::ZERO
+        } else {
+            let midpoint = |low: f64, high: f64| {
+                if low.is_sign_negative() != high.is_sign_negative() {
+                    // Opposite signs cannot overflow on addition. Sum first so
+                    // near-cancelling endpoints retain their low-order bits.
+                    (low + high) * 0.5
+                } else {
+                    // Same signs can overflow when added, but their difference is finite.
+                    low + (high - low) * 0.5
+                }
+            };
+            Vec3::new(
+                midpoint(self.min.x, self.max.x),
+                midpoint(self.min.y, self.max.y),
+                midpoint(self.min.z, self.max.z),
+            )
+        }
     }
     pub fn size(&self) -> Vec3 {
         if self.is_empty() { Vec3::ZERO } else { self.max - self.min }
@@ -576,17 +594,30 @@ impl Mesh {
     }
 
     /// Signed volume (divergence theorem), surface area and volume centroid.
+    ///
+    /// Compute tetrahedra relative to a finite mesh vertex rather than the global
+    /// origin. The closed-mesh signed-volume integral is invariant under this
+    /// translation. The naive a dot (b cross c) loses most of its significant bits
+    /// when a small CAD object sits far from (0,0,0).
     pub fn measure(&self) -> MeshMeasure {
+        let origin = self
+            .triangles
+            .iter()
+            .filter_map(|t| self.tri(t))
+            .find(|tri| tri.iter().all(|p| p.is_finite()))
+            .map(|tri| tri[0])
+            .unwrap_or(Vec3::ZERO);
         let (mut v6, mut area, mut c) = (0.0, 0.0, Vec3::ZERO);
         for t in &self.triangles {
             let Some([a, b, cc]) = self.tri(t) else { continue };
+            let (a, b, cc) = (a - origin, b - origin, cc - origin);
             let d = a.dot(b.cross(cc));
             v6 += d;
             c += (a + b + cc) * d;
             area += (b - a).cross(cc - a).len() * 0.5;
         }
         let volume = v6 / 6.0;
-        let centroid = if v6.abs() > 1e-12 { c / (4.0 * v6) } else { self.bounds().center() };
+        let centroid = if v6.abs() > 1e-12 { origin + c / (4.0 * v6) } else { self.bounds().center() };
         MeshMeasure { volume, area, centroid }
     }
 
