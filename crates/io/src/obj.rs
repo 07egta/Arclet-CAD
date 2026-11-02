@@ -15,10 +15,13 @@ const MAX_TRIANGLES: usize = 20_000_000;
 /// represent large surfaces as multiple polygons; a single 65K-gon is rarely intentional.
 const MAX_FACE_VERTICES: usize = 65_536;
 
+/// Largest OBJ file accepted, in bytes. Kept separate from the 3MF limit so each format can change alone.
+const MAX_OBJ_BYTES: usize = 512 << 20;
+
 /// Meshes of an OBJ file and what could not be read.
 pub fn read_obj(bytes: &[u8], default_name: &str) -> Result<(Vec<MeshObject>, Vec<String>)> {
-    if bytes.len() > crate::MAX_3MF_BYTES {
-        return Err(IoError::Invalid(format!("OBJ exceeds {} bytes", crate::MAX_3MF_BYTES)));
+    if bytes.len() > MAX_OBJ_BYTES {
+        return Err(IoError::Invalid(format!("OBJ exceeds {MAX_OBJ_BYTES} bytes")));
     }
     let text = String::from_utf8_lossy(bytes);
     let mut verts: Vec<Vec3> = Vec::new();
