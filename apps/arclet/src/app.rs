@@ -899,6 +899,20 @@ mod tests {
             self.click_at(at);
         }
 
+        fn secondary_click_at(&mut self, at: egui::Pos2) {
+            for pressed in [true, false] {
+                self.frame(vec![
+                    egui::Event::PointerMoved(at),
+                    egui::Event::PointerButton {
+                        pos: at,
+                        button: egui::PointerButton::Secondary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ]);
+            }
+        }
+
         fn click_button(&mut self, label: &str) {
             let at = self.output.accesskit_update.as_ref().and_then(|tree| {
                 tree.nodes.iter().rev().find_map(|(_, node)| {
@@ -964,6 +978,29 @@ mod tests {
                 assert!(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(1440.0, 900.0)).contains(at), "{name}: {at:?}");
             }
         }
+    }
+
+    #[test]
+    fn tool_flyout_is_a_real_popup_and_escape_dismisses_it_without_running_a_command() {
+        let mut frames = AppFrames::new();
+        frames.idle(2);
+        let line_tool = scenario::handle_at("arclet:tool:sketch.line").expect("main toolbar line tool is visible");
+        let revision = frames.app.cad.session.revision;
+        frames.secondary_click_at(line_tool);
+        frames.idle(2);
+        assert!(
+            frames.button_below_header(tr("arclet.toolbar.midline")),
+            "right-click must reveal the midpoint line in the real flyout"
+        );
+        assert_eq!(frames.app.cad.session.revision, revision, "opening a flyout is not a model edit");
+
+        frames.press_escape();
+        frames.idle(2);
+        assert!(
+            !frames.button_below_header(tr("arclet.toolbar.midline")),
+            "Escape must close the flyout without leaving a clickable stale menu"
+        );
+        assert_eq!(frames.app.cad.session.revision, revision);
     }
 
     #[test]

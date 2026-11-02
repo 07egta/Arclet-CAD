@@ -615,7 +615,7 @@ pub fn export(name: &str, base: Base, t: &Tokens) -> Value {
 }
 
 /// The theme files that come with SolidCraft (original files; Gruvbox, Tokyo Night, Solarized, Nord, Nosferatu and Catppuccin map open-source palettes, MIT; Okibi and Akari map the Okibi design system; Clay and Clay Dark are original warm paper and charcoal palettes; CGA keeps to the 16 colours of the IBM Color Graphics Adapter; 1-bit and 1-bit Dark are original black-and-white palettes).
-const BUILTIN: [(&str, &str); 28] = [
+const BUILTIN: [(&str, &str); 29] = [
     ("gruvbox-dark", include_str!("../../../assets/styles/ui/themes/gruvbox-dark.json")),
     ("gruvbox-dark-hard", include_str!("../../../assets/styles/ui/themes/gruvbox-dark-hard.json")),
     ("gruvbox-dark-soft", include_str!("../../../assets/styles/ui/themes/gruvbox-dark-soft.json")),
@@ -643,6 +643,7 @@ const BUILTIN: [(&str, &str); 28] = [
     ("clay", include_str!("../../../assets/styles/ui/themes/clay.json")),
     ("clay-dark", include_str!("../../../assets/styles/ui/themes/clay-dark.json")),
     ("cga", include_str!("../../../assets/styles/ui/themes/cga.json")),
+    ("arclet-industrial", include_str!("../../../assets/styles/ui/themes/arclet-industrial.json")),
     ("classic", include_str!("../../../assets/styles/ui/themes/classic.json")),
 ];
 
