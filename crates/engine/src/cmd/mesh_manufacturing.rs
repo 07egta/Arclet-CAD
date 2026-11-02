@@ -377,6 +377,89 @@ mod tests {
         (positions, triangles)
     }
 
+    /// A cylindrical through-hole plate, built directly as correctly
+    /// oriented surface triangles rather than trusting a boolean result.
+    /// This also exercises a multiply connected manifold cross-section.
+    fn annular_plate(outer: f64, inner: f64, height: f64, segments: u32) -> (Vec<Vec3>, Vec<[u32; 3]>) {
+        let mut positions = Vec::new();
+        for (radius, z) in [(outer, 0.0), (outer, height), (inner, 0.0), (inner, height)] {
+            for i in 0..segments {
+                let angle = std::f64::consts::TAU * f64::from(i) / f64::from(segments);
+                positions.push(Vec3::new(radius * angle.cos(), radius * angle.sin(), z));
+            }
+        }
+        let mut triangles = Vec::new();
+        for i in 0..segments {
+            let j = (i + 1) % segments;
+            let (ob, on) = (i, j);
+            let (ot, tn) = (i + segments, j + segments);
+            let (ib, bn) = (i + 2 * segments, j + 2 * segments);
+            let (it, itn) = (i + 3 * segments, j + 3 * segments);
+            triangles.extend([
+                [ob, on, tn], [ob, tn, ot], // outside +radial
+                [ib, itn, bn], [ib, it, itn], // bore -radial
+                [ot, tn, itn], [ot, itn, it], // annular top +Z
+                [ob, ib, bn], [ob, bn, on], // annular bottom -Z
+            ]);
+        }
+        (positions, triangles)
+    }
+
+    /// Cap a simple cylinder at both ends with outward winding.
+    fn cylinder(radius: f64, height: f64, segments: u32) -> (Vec<Vec3>, Vec<[u32; 3]>) {
+        let mut positions = Vec::new();
+        for z in [0.0, height] {
+            for i in 0..segments {
+                let angle = std::f64::consts::TAU * f64::from(i) / f64::from(segments);
+                positions.push(Vec3::new(radius * angle.cos(), radius * angle.sin(), z));
+            }
+        }
+        let bottom = positions.len() as u32;
+        positions.push(Vec3::new(0.0, 0.0, 0.0));
+        let top = positions.len() as u32;
+        positions.push(Vec3::new(0.0, 0.0, height));
+        let mut triangles = Vec::new();
+        for i in 0..segments {
+            let j = (i + 1) % segments;
+            triangles.extend([
+                [i, j, j + segments], [i, j + segments, i + segments],
+                [bottom, j, i], [top, i + segments, j + segments],
+            ]);
+        }
+        (positions, triangles)
+    }
+
+    #[test]
+    fn circular_through_hole_plate_keeps_closed_bore_and_expected_volume() {
+        let (positions, triangles) = annular_plate(10.0, 3.0, 4.0, 96);
+        let topology = super::super::analyze(&positions, &triangles, 0.0);
+        assert_eq!(topology["closed"], true, "{topology}");
+        assert_eq!(topology["naked_edges"], 0);
+        assert_eq!(topology["non_manifold_edges"], 0);
+        let expected = std::f64::consts::PI * (10.0f64.powi(2) - 3.0f64.powi(2)) * 4.0;
+        let measured = topology["signed_volume_mm3"].as_f64().unwrap();
+        assert!((measured - expected).abs() / expected < 0.001, "{topology}");
+        let intersections = intersection_screen(&positions, &triangles, 1e-9);
+        assert_eq!(intersections["potential_pairs"], 0, "{intersections}");
+        assert_eq!(intersections["complete"], true, "{intersections}");
+        let beds: Aabb3 = positions.iter().copied().collect();
+        let layout = overhang_screen(&positions, &triangles, beds, 45.0);
+        let contact = layout["horizontal_bed_contact_area_mm2"].as_f64().unwrap_or(0.0);
+        assert!((contact - std::f64::consts::PI * 91.0).abs() < 0.3, "{layout}");
+    }
+
+    #[test]
+    fn closed_cylinder_volume_and_normal_diagnostics_have_analytic_reference() {
+        let (positions, triangles) = cylinder(5.0, 20.0, 96);
+        let topology = super::super::analyze(&positions, &triangles, 0.0);
+        assert_eq!(topology["closed"], true, "{topology}");
+        let expected = std::f64::consts::PI * 25.0 * 20.0;
+        let measured = topology["signed_volume_mm3"].as_f64().unwrap();
+        assert!((measured - expected).abs() / expected < 0.001, "{topology}");
+        let intersections = intersection_screen(&positions, &triangles, 1e-9);
+        assert_eq!(intersections["potential_pairs"], 0, "{intersections}");
+    }
+
     #[test]
     fn cube_preflight_has_analytic_20mm_bounds_and_bed_contact() {
         let (positions, triangles) = box_mesh(20.0, 20.0, 20.0);
