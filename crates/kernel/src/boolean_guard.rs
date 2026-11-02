@@ -194,9 +194,7 @@ pub(crate) fn check_retry(a: &Body, b: &Body, op: BoolOp, result: Option<&Body>)
             return Err(bad(op, "part of the target lies outside the tool".into()));
         }
         let step = ma.triangles.len().div_ceil(MAX_SAMPLES).max(1);
-        if ma.triangles.iter().step_by(step).any(|tri| {
-            ma.tri(tri).is_none_or(|[p, q, r]| !covered((p + q + r) / 3.0))
-        }) {
+        if ma.triangles.iter().step_by(step).any(|tri| ma.tri(tri).is_none_or(|[p, q, r]| !covered((p + q + r) / 3.0))) {
             return Err(bad(op, "part of the target lies outside the tool".into()));
         }
         return Ok(());
