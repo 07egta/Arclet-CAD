@@ -1,0 +1,38 @@
+name: Arclet four-viewports
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/arclet-four-viewports.yml"
+      - "apps/arclet/src/app.rs"
+      - "crates/ui-egui/src/four_viewports.rs"
+      - "crates/ui-egui/src/lib.rs"
+      - "crates/ui-egui/src/viewport.rs"
+      - "docs/arclet-four-viewports-implementation.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: arclet-four-viewports-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  four-viewport-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Rust formatting
+        run: cargo fmt --all -- --check
+      - name: Viewport camera and cache tests
+        run: cargo test --locked -p solidcraft-ui-egui --lib four_viewports
+      - name: Arclet integration tests
+        run: cargo test --locked -p arclet --bin arclet
+      - name: Arclet native build
+        run: cargo build --locked -p arclet
