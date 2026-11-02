@@ -57,8 +57,8 @@ jobs:
         # The test never needs a physical GPU and checks pixel-version reuse, geometry
         # invalidation, and opacity invalidation.
         run: cargo test --release --locked -p solidcraft-gpu --lib reference_image_quad_buffers_have_exact_geometry_keys
-      - name: Verify allocation-free instanced LOD choice
-        run: cargo test --release --locked -p solidcraft-gpu --lib streaming_lod_uses_identical_levels_without_temporary_allocations
+      - name: Verify instanced LOD choice matches the slice search
+        run: cargo test --release --locked -p solidcraft-gpu --lib streaming_lod_uses_identical_levels_to_slice_search
       - name: Upload per-scene metrics
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4

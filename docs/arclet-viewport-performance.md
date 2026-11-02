@@ -51,7 +51,6 @@ The comparison script rejects mismatched adapters, policies, sizes, sample count
 | Linux native headless | Vulkan and GL | Mesa Vulkan software GPU **measured**; hardware driver not measured |
 | macOS native headless | Metal | Declared in code; not measured |
 | Arclet desktop (`apps/arclet/src/main.rs`) | eframe + wgpu with usual native backend selection and `WGPU_BACKEND` override | OS window startup, presentation and device-loss recovery **not measured** |
-| Arclet browser | WebGPU by default; explicit `?webgl` requests GL/WebGL2 | Paths configured; neither browser backend was measured |
 
 `select::Policy::Auto` ranks discrete before integrated GPUs and before CPU devices; thus an Intel iGPU is preferred to Mesa software when both are available. Driver/device initialization failure and automatic failover on real Intel hardware require separate testing. `WGPU_BACKEND` allows an explicit backend override; using that is not equivalent to proven automatic fallback.
 
@@ -61,4 +60,4 @@ The comparison script rejects mismatched adapters, policies, sizes, sample count
 - Repeated matched image-rich and instancing-heavy scenes to substantiate optimization speedups.
 - Hardware GPU measurements on an actual Intel integrated-GPU machine, Vulkan vs DX12 under the same project and driver.
 - VRAM allocations, real large B-rep/model retessellation, and emergency recovery from device loss.
-- Full `cargo xtask ci`, desktop input/visual checks and WebGPU/WebGL2 regression tests. Do not mark these complete merely because an offscreen software Vulkan probe passes.
+- Full `cargo xtask ci` and desktop input/visual checks. Do not mark these complete merely because an offscreen software Vulkan probe passes.

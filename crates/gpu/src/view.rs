@@ -1248,7 +1248,8 @@ pub fn level_for(errors: &[f32], scale: f32) -> usize {
 }
 
 /// Pick a level directly from the renderer's resident level metadata. Camera interaction
-/// must not allocate a temporary Vec of errors for every instanced object on every frame.
+/// takes the errors from an iterator instead of collecting a temporary Vec for every instanced
+/// object on every frame.
 fn level_for_iter(errors: impl DoubleEndedIterator<Item = f32> + ExactSizeIterator, scale: f32) -> usize {
     errors.enumerate().rfind(|(_, error)| *error * scale <= LOD_PX).map_or(0, |(index, _)| index)
 }
@@ -4310,10 +4311,11 @@ mod tests {
         assert_eq!(samples_sent(1000), 32.0, "at most the shader's 32");
     }
 
-    /// The streaming LOD chooser is allocation-free and gives the same answers as the
+    /// The streaming LOD chooser (iterator, no collected Vec) gives the same answers as the
     /// original slice-based search, including offscreen/infinite projection scales.
+    /// It checks equal output only; it does not count heap allocations.
     #[test]
-    fn streaming_lod_uses_identical_levels_without_temporary_allocations() {
+    fn streaming_lod_uses_identical_levels_to_slice_search() {
         let levels = [0.0, 0.04, 0.2, 2.0];
         for scale in [0.0, 0.5, 3.0, 12.0, 1e10, f32::INFINITY, f32::NAN] {
             let old = levels.iter().rposition(|error| *error * scale <= super::LOD_PX).unwrap_or(0);

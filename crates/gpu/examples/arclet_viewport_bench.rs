@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use solidcraft_gpu::select::{Policy, Tier};
-use solidcraft_gpu::view::{AO_SAMPLES, Frame, GpuScene, GpuTarget, Renderer};
+use solidcraft_gpu::view::{Frame, GpuScene, GpuTarget, Renderer, AO_SAMPLES};
 
 const WIDTH: u32 = 640;
 const HEIGHT: u32 = 360;
@@ -47,12 +47,7 @@ fn frame(scene: GpuScene) -> Frame {
         pv_key: 0,
         pv_slot: empty(),
         pv_hide: false,
-        view_proj: [
-            [0.1, 0.0, 0.0, 0.0],
-            [0.0, 0.1, 0.0, 0.0],
-            [0.0, 0.0, -0.01, 0.0],
-            [0.0, 0.0, 0.5, 1.0],
-        ],
+        view_proj: [[0.1, 0.0, 0.0, 0.0], [0.0, 0.1, 0.0, 0.0], [0.0, 0.0, -0.01, 0.0], [0.0, 0.0, 0.5, 1.0]],
         back: [0.0, 0.0, 1.0],
         size_px: [WIDTH as f32, HEIGHT as f32],
         clip: [0.0; 4],
@@ -96,7 +91,9 @@ fn draw(
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: depth_view,
                     depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(solidcraft_gpu::view::far_depth(solidcraft_gpu::view::reversed_depth(Some(wgpu::TextureFormat::Depth32Float)))),
+                        load: wgpu::LoadOp::Clear(solidcraft_gpu::view::far_depth(solidcraft_gpu::view::reversed_depth(Some(
+                            wgpu::TextureFormat::Depth32Float,
+                        )))),
                         store: wgpu::StoreOp::Store,
                     }),
                     stencil_ops: None,
@@ -172,11 +169,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let pipeline_begin = Instant::now();
     let depth = wgpu::TextureFormat::Depth32Float;
     let format = wgpu::TextureFormat::Rgba8Unorm;
-    let mut renderer = Renderer::new(
-        &device,
-        GpuTarget { format, depth: Some(depth), samples: 1, tess: false, oit: false },
-        None,
-    );
+    let mut renderer = Renderer::new(&device, GpuTarget { format, depth: Some(depth), samples: 1, tess: false, oit: false }, None);
     let pipeline_create_ms = pipeline_begin.elapsed().as_secs_f64() * 1e3;
 
     let color = texture(&device, format, wgpu::TextureUsages::RENDER_ATTACHMENT);
