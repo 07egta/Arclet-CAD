@@ -120,7 +120,7 @@ impl FourViewports {
             app.ui.perspective = perspective;
         }
         app.viewport.background_image = None;
-        app.viewport.orbit_allowed = true;
+        app.viewport.orbit_locked = false;
         self.drag_owner = None;
         self.initialized = false;
     }
@@ -232,7 +232,7 @@ impl FourViewports {
         let perspective = std::mem::replace(&mut app.ui.perspective, i == 3);
         let auto = std::mem::replace(&mut app.ui.auto_ortho_faces, false);
         app.cam.fov = if i == 3 { 0.6 } else { 0.0 };
-        app.viewport.orbit_allowed = i == 3;
+        app.viewport.orbit_locked = i != 3;
         app.viewport.background_image = if app.viewport.gpu.is_none() { self.preview(app, ui, i, rect) } else { None };
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect).id_salt(("arclet_viewport", i)));
         viewport::show(app, &mut child);
