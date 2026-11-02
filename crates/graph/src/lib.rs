@@ -13,9 +13,15 @@ use solidcraft_slice::{PrintConfig, Sliced, Tri};
 
 mod components;
 mod format;
+mod incremental;
+mod typing;
+mod workspace;
 
 pub use components::{COMPONENTS, Component, Input, component};
 pub use format::{MAX_DOCUMENT_BYTES, MAX_TEXT_BYTES};
+pub use incremental::{IncrementalEvaluator, IncrementalStats};
+pub use typing::{DataType, TypeIssue, input_type, output_type};
+pub use workspace::{GraphWorkspace, MAX_WORKSPACE_BYTES, ModelOutputLink, NodeGroup, NodeViewState};
 
 /// Most nodes in one graph.
 pub const MAX_NODES: usize = 2_000;
