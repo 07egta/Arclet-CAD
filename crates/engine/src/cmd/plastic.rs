@@ -463,7 +463,7 @@ mod tests {
         for (key, value) in [
             ("fillet", json!(-1)),
             ("draft", json!("60 deg")),
-            ("hole_depth", json!(13)),
+            ("hole_depth", json!(-1)),
             ("ribs", json!(2.5)),
             ("rib_offset", json!(-1)),
         ] {
@@ -521,6 +521,17 @@ mod tests {
         let want = 10800.0 + PI * 25.0 * 12.0 - PI * 4.0 * 12.0;
         assert!(rel(volume(&mut s), want) < 1e-3, "{} {want}", volume(&mut s));
         assert_eq!(run(&mut s, "inspect.measure", json!({}))["body_count"], 1);
+        // Deep pilot holes legitimately extend through the boss into its parent
+        // plate: preserve this established construction instead of rejecting
+        // every hole depth greater than the post height.
+        let mut deep = Session::default();
+        run(&mut deep, "solid.box", json!({"length":60, "width":60, "height":3, "body_name":"Plate"}));
+        run(&mut deep, "plastic.boss", json!({
+            "position":[30,30,3], "diameter":10, "height":12,
+            "hole_diameter":4, "hole_depth":13
+        }));
+        let expected = 10800.0 + PI * 25.0 * 12.0 - PI * 4.0 * 13.0;
+        assert!(rel(volume(&mut deep), expected) < 1e-3, "{} {expected}", volume(&mut deep));
         // Ribs add t·l·h each.
         let mut t = Session::default();
         run(&mut t, "solid.box", json!({"length": 60, "width": 60, "height": 3}));
