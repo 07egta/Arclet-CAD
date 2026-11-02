@@ -98,9 +98,9 @@ jobs:
           PY
           # Review sheet contains only genuine captured pixels and the original
           # repository reference. Full-resolution PNGs remain alongside it.
-          montage "$output/reference-existing.png" "$output"/after-*.png \
-            -set label '%f' -label '%f' -geometry 560x380+12+24 \
-            -tile 3x2 -background '#e8eaed' "$output/review-contact-sheet.png"
+          montage -label '%f' "$output/reference-existing.png" "$output"/after-*.png \
+            -geometry 560x380+12+24 -tile 3x2 -background '#e8eaed' \
+            "$output/review-contact-sheet.png"
           test -s "$output/review-contact-sheet.png"
       - name: Preserve captures and logs even when capture fails
         if: ${{ always() }}
