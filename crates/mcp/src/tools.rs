@@ -431,6 +431,26 @@ fn text_result(v: &Value, is_error: bool) -> Value {
     r
 }
 
+/// Errors keep the older plain text content for MCP clients from every supported
+/// revision, and additionally expose a stable machine-readable category.
+fn error_result(message: String) -> Value {
+    let (code, next_action) = if message.starts_with(STILL_RUNNING) {
+        ("still_running", "pending")
+    } else if message.starts_with(crate::backend::NOT_RUNNING) {
+        ("backend_unavailable", "start_desktop_app")
+    } else if message.starts_with("unknown command") {
+        ("unknown_command", "list_commands")
+    } else {
+        ("execution_failed", "inspect_error")
+    };
+    let mut out = text_result(&Value::String(message.clone()), true);
+    out["structuredContent"] = json!({
+        "ok": false,
+        "error": {"code": code, "message": message, "next_action": next_action}
+    });
+    out
+}
+
 /// Run a tool. Failures are tool results with `isError: true` (the model sees the message);
 /// nothing here panics on hostile arguments.
 pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> Value {
@@ -443,7 +463,7 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> Value {
     };
     match r {
         Ok(v) => text_result(&v, false),
-        Err(e) => text_result(&Value::String(e), true),
+        Err(e) => error_result(e),
     }
 }
 
@@ -1189,7 +1209,7 @@ fn screenshot(b: &mut dyn Backend, a: &Map<String, Value>) -> Value {
             {"type": "image", "data": base64(&png), "mimeType": "image/png"},
             {"type": "text", "text": info.to_string()},
         ]}),
-        Err(e) => text_result(&Value::String(e), true),
+        Err(e) => error_result(e),
     }
 }
 
