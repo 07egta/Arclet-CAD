@@ -40,5 +40,13 @@ jobs:
         run: cargo test --profile ci --locked -p solidcraft-engine --lib the_flat_pattern_is_on_layers_by_role_and_inner_contours_come_first
       - name: Existing sheet metal solid and neutral-axis reference
         run: cargo test --profile ci --locked -p solidcraft-doc --lib edge_flange_matches_fusion
+      - name: Existing multi-bend flange and edited sketch test
+        run: cargo test --profile ci --locked -p solidcraft-engine --lib an_edge_flange_can_carry_further_bends
+      - name: Existing U-channel conversion and fold-back
+        run: cargo test --profile ci --locked -p solidcraft-engine --lib a_channel_with_its_bends_modelled_folds_back_into_itself_under_its_own_radius
+      - name: Existing notched cutting geometry and flat DXF
+        run: cargo test --profile ci --locked -p solidcraft-engine --lib edge_notch_uses_the_same_material_boundary_in_solid_flat_and_dxf
+      - name: Existing box corner relief across folded and DXF
+        run: cargo test --profile ci --locked -p solidcraft-engine --lib corner_reliefs_of_the_rule_reach_the_part_the_flat_pattern_and_the_dxf
       - name: Clippy for document and engine
         run: cargo clippy --profile ci --locked -p solidcraft-doc -p solidcraft-engine --lib -- -D warnings
