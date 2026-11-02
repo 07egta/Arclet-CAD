@@ -1,0 +1,38 @@
+name: Arclet precision interaction regressions
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'crates/ui-egui/src/quad_view.rs'
+      - 'crates/ui-egui/src/lib.rs'
+      - 'crates/ui-egui/src/viewport.rs'
+      - 'crates/ui-egui/src/gpu.rs'
+      - 'crates/ui-egui/src/viewport_layout_tests.rs'
+      - '.github/workflows/arclet-precision-interaction.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: precision-interaction-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  precision-interaction:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Compile UI and camera/picking tests
+        run: |
+          cargo test --locked -p solidcraft-ui-egui --lib precision_quad --no-default-features
+      - name: Existing viewport navigation regression
+        run: cargo test --locked -p solidcraft-ui-egui --lib viewport_layout_tests:: --no-default-features
+      - name: Rust formatting
+        run: cargo fmt --all -- --check
