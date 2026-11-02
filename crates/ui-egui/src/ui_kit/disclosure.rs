@@ -17,7 +17,7 @@ pub(crate) fn disclosure_button_at(ui: &mut Ui, rect: Rect, open: bool, label: &
 }
 
 /// Panel fold action with the browser's shared blue hover tint.
-pub(crate) fn panel_disclosure_button_at(ui: &mut Ui, rect: Rect, open: bool, label: &str) -> Response {
+pub fn panel_disclosure_button_at(ui: &mut Ui, rect: Rect, open: bool, label: &str) -> Response {
     disclosure_button_with_hover(ui, rect, open, label, true)
 }
 

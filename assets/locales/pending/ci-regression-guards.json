@@ -1,0 +1,32 @@
+{
+  "en": {
+    "cmd.mesh_check": "Check Mesh",
+    "help.inspect.curve_continuity": "Compares where two sketch curves meet for position, tangency, and curvature continuity. Use it to inspect a joint before repairing or rebuilding the curves.",
+    "help.sketch.spline.rebuild": "Fits a new editable spline to the selected curve while preserving the source. Use it to change control-point count or degree before refining the shape."
+  },
+  "ar": {
+    "cmd.mesh_check": "فحص الشبكة",
+    "help.inspect.curve_continuity": "يفحص استمرارية الموضع والمماس والانحناء عند التقاء منحنيين في الرسم التخطيطي. استخدمه لفحص الوصلة قبل إصلاح المنحنيات أو إعادة بنائها.",
+    "help.sketch.spline.rebuild": "ينشئ منحنى سبلاين جديدًا قابلًا للتحرير بتقريب المنحنى المحدد مع الحفاظ على الأصل. استخدمه لتغيير الدرجة أو عدد نقاط التحكم قبل ضبط الشكل."
+  },
+  "he": {
+    "cmd.mesh_check": "בדיקת רשת",
+    "help.inspect.curve_continuity": "בודק רציפות מיקום, משיק ועקמומיות בנקודת המפגש של שתי עקומות בסקיצה. השתמשו בו לבדיקת החיבור לפני תיקון או בנייה מחדש של העקומות.",
+    "help.sketch.spline.rebuild": "יוצר עקומת ספליין חדשה וניתנת לעריכה בהתאמה לעקומה שנבחרה, תוך שימור המקור. השתמשו בו לשינוי הדרגה או מספר נקודות הבקרה לפני עידון הצורה."
+  },
+  "ja": {
+    "cmd.mesh_check": "メッシュを検査",
+    "help.inspect.curve_continuity": "2本のスケッチ曲線の接続部で、位置・接線・曲率の連続性を調べます。曲線を修正・再構築する前に接続状態を確認するときに使います。",
+    "help.sketch.spline.rebuild": "選択した曲線を基に、元の曲線を残したまま編集可能なスプラインを新規作成します。制御点の数や次数を変えて形を整えるときに使います。"
+  },
+  "vi": {
+    "cmd.mesh_check": "Kiểm tra lưới",
+    "help.inspect.curve_continuity": "Kiểm tra tính liên tục về vị trí, tiếp tuyến và độ cong tại chỗ nối của hai đường cong phác thảo. Dùng để đánh giá mối nối trước khi sửa hoặc dựng lại đường cong.",
+    "help.sketch.spline.rebuild": "Khớp một đường spline mới có thể chỉnh sửa từ đường cong đã chọn và giữ nguyên đường cong gốc. Dùng để thay đổi bậc hoặc số điểm điều khiển trước khi tinh chỉnh hình dạng."
+  },
+  "zh": {
+    "cmd.mesh_check": "检查网格",
+    "help.inspect.curve_continuity": "检查两条草图曲线连接处的位置、切线和曲率连续性。可在修复或重建曲线前检查接头。",
+    "help.sketch.spline.rebuild": "在保留原始曲线的同时，根据所选曲线拟合新的可编辑样条曲线。可在细化形状前调整控制点数量或次数。"
+  }
+}

@@ -105,7 +105,8 @@ impl PanelState {
         if !self.open {
             // The thin edge button: the only thing drawn while the panel is folded away.
             ui.vertical_centered(|ui| {
-                if ui_kit::button(ui, "‹", Button::Small).on_hover_text(tr("arclet.panel.expand")).clicked() {
+                let (rect, _) = ui.allocate_exact_size(vec2(Tokens::get().control_height, Tokens::get().control_height), Sense::hover());
+                if ui_kit::panel_disclosure_button_at(ui, rect, false, tr("arclet.panel.expand")).clicked() {
                     self.open = true;
                 }
             });
@@ -135,7 +136,8 @@ impl PanelState {
             Tab::Display => self.display(cad, ui),
         });
         ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-            if ui_kit::button(ui, "›", Button::Small).on_hover_text(tr("arclet.panel.collapse")).clicked() {
+            let (rect, _) = ui.allocate_exact_size(vec2(Tokens::get().control_height, Tokens::get().control_height), Sense::hover());
+            if ui_kit::panel_disclosure_button_at(ui, rect, true, tr("arclet.panel.collapse")).clicked() {
                 self.open = false;
             }
         });
@@ -197,18 +199,19 @@ impl PanelState {
         let target = group_target(&groups, self.chosen_group, &bodies);
 
         ui.horizontal_wrapped(|ui| {
-            if ui_kit::button(ui, tr("arclet.panel.group_new"), if bodies.is_empty() { Button::Enabled(false) } else { Button::Primary }).clicked()
+            if ui_kit::button(ui, tr("arclet.panel.group_new"), if bodies.is_empty() { ui_kit::Button::Enabled(false) } else { Button::Primary })
+                .clicked()
                 && let Some(made) = self.exec(cad, "browser.group", json!({ "folder": "bodies", "component": 0, "items": bodies }))
             {
                 self.chosen_group = made.get("group").and_then(Value::as_u64);
             }
-            if ui_kit::button(ui, tr("arclet.panel.group_rename"), Button::Enabled(target.is_some())).clicked()
+            if ui_kit::button(ui, tr("arclet.panel.group_rename"), ui_kit::Button::Enabled(target.is_some())).clicked()
                 && let Some(id) = target
                 && let Some(group) = groups.iter().find(|g| g.id == id)
             {
                 self.rename = Some((id, group.name.clone()));
             }
-            if ui_kit::button(ui, tr("arclet.panel.group_ungroup"), Button::Enabled(target.is_some())).clicked()
+            if ui_kit::button(ui, tr("arclet.panel.group_ungroup"), ui_kit::Button::Enabled(target.is_some())).clicked()
                 && let Some(id) = target
                 && self.exec(cad, "browser.ungroup", json!({ "group": id })).is_some()
             {
@@ -219,7 +222,8 @@ impl PanelState {
         if let Some((id, mut text)) = self.rename.take() {
             let mut keep = true;
             ui.horizontal(|ui| {
-                ui.add(egui::TextEdit::singleline(&mut text).desired_width(150.0));
+                let input_id = ui.make_persistent_id(("arclet-group-rename", id));
+                ui.allocate_ui(vec2(150.0, Tokens::get().control_height), |ui| ui_kit::cell_editor(ui, input_id, &mut text, "", false));
                 if ui_kit::button(ui, tr("arclet.panel.group_save"), Button::Primary).clicked() {
                     let name = text.trim().to_string();
                     // A refused name keeps the editor open with the reason shown above.
@@ -255,7 +259,7 @@ impl PanelState {
                     self.exec(cad, "browser.visibility", json!({ "visible": hidden, "tree_folders": [key] }));
                 }
                 let label = format!("{} ({})", group.name, message("arclet.panel.group_items", &[("count", &group.items.len().to_string())]));
-                if ui.selectable_label(target == Some(group.id), label).clicked() {
+                if ui_kit::button(ui, label, if target == Some(group.id) { Button::SmallSelected } else { Button::Ghost }).clicked() {
                     self.chosen_group = Some(group.id);
                 }
             });
@@ -276,22 +280,23 @@ impl PanelState {
             {
                 self.chosen_layer = made.get("layer").and_then(Value::as_u64);
             }
-            if ui_kit::button(ui, tr("arclet.layers.rename"), Button::Enabled(target != DEFAULT)).clicked()
+            if ui_kit::button(ui, tr("arclet.layers.rename"), ui_kit::Button::Enabled(target != DEFAULT)).clicked()
                 && let Some(row) = rows.iter().find(|row| row.id == target)
             {
                 self.layer_rename = Some((target, row.name.clone()));
             }
-            if ui_kit::button(ui, tr("arclet.layers.assign"), Button::Enabled(!bodies.is_empty())).clicked() {
+            if ui_kit::button(ui, tr("arclet.layers.assign"), ui_kit::Button::Enabled(!bodies.is_empty())).clicked() {
                 self.exec(cad, "layer.assign", json!({ "bodies": bodies, "layer": target }));
             }
-            if ui_kit::button(ui, tr("arclet.layers.make_current"), Button::Enabled(target != current)).clicked() {
+            if ui_kit::button(ui, tr("arclet.layers.make_current"), ui_kit::Button::Enabled(target != current)).clicked() {
                 self.exec(cad, "layer.set_current", json!({ "layer": target }));
             }
         });
         if let Some((id, mut text)) = self.layer_rename.take() {
             let mut keep = true;
             ui.horizontal(|ui| {
-                ui.add(egui::TextEdit::singleline(&mut text).desired_width(150.0));
+                let input_id = ui.make_persistent_id(("arclet-layer-rename", id));
+                ui.allocate_ui(vec2(150.0, Tokens::get().control_height), |ui| ui_kit::cell_editor(ui, input_id, &mut text, "", false));
                 if ui_kit::button(ui, tr("arclet.panel.group_save"), Button::Primary).clicked() {
                     let name = text.trim().to_string();
                     // A refused name keeps the editor open with the reason shown above.
@@ -336,7 +341,7 @@ impl PanelState {
                 if row.id == current {
                     label = format!("{label} · {}", tr("arclet.layers.current"));
                 }
-                if ui.selectable_label(target == row.id, label).clicked() {
+                if ui_kit::button(ui, label, if target == row.id { Button::SmallSelected } else { Button::Ghost }).clicked() {
                     self.chosen_layer = Some(row.id);
                 }
             });
@@ -358,15 +363,15 @@ impl PanelState {
         ui.add_space(8.0);
 
         let mut grid = cad.ui.show_grid;
-        if ui.checkbox(&mut grid, tr("arclet.panel.display_grid")).changed() {
+        if ui_kit::checkbox(ui, tr("arclet.panel.display_grid"), &mut grid).changed() {
             self.exec(cad, "view.grid", json!({ "on": grid }));
         }
         let mut shadow = cad.ui.ground_shadow;
-        if ui.checkbox(&mut shadow, tr("arclet.panel.display_shadow")).changed() {
+        if ui_kit::checkbox(ui, tr("arclet.panel.display_shadow"), &mut shadow).changed() {
             self.exec(cad, "view.ground_shadow", json!({ "on": shadow }));
         }
         let mut occlusion = cad.preferences.ambient_occlusion;
-        if ui.checkbox(&mut occlusion, tr("arclet.panel.display_ao")).changed() {
+        if ui_kit::checkbox(ui, tr("arclet.panel.display_ao"), &mut occlusion).changed() {
             self.exec(cad, "view.ambient_occlusion", json!({ "enabled": occlusion }));
         }
 
@@ -383,7 +388,7 @@ impl PanelState {
                 let look = if name == preset { Button::SmallSelected } else { Button::Small };
                 // Custom is what a manual change leaves behind; it is shown, not chosen.
                 let enabled = name != "custom";
-                if ui_kit::button(ui, tr(label), if enabled { look } else { Button::Enabled(false) }).clicked() && enabled {
+                if ui_kit::button(ui, tr(label), if enabled { look } else { ui_kit::Button::Enabled(false) }).clicked() && enabled {
                     self.exec(cad, "view.graphics_preset", json!({ "preset": name }));
                 }
             }

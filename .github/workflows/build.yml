@@ -108,6 +108,31 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev mesa-vulkan-drivers
+      # Run the known UI guardrails before the long suites: a failing assertion's
+      # message is visible immediately, and its output is retained for review.
+      - name: Diagnose UI regression guards
+        shell: bash
+        run: |
+          set -uo pipefail
+          failures=0
+          tests=(
+            command_help::tests::every_toolbar_command_has_help_or_is_on_the_backlog
+            dialogs::dense::all_tests::every_selection_field_label_is_translated
+            font_literals_tests::font_sizes_and_dense_form_metrics_come_from_tokens
+            i18n::tests::every_command_label_is_in_the_english_catalog
+            i18n::tests::every_complete_catalog_carries_every_english_message
+          )
+          for test_name in "${tests[@]}"; do
+            echo "::group::${test_name}"
+            RUST_TEST_THREADS=1 cargo test --profile ci --locked -p solidcraft-ui-egui --lib "${test_name}" -- --exact --nocapture 2>&1 | tee -a test-guards.log
+            result=${PIPESTATUS[0]}
+            echo "::endgroup::"
+            if (( result != 0 )); then
+              echo "::error::UI guard failed: ${test_name} (exit ${result})"
+              failures=1
+            fi
+          done
+          exit "${failures}"
       - name: Tests
         shell: bash
         run: |
@@ -129,7 +154,7 @@ jobs:
             exit 1
           fi
       - name: Retain test logs
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
           name: regression-test-logs
