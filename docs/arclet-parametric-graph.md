@@ -18,6 +18,7 @@ This is not GH/GHX file compatibility or Grasshopper component/plugin compatibil
 | `Graph::connect_typed_checked(...)` | Rejects incompatible wires and cycles without mutating the previous connection. Does not replace the legacy `connect`/`connect_checked` APIs. |
 | `Graph::type_issues()` | Describes incompatible existing wires using node IDs, socket indices, names and expected/actual types. |
 | `GraphWorkspace::to_json()` / `from_json()` | Separate versioned workspace file for groups, per-node view state and external model-output references, with full validation before replacement. |
+| `GraphWorkspace::resolved_model_meshes(&evaluation)` | Returns validated, Arc-shared mesh snapshots for the CAD host to commit explicitly; does not edit or save the host CAD document. |
 
 The type checker models the types implemented by the runtime (`Number`, `Boolean`, `Text`, `Point`, polyline `Curve`, triangle-mesh `Solid`, `Layers`, and polymorphic point-or-curve `Shape`). `Vector` and `Surface` have reserved type names but **do not yet have executable value payloads or surface nodes**. The type checker is conservative; a polymorphic `Shape` cannot be connected to a `Curve`-only input without a runtime type guarantee. Boolean-to-number compatibility preserves the existing numeric coercion.
 
