@@ -602,6 +602,26 @@ mod tests {
     }
 
     #[test]
+    fn intentionally_too_large_weld_radius_must_not_hide_thin_wall_loss() {
+        let mut s = Session::default();
+        s.execute("solid.box", &json!({
+            "length": 10, "width": 10, "height": 0.02, "corner": [0, 0, 0],
+            "body_name": "ThinPlate",
+        })).unwrap();
+        let preflight = s.execute("mesh.manufacturing_check", &json!({
+            "body": "ThinPlate", "weld_tolerance_mm": 0.03,
+            "nozzle_diameter_mm": 0.4
+        })).unwrap();
+        assert_eq!(preflight["source_topology"]["closed"], true, "{preflight}");
+        assert_eq!(preflight["triangles_collapsed_by_weld"], true, "{preflight}");
+        assert!(preflight["pre_weld_topology"]["collapsed_after_weld"].as_u64().unwrap_or(0) > 0);
+        assert_eq!(preflight["topology"]["closed"], false);
+        assert_eq!(preflight["verdict"], "invalid_mesh");
+        assert!(preflight["blockers"].as_array().is_some_and(|rows|
+            rows.iter().any(|r| r.as_str().is_some_and(|s| s.contains("collapses")))));
+    }
+
+    #[test]
     fn independent_session_command_reports_invalid_threshold_and_bed_size() {
         let mut s = Session::default();
         s.execute("solid.box", &json!({
