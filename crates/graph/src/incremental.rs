@@ -40,6 +40,16 @@ impl IncrementalEvaluator {
         self.previous.as_ref().map(|_| &self.result)
     }
 
+    /// Only return results produced for this exact graph snapshot.
+    /// Useful for hosts attaching geometry to editable CAD documents.
+    pub fn current_for(&self, graph: &Graph) -> Option<&Evaluation> {
+        if self.previous.as_ref() == Some(graph) {
+            Some(&self.result)
+        } else {
+            None
+        }
+    }
+
     /// Release all cached values, including potentially large geometry.
     pub fn clear(&mut self) {
         self.previous = None;
