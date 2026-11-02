@@ -3284,6 +3284,71 @@ mod typed_dimension_tests {
     use super::*;
 
     #[test]
+    fn large_world_coordinates_do_not_flatten_local_distance_jacobian() {
+        // The points are separated by 0.02 mm despite an origin near 9e8 mm.
+        // A derivative step based on |x| used to cross the point and report ~0.
+        let mut sk = Sketch::new();
+        let p = sk.add_point(Vec2::new(900_000_000.0, -900_000_000.0), None).unwrap();
+        sk.points[p].fixed = true;
+        let q = sk.add_point(Vec2::new(900_000_000.02, -900_000_000.0), None).unwrap();
+        sk.add_constraint(ConstraintKind::Distance { p, q, value: 0.02 }, None).unwrap();
+        let lay = layout(&sk, &Hold::default());
+        let mut x = initial_x(&sk, &lay);
+        let (blocks, _) = build_blocks(&sk, &lay, &points_on_curves(&sk));
+        let vars: Vec<usize> = (0..lay.n).collect();
+        let mut col = vec![usize::MAX; lay.n];
+        columns(&mut col, &vars, &vars);
+        let (residual, jacobian, _) = local_system(&sk, &lay, &blocks, &mut x, &col, vars.len());
+        let column = lay.pvar[q].unwrap();
+        assert!(max_abs(&residual) < ACCEPT);
+        assert!((jacobian.get(0, column) - 1.0).abs() < 1e-3, "distance Jacobian: {jacobian:?}");
+        assert!(jacobian.get(0, column + 1).abs() < 1e-3);
+
+        // Rank and geometry must agree at the accepted solution too.
+        let report = solve(&mut sk);
+        assert!(report.ok(), "{report:?}");
+        assert_eq!(report.dof, 1, "{report:?}");
+    }
+
+    #[test]
+    fn zero_length_parallel_and_perpendicular_are_not_valid_angles() {
+        for perpendicular in [false, true] {
+            let mut sk = Sketch::new();
+            let collapsed = sk.add_line(Vec2::new(4.0, 4.0), Vec2::new(4.0, 4.0), None, None, None).unwrap();
+            let guide = sk.add_line(Vec2::ZERO, Vec2::new(10.0, 0.0), None, None, None).unwrap();
+            sk.curves[collapsed].fixed = true;
+            let kind = if perpendicular {
+                ConstraintKind::Perpendicular { a: collapsed, b: guide }
+            } else {
+                ConstraintKind::Parallel { a: collapsed, b: guide }
+            };
+            let id = sk.add_constraint(kind, None).unwrap();
+            let before = sk.clone();
+            let report = solve(&mut sk);
+            assert_eq!(report.status, SolveStatus::Failed, "{report:?}");
+            assert!(report.failing.contains(&id), "{report:?}");
+            assert_eq!(sk.points, before.points);
+            assert_eq!(sk.curves, before.curves);
+        }
+    }
+
+    #[test]
+    fn failed_solve_does_not_update_a_driven_dimension() {
+        let mut sk = Sketch::new();
+        let line = sk.add_line(Vec2::ZERO, Vec2::new(10.0, 0.0), Some(0), None, None).unwrap();
+        sk.curves[line].fixed = true;
+        sk.add_constraint(ConstraintKind::Length { l: line, value: 12.0 }, None).unwrap();
+        sk.add_constraint(ConstraintKind::Length { l: line, value: 3.0 }, None).unwrap();
+        if let Some(dimension) = sk.constraints.last_mut() {
+            dimension.driven = true;
+        }
+        let before = sk.clone();
+        let report = solve(&mut sk);
+        assert_eq!(report.status, SolveStatus::Failed, "{report:?}");
+        assert_eq!(sk, before, "failure must preserve geometry and reference dimensions");
+    }
+
+    #[test]
     fn failed_signed_sweep_restores_arc_orientation_and_coordinates() {
         let mut sk = Sketch::new();
         let c = sk.add_arc(Vec2::ZERO, Vec2::new(10.0, 0.0), Vec2::new(0.0, 10.0), [Some(0), None, None], None).unwrap();
