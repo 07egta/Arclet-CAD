@@ -51,7 +51,7 @@ pub(super) fn paint_box(ui: &Ui, square: Rect, response: &Response, on: bool, mi
 }
 
 /// Checkboxes only via ui_kit::checkbox. Labels, accessibility, keyboard and response stay native.
-pub(crate) fn checkbox(ui: &mut Ui, label: &str, value: &mut bool) -> Response {
+pub fn checkbox(ui: &mut Ui, label: &str, value: &mut bool) -> Response {
     checkbox_indeterminate(ui, label, value, false)
 }
 
