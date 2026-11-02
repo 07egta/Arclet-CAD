@@ -5,10 +5,11 @@ rewrite the shared SolidCraft egui kit, or import any third-party CAD artwork.
 
 ## Design system
 
-The default `Classic` theme keeps a neutral industrial canvas, thin dividers,
-dark neutral text, a muted blue interaction accent, and a restrained yellow
-selected-body cue. Existing user-selected dark and light themes remain selectable
-and are not silently overwritten.
+New Arclet profiles use the separately registered `Arclet Industrial` theme:
+a neutral industrial canvas, thin dividers, dark text, muted blue interaction
+accents and a restrained yellow selected-body cue. The original `Classic`
+theme remains **bit-for-bit unchanged**, so existing users who selected it, or
+any other light/dark theme, retain their saved choice.
 
 The small `classic_look::chrome` module contains **logical-point** Arclet chrome
 metrics. It is not a second global token system: typography, colour, corners,
@@ -32,7 +33,7 @@ theme's `hover`; pressed controls show the selection surface. Keyboard focus
 uses a visible accent outline. Disabled file actions use muted ink and explain
 why an action is unavailable instead of appearing enabled.
 
-### Contrast of the edited Classic light palette
+### Contrast of the new Arclet Industrial light palette
 
 These values were calculated from the theme hex colours using the WCAG relative
 luminance formula in a local Python calculation, **not** from a screenshot.
@@ -128,5 +129,5 @@ open until actual screenshots and interactions can be reviewed.
   DNS resolution. The PR stays **draft**, and no build, screenshot, or test run
   is reported successful until GitHub Actions confirms it.
 
-Changes a default: no change to default selection behavior or persisted settings.
-The already-selected Classic theme's colours and chrome presentation are refined.
+Changes a default: yes — new Arclet profiles start with Arclet Industrial rather than Classic.
+New profiles choose Arclet Industrial; saved Classic and other themes remain unchanged.
