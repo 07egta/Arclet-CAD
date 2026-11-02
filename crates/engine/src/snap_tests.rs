@@ -368,6 +368,27 @@ mod smart_snap_tests {
     }
 
     #[test]
+    fn spline_tangent_contacts_are_checked_against_exact_curve_derivative() {
+        // y=x², x in [-1,1]. Tangents from (0,-0.25) meet at x=+-0.5.
+        let curve = NurbsCurve::uniform(
+            2, vec![Vec3::new(-1.0, 1.0, 0.0), Vec3::new(0.0, -1.0, 0.0), Vec3::new(1.0, 1.0, 0.0)],
+        ).unwrap();
+        let mut q = query(0.5, 0.25);
+        q.settings.radius_px = 10.0;
+        q.inference.reference = Some(Vec3::new(0.0, -0.25, 0.0));
+        q.settings.enabled = [SnapKind::Tangent].into_iter().collect();
+        let got = query_snaps(&[SnapObject::new("spline", SnapGeometry::Nurbs(curve.clone()))], &q).unwrap();
+        let tangent = got.candidates.iter().find(|c| c.kind == SnapKind::Tangent).unwrap();
+        near(tangent.at, Vec3::new(0.5, 0.25, 0.0), 1e-6);
+        assert_eq!(tangent.accuracy, SnapAccuracy::Evaluated);
+        // The reference-to-contact vector is collinear with the actual
+        // rational spline tangent; the test does not use a mesh polyline.
+        let t = (tangent.at.x + 1.0) * 0.5;
+        let direction = curve.jet(t).unwrap().d1;
+        assert!((tangent.at - q.inference.reference.unwrap()).cross(direction).len() < 1e-6);
+    }
+
+    #[test]
     fn crossing_rational_spline_and_segment_is_refined_to_actual_curve() {
         let spline = NurbsCurve::uniform(
             2, vec![Vec3::new(-1.0, -1.0, 0.0), Vec3::new(0.0, 2.0, 0.0), Vec3::new(1.0, -1.0, 0.0)],
