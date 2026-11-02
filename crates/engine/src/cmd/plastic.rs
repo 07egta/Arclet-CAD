@@ -441,6 +441,39 @@ mod tests {
     }
 
     #[test]
+    fn boss_position_and_root_fillet_remain_editable_after_reload() {
+        let mut s = Session::default();
+        run(&mut s, "parameters.change", json!({"name":"root_radius", "expression":"1 mm"}));
+        run(&mut s, "solid.box", json!({"length":60, "width":60, "height":3, "body_name":"Plate"}));
+        run(&mut s, "plastic.boss", json!({
+            "name":"Fastener boss", "body":"Plate",
+            "position":[30,30,3], "diameter":10, "height":12,
+            "draft":"1 deg", "fillet":"root_radius",
+        }));
+        let before = run(&mut s, "inspect.measure", json!({}));
+        let before_volume = before["total"]["volume_mm3"].as_f64().unwrap();
+        let before_com = before["bodies"][0]["center_of_mass"][0].as_f64().unwrap();
+
+        run(&mut s, "timeline.edit", json!({
+            "feature":"Fastener boss",
+            "set":{"position":[40,30,3]}
+        }));
+        let moved = run(&mut s, "inspect.measure", json!({}));
+        let moved_volume = moved["total"]["volume_mm3"].as_f64().unwrap();
+        let moved_com = moved["bodies"][0]["center_of_mass"][0].as_f64().unwrap();
+        assert!(rel(before_volume, moved_volume) < 1e-6, "move unexpectedly changed volume");
+        assert!(moved_com > before_com + 0.1, "boss was not relocated");
+
+        run(&mut s, "parameters.change", json!({"name":"root_radius", "expression":"2 mm"}));
+        assert!(s.model.results.iter().all(|result| result.error.is_none()));
+        let after = volume(&mut s);
+        assert!((after - moved_volume).abs() > 0.01, "root fillet radius did not rebuild the geometry");
+        let mut reopened = Session::new(solidcraft_doc::Document::from_json(&s.doc.to_json()).unwrap());
+        assert!(reopened.model.results.iter().all(|result| result.error.is_none()));
+        assert!(rel(volume(&mut reopened), after) < 1e-6, "cold reload lost the fillet edit");
+    }
+
+    #[test]
     fn invalid_plastic_rule_edits_and_unknown_bodies_preserve_document() {
         let mut s = Session::default();
         run(&mut s, "solid.box", json!({"length":20, "width":20, "height":2, "body_name":"Panel"}));
