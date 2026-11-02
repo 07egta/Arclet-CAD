@@ -993,9 +993,25 @@ fn line_circle_intersections(a: Vec3, b: Vec3, circle: Round) -> Vec<Vec3> {
     let dir = d / dlength;
     let q = a - circle.center;
     let height = q.dot(circle.normal);
-    if height.abs() > circle.radius.max(dlength).max(length(q)) * 1e-10
-        || dir.dot(circle.normal).abs() > 1e-10 {
+    if !height.is_finite() || height.abs() > circle.radius.max(dlength).max(length(q)) * 1e-10 {
         return Vec::new();
+    }
+    let slope = dir.dot(circle.normal);
+    if slope.abs() > 1e-10 {
+        // A non-coplanar line intersects the circle's plane once. It hits
+        // the circle only if that plane-crossing point is on its circumference.
+        let t = -height / slope;
+        if !(0.0..=dlength).contains(&t) {
+            return Vec::new();
+        }
+        let point = a + dir * t;
+        let radial_error = (length(point - circle.center) - circle.radius).abs();
+        let tol = 1e-9 * circle.radius.max(dlength).max(1e-9);
+        return if point.is_finite() && radial_error <= tol && circle.contains(point) {
+            vec![point]
+        } else {
+            Vec::new()
+        };
     }
     let along = -q.dot(dir);
     let transverse = q + dir * along;
@@ -1018,10 +1034,37 @@ fn line_circle_intersections(a: Vec3, b: Vec3, circle: Round) -> Vec<Vec3> {
 }
 
 fn circle_intersections(a: Round, b: Round) -> Vec<Vec3> {
-    let cos = a.normal.dot(b.normal).abs();
+    let dot = a.normal.dot(b.normal);
+    let cos = dot.abs();
     let delta = b.center - a.center;
     let scale = a.radius.max(b.radius).max(length(delta));
-    if cos < 1.0 - 1e-10 || delta.dot(a.normal).abs() > scale * 1e-10 {
+    if cos < 1.0 - 1e-10 {
+        // Nonparallel circle planes meet along a line. Work out the closest
+        // point on that line to a.center, then intersect it with circle a;
+        // accept only points that also lie on circle b.
+        let denominator = 1.0 - dot * dot;
+        if !(denominator > 1e-14) {
+            return Vec::new();
+        }
+        let q = (b.normal - a.normal * dot) * (b.normal.dot(delta) / denominator);
+        let foot = a.center + q;
+        let h2 = (a.radius - length(q)) * (a.radius + length(q));
+        let Some(direction) = unit(a.normal.cross(b.normal)) else { return Vec::new() };
+        if !h2.is_finite() || h2 < -1e-9 * scale * scale {
+            return Vec::new();
+        }
+        let h = h2.max(0.0).sqrt();
+        let mut result = Vec::new();
+        for p in [foot + direction * h, foot - direction * h] {
+            if p.is_finite()
+                && (length(p - b.center) - b.radius).abs() <= 1e-9 * scale.max(1e-9)
+                && a.contains(p) && b.contains(p) && !result.contains(&p) {
+                result.push(p);
+            }
+        }
+        return result;
+    }
+    if delta.dot(a.normal).abs() > scale * 1e-10 {
         return Vec::new();
     }
     let d = length(delta);
