@@ -3617,6 +3617,15 @@ impl SheetBody {
 
     /// A flat hem: a 180° bend with a tiny radius at the panel edge, `length` to its outer face.
     pub fn add_hem(&mut self, pick: Vec3, length: f64, gap: f64, flip: bool) -> Result<usize> {
+        // The hem's gap is its inner bend radius. A negative or non-finite
+        // override would otherwise build an invalid 180-degree bend even
+        // though the rule's own hem gap is validated.
+        if !gap.is_finite() || !(0.0..=1e7).contains(&gap) {
+            return Err(DocError::Invalid("the hem gap must be finite and between 0 and 10,000,000 mm".into()));
+        }
+        if !length.is_finite() || length <= 0.0 {
+            return Err(DocError::Invalid("the hem length must be finite and positive".into()));
+        }
         let (panel, a, b, top, dist) = self.edge_at(pick).ok_or_else(|| DocError::Invalid("no sheet edge there".into()))?;
         if dist > self.t * 2.0 + 1e-3 {
             return Err(DocError::Invalid("pick an edge of the sheet".into()));
@@ -3697,8 +3706,8 @@ impl SheetBody {
         if !(angle > 1e-6 && angle <= std::f64::consts::PI - 1e-6) {
             return Err(DocError::Invalid("the fold angle must be between 0 and 180°".into()));
         }
-        if !(radius >= 0.0) {
-            return Err(DocError::Invalid("the bend radius must not be negative".into()));
+        if !radius.is_finite() || !(0.0..=1e7).contains(&radius) {
+            return Err(DocError::Invalid("the fold bend radius must be finite and between 0 and 10,000,000 mm".into()));
         }
         // The panel the line lies on: both ends on its top or bottom face, the middle inside it.
         let on_face = |q: Vec3| q.z.abs() < 1e-4 || (q.z - self.t).abs() < 1e-4;
