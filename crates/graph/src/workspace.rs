@@ -109,21 +109,20 @@ impl GraphWorkspace {
     /// host can validate the full set before starting a document transaction.
     pub fn resolved_model_meshes(&self, evaluator: &IncrementalEvaluator) -> Result<Vec<ModelMeshSnapshot>, GraphError> {
         self.validate()?;
-        let evaluation = evaluator.current_for(&self.graph).ok_or_else(|| {
-            invalid("no completed evaluation matches this graph revision; recompute before updating the CAD model")
-        })?;
+        let evaluation = evaluator
+            .current_for(&self.graph)
+            .ok_or_else(|| invalid("no completed evaluation matches this graph revision; recompute before updating the CAD model"))?;
         let mut snapshots = Vec::with_capacity(self.model_links.len());
         for link in &self.model_links {
-            let tree = evaluation.outputs.get(&(link.node, link.output)).ok_or_else(|| {
-                invalid(format!("model link '{}' has no successful evaluation output", link.model_object_id))
-            })?;
+            let tree = evaluation
+                .outputs
+                .get(&(link.node, link.output))
+                .ok_or_else(|| invalid(format!("model link '{}' has no successful evaluation output", link.model_object_id)))?;
             let mut meshes = Vec::new();
             for value in tree.branches.values().flatten() {
                 match value {
                     Value::Solid(triangles) => meshes.push(Arc::clone(triangles)),
-                    other => return Err(invalid(format!(
-                        "model link '{}' expects Solid, received {}", link.model_object_id, other.kind()
-                    ))),
+                    other => return Err(invalid(format!("model link '{}' expects Solid, received {}", link.model_object_id, other.kind()))),
                 }
             }
             if meshes.is_empty() {
@@ -147,13 +146,21 @@ impl GraphWorkspace {
             format: FORMAT.into(),
             version: VERSION,
             graph,
-            groups: self.groups.iter().map(|g| SavedGroup {
-                id: g.id, name: g.name.clone(), members: g.members.iter().map(|n| n.0).collect(), collapsed: g.collapsed,
-            }).collect(),
-            node_states: self.node_states.iter().map(|s| SavedNodeViewState { node: s.node.0, collapsed: s.collapsed, selected: s.selected }).collect(),
-            model_links: self.model_links.iter().map(|l| SavedModelOutputLink {
-                node: l.node.0, output: l.output, model_object_id: l.model_object_id.clone(),
-            }).collect(),
+            groups: self
+                .groups
+                .iter()
+                .map(|g| SavedGroup { id: g.id, name: g.name.clone(), members: g.members.iter().map(|n| n.0).collect(), collapsed: g.collapsed })
+                .collect(),
+            node_states: self
+                .node_states
+                .iter()
+                .map(|s| SavedNodeViewState { node: s.node.0, collapsed: s.collapsed, selected: s.selected })
+                .collect(),
+            model_links: self
+                .model_links
+                .iter()
+                .map(|l| SavedModelOutputLink { node: l.node.0, output: l.output, model_object_id: l.model_object_id.clone() })
+                .collect(),
         };
         let json = serde_json::to_string_pretty(&file).map_err(|error| invalid(error.to_string()))?;
         if json.len() > MAX_WORKSPACE_BYTES {
@@ -176,15 +183,21 @@ impl GraphWorkspace {
         let graph = Graph::from_json(&graph_json)?;
         let workspace = Self {
             graph,
-            groups: file.groups.into_iter().map(|g| NodeGroup {
-                id: g.id, name: g.name, members: g.members.into_iter().map(NodeId).collect(), collapsed: g.collapsed,
-            }).collect(),
-            node_states: file.node_states.into_iter().map(|s| NodeViewState {
-                node: NodeId(s.node), collapsed: s.collapsed, selected: s.selected,
-            }).collect(),
-            model_links: file.model_links.into_iter().map(|l| ModelOutputLink {
-                node: NodeId(l.node), output: l.output, model_object_id: l.model_object_id,
-            }).collect(),
+            groups: file
+                .groups
+                .into_iter()
+                .map(|g| NodeGroup { id: g.id, name: g.name, members: g.members.into_iter().map(NodeId).collect(), collapsed: g.collapsed })
+                .collect(),
+            node_states: file
+                .node_states
+                .into_iter()
+                .map(|s| NodeViewState { node: NodeId(s.node), collapsed: s.collapsed, selected: s.selected })
+                .collect(),
+            model_links: file
+                .model_links
+                .into_iter()
+                .map(|l| ModelOutputLink { node: NodeId(l.node), output: l.output, model_object_id: l.model_object_id })
+                .collect(),
         };
         workspace.validate()?;
         Ok(workspace)
@@ -223,10 +236,7 @@ impl GraphWorkspace {
             if output_type(node.component, link.output) != Some(DataType::Solid) {
                 return Err(invalid("model link must reference a solid mesh output"));
             }
-            if link.model_object_id.trim().is_empty()
-                || link.model_object_id.len() > MAX_LABEL_BYTES
-                || !object_ids.insert(&link.model_object_id)
-            {
+            if link.model_object_id.trim().is_empty() || link.model_object_id.len() > MAX_LABEL_BYTES || !object_ids.insert(&link.model_object_id) {
                 return Err(invalid("empty, duplicate or oversized model object ID"));
             }
         }

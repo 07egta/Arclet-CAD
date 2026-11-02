@@ -351,7 +351,6 @@ fn extrusion_overflow_is_a_node_error_instead_of_a_non_finite_mesh() {
     assert!(!result.outputs.contains_key(&(id, 0)));
 }
 
-
 #[test]
 fn incremental_edit_evaluation_save_reload_and_legacy_mesh_work() {
     let mut graph = Graph::new();
@@ -385,9 +384,7 @@ fn incremental_edit_evaluation_save_reload_and_legacy_mesh_work() {
     assert_eq!(numbers(cache.current().unwrap(), unrelated), vec![42.0]);
     assert_eq!(cache.current(), Some(&graph.evaluate().unwrap()));
     assert!(matches!(
-        cache.current().unwrap().outputs.get(&(extrude, 0))
-            .and_then(|tree| tree.branches.values().next())
-            .and_then(|items| items.first()),
+        cache.current().unwrap().outputs.get(&(extrude, 0)).and_then(|tree| tree.branches.values().next()).and_then(|items| items.first()),
         Some(Value::Solid(_))
     ));
 
@@ -434,15 +431,9 @@ fn graph_workspace_preserves_groups_state_and_model_link_intent() {
     let solid = graph.add_node("Extrude", (100.0, 0.0)).unwrap();
     graph.connect_checked(circle, 0, solid, 0).unwrap();
     let mut workspace = GraphWorkspace::new(graph);
-    workspace.groups.push(NodeGroup {
-        id: 7, name: "Profiles".into(), members: vec![circle, solid], collapsed: false,
-    });
-    workspace.node_states.push(NodeViewState {
-        node: circle, collapsed: true, selected: false,
-    });
-    workspace.model_links.push(ModelOutputLink {
-        node: solid, output: 0, model_object_id: "arclet-object-001".into(),
-    });
+    workspace.groups.push(NodeGroup { id: 7, name: "Profiles".into(), members: vec![circle, solid], collapsed: false });
+    workspace.node_states.push(NodeViewState { node: circle, collapsed: true, selected: false });
+    workspace.model_links.push(ModelOutputLink { node: solid, output: 0, model_object_id: "arclet-object-001".into() });
     let saved = workspace.to_json().unwrap();
     let loaded = GraphWorkspace::from_json(&saved).unwrap();
     assert_eq!(loaded, workspace);
@@ -536,7 +527,6 @@ fn incremental_stress_two_thousand_nodes_reuses_and_invalidates_only_dependents(
     let restored = Graph::from_json(&saved).unwrap();
     assert_eq!(restored.evaluate().unwrap(), graph.evaluate().unwrap());
 }
-
 
 #[test]
 fn incremental_cached_errors_recover_and_resource_budget_is_order_sensitive() {
