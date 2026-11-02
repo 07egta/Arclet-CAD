@@ -1,0 +1,35 @@
+name: Arclet Boolean command intent
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'apps/arclet/src/commands.rs'
+      - 'apps/arclet/src/app.rs'
+      - '.github/workflows/arclet-boolean-intent.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  desktop-command-regression:
+    name: Windows native Arclet command regression
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
+      - name: Command-name and dialog-operation tests
+        run: cargo test --locked -p arclet --bin arclet boolean_command
+      - name: Generic Boolean defaults do not inherit explicit operations
+        run: cargo test --locked -p arclet --bin arclet generic_boolean
+      - name: Existing command-line repeat regression
+        run: cargo test --locked -p arclet --bin arclet an_empty_command_line_repeats_the_last_command
+      - name: Windows all-target Arclet lint
+        run: cargo clippy --locked -p arclet --all-targets -- -D warnings
