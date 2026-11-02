@@ -339,3 +339,108 @@ pub fn align_translation(fixed: &CloudSample, moving: &CloudSample, tolerance_mm
         method: "translation_only_trimmed_icp",
     })
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::point_cloud::{ColorBy, Colors, Points};
+
+    fn cloud(points: Vec<[f64; 3]>, origin: Vec3) -> PointCloud {
+        let values: Vec<f32> = points.into_iter().flat_map(|p| p.map(|x| x as f32)).collect();
+        PointCloud {
+            id: 42, name: "Survey".into(), file: String::new(),
+            origin, points: Points::new(values.into()), colors: Colors::default(),
+            source_points: 0, units: "mm".into(),
+            transform: crate::IDENTITY, point_size: 2.0,
+            color_by: ColorBy::File, color: None, height_range: None, visible: true,
+        }
+    }
+
+    #[test]
+    fn pca_fits_noisy_and_exact_planes_with_remote_frame() {
+        let points: Vec<[f64; 3]> = (0..24).flat_map(|i| (0..24).map(move |j| {
+            let x = 0.3 * i as f64;
+            let y = 0.5 * j as f64;
+            [x, y, 2.0 * x - 0.5 * y + 3.0]
+        })).collect();
+        let sample = CloudSample::new(&cloud(points, Vec3::new(9e8, -9e8, 1e8)), 10_000).unwrap();
+        let fit = sample.fit_plane(0.001).unwrap();
+        let expected = Vec3::new(-2.0, 0.5, 1.0).normalized().unwrap();
+        assert!(fit.normal.dot(expected).abs() > 0.999999, "{fit:?}");
+        assert!(fit.quality.rms_mm < 1e-5, "{fit:?}");
+        assert!(fit.quality.inlier_fraction > 0.999);
+        let noisy: Vec<[f64; 3]> = (0..24).flat_map(|i| (0..24).map(move |j| {
+            [i as f64, j as f64, 0.02 * ((i * 7 + j * 3) as f64).sin()]
+        })).collect();
+        let sample = CloudSample::new(&cloud(noisy, Vec3::new(9e8, 9e8, 0.0)), 10_000).unwrap();
+        let fit = sample.fit_plane(0.06).unwrap();
+        assert!(fit.quality.rms_mm < 0.03, "{fit:?}");
+        assert!(fit.quality.inlier_fraction > 0.99, "{fit:?}");
+    }
+
+    #[test]
+    fn kd_nearest_matches_brute_force_and_finds_an_isolated_outlier() {
+        let mut points: Vec<[f64; 3]> = (0..13).flat_map(|i| (0..11).map(move |j| {
+            [i as f64, j as f64, (i * j) as f64 * 0.01]
+        })).collect();
+        points.push([500.0, 700.0, 600.0]);
+        let sample = CloudSample::new(&cloud(points, Vec3::ZERO), 10_000).unwrap();
+        let index = KdIndex::new(&sample.offsets);
+        for k in 0..50 {
+            let q = Vec3::new(k as f64 * 0.27, k as f64 * 0.11, 0.1);
+            let actual = index.nearest(q, None).unwrap();
+            let expected = sample.offsets.iter().enumerate().map(|(i, p)| (i, (q - *p).len()))
+                .min_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0))).unwrap();
+            assert_eq!(actual.0, expected.0);
+            assert!((actual.1 - expected.1).abs() < 1e-10);
+        }
+        let report = sample.outliers().unwrap();
+        assert!(report.outlier_count >= 1, "{report:?}");
+        assert!(report.threshold_mm < 10.0, "{report:?}");
+        let near = sample.nearest_world(Vec3::new(3.05, 4.05, 0.12)).unwrap();
+        assert!(near.distance_mm < 0.3, "{near:?}");
+    }
+
+    #[test]
+    fn translation_alignment_reports_error_without_mutating_scans() {
+        let points: Vec<[f64; 3]> = (0..11).flat_map(|i| (0..9).map(move |j| {
+            [i as f64, j as f64, (i * j) as f64 * 0.05]
+        })).collect();
+        let a = cloud(points.clone(), Vec3::new(9e8, 0.0, 0.0));
+        let b = cloud(points, Vec3::new(9e8 + 130.0, -70.0, 25.0));
+        let fixed = CloudSample::new(&a, 10_000).unwrap();
+        let moving = CloudSample::new(&b, 10_000).unwrap();
+        let alignment = align_translation(&fixed, &moving, 1e-5).unwrap();
+        assert!((alignment.translation_mm - Vec3::new(-130.0, 70.0, -25.0)).len() < 1e-5, "{alignment:?}");
+        assert!(alignment.quality.rms_mm < 1e-6, "{alignment:?}");
+        assert_eq!(b.origin, Vec3::new(9e8 + 130.0, -70.0, 25.0));
+    }
+
+    #[test]
+    fn large_cloud_is_sampled_to_a_strict_upper_bound() {
+        let points: Vec<[f64; 3]> = (0..200_000).map(|i| {
+            [(i % 1000) as f64, (i / 1000) as f64, 0.0]
+        }).collect();
+        let scan = cloud(points, Vec3::ZERO);
+        let sample = CloudSample::new(&scan, 10_000).unwrap();
+        assert_eq!(sample.source_count, 200_000);
+        assert_eq!(sample.stride, 20);
+        assert_eq!(sample.offsets.len(), 10_000);
+        assert!(CloudSample::new(&scan, 0).is_err());
+        assert!(CloudSample::new(&scan, MAX_ANALYSIS_POINTS + 1).is_err());
+        let mut broken = scan.clone();
+        broken.origin.x = f64::NAN;
+        assert!(CloudSample::new(&broken, 1000).is_err());
+    }
+
+    #[test]
+    fn degenerate_planes_and_invalid_queries_fail_safely() {
+        let raw = (0..16).map(|i| [i as f64, 0.0, 0.0]).collect();
+        let scan = cloud(raw, Vec3::ZERO);
+        let sample = CloudSample::new(&scan, 100).unwrap();
+        assert!(sample.fit_plane(0.1).is_err());
+        assert!(sample.fit_plane(f64::NAN).is_err());
+        assert!(sample.nearest_world(Vec3::new(f64::NAN, 0.0, 0.0)).is_err());
+    }
+}
