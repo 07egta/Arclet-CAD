@@ -467,6 +467,7 @@ mod manufacturing_quality_tests {
         assert_eq!(r["topologically_closed"], true);
         assert_eq!(r["consistently_oriented"], true);
         assert_eq!(r["duplicate_faces"], 0);
+        assert_eq!(r["connected_shells"], 1);
         assert_eq!(r["winding_conflicts"], 0);
         mm(&r, "signed_volume_mm3", 8_000.0, 1e-8);
         mm(&r, "surface_area_mm2", 2_400.0, 1e-8);
@@ -536,6 +537,7 @@ mod manufacturing_quality_tests {
         assert_eq!(report["non_manifold_edges"], 0, "{report}");
         assert_eq!(report["vertex_manifold_complete"], true);
         assert_eq!(report["non_manifold_vertices"], 1, "{report}");
+        assert_eq!(report["connected_shells"], 1, "the shells share a vertex; {report}");
         assert_eq!(report["closed"], false);
         assert_eq!(report["signed_volume_mm3"], Value::Null);
     }
