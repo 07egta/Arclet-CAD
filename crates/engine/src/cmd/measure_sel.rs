@@ -105,7 +105,7 @@ fn fit_circle(pts: &[Vec3], tol: f64) -> Option<(Vec3, UnitVec3, f64)> {
 
 /// The round shape of mesh edge `index` of body `b`: from the kernel's exact curve when it
 /// is the same edge (its ends on the polyline), else fitted to the polyline's points.
-fn edge_round(b: &solidcraft_doc::ModelBody, m: &Mesh, index: usize, whole: bool) -> Option<Shape> {
+fn edge_round(b: &solidcraft_doc::ModelBody, m: &Mesh, index: usize, whole: bool) -> Option<(Shape, bool)> {
     let pts = m.edges.get(index)?;
     let tol = (m.bounds().diagonal().max(1.0) * 1e-6).max(1e-9);
     let exact = solidcraft_kernel::edge_circle(&b.body, index).filter(|c| {
@@ -113,17 +113,17 @@ fn edge_round(b: &solidcraft_doc::ModelBody, m: &Mesh, index: usize, whole: bool
         let on = pts.iter().all(|p| (p.dist(c.center) - c.radius).abs() <= tol * 10.0);
         ends && on
     });
-    let (center, axis, radius, angle) = match exact {
-        Some(c) => (c.center, c.axis, c.radius, if whole { std::f64::consts::TAU } else { c.angle }),
+    let (center, axis, radius, angle, kernel_exact) = match exact {
+        Some(c) => (c.center, c.axis, c.radius, if whole { std::f64::consts::TAU } else { c.angle }, true),
         None => {
             let all: Vec<Vec3> =
                 if whole { m.circular_rim(index).iter().filter_map(|&i| m.edges.get(i)).flatten().copied().collect() } else { pts.clone() };
             let (center, axis, radius) = fit_circle(&all, tol * 10.0)?;
             let angle = if whole { std::f64::consts::TAU } else { polyline_len(pts) / radius };
-            (center, axis, radius, angle)
+            (center, axis, radius, angle, false)
         }
     };
-    Some(Shape::Round { center, axis, radius, angle, planar: true, lo: 0.0, hi: 0.0 })
+    Some((Shape::Round { center, axis, radius, angle, planar: true, lo: 0.0, hi: 0.0 }, kernel_exact))
 }
 
 /// Points along a circle or arc (`angle` from `start` about `axis`).
@@ -189,10 +189,18 @@ fn sketch_curve(ss: &solidcraft_doc::SolvedSketch, id: &str) -> Option<Item> {
     let dir = match shape {
         Shape::Line { a, b } => {
             json["length_mm"] = json!(a.dist(b));
+            json["length_method"] = json!("analytic_line");
             (b - a).normalized()
         }
         _ => {
-            json["length_mm"] = json!(polyline_len(&pts));
+            // Sketch lines and circular arcs are exact; 128 display chords are not a
+            // length measurement (a 5 mm circle was otherwise systematically too short).
+            let length = match shape {
+                Shape::Round { radius, angle, .. } => radius * angle,
+                _ => polyline_len(&pts),
+            };
+            json["length_mm"] = json!(length);
+            json["length_method"] = json!("analytic_arc");
             add_round(&mut json, &shape);
             None
         }
@@ -290,19 +298,29 @@ fn describe(s: &Session, sel: &Sel) -> Option<Item> {
                 let pieces: Vec<&Vec<Vec3>> = rim.iter().filter_map(|&i| m.edges.get(i)).collect();
                 let len: f64 = pieces.iter().map(|p| polyline_len(p)).sum();
                 let points = pieces.iter().flat_map(|p| densify(p)).collect();
-                let mut json = json!({"type": "edge", "length_mm": len});
-                let shape = edge_round(b, &m, index, true).unwrap_or(Shape::Other);
+                let (shape, kernel_exact) = edge_round(b, &m, index, true).unwrap_or((Shape::Other, false));
+                let length = match shape {
+                    Shape::Round { radius, angle, .. } if kernel_exact => radius * angle,
+                    _ => len,
+                };
+                let mut json = json!({"type": "edge", "length_mm": length,
+                    "length_method": if kernel_exact { "analytic_circle" } else { "sampled_polyline" }});
                 add_round(&mut json, &shape);
                 return Some(Item { geo: Geo::Points(points), dir: None, json, shape, slot: None });
             }
             let (a, z) = (*pts.first()?, *pts.last()?);
             let straight = (z - a).normalized().filter(|d| pts.iter().all(|p| (*p - a).cross(*d).len() < 1e-6 * (1.0 + a.dist(z))));
             let len = polyline_len(pts);
-            let mut json = json!({"type": "edge", "length_mm": len});
-            let shape = match straight {
-                Some(_) => Shape::Line { a, b: z },
-                None => edge_round(b, &m, index, false).unwrap_or(Shape::Other),
+            let (shape, kernel_exact) = match straight {
+                Some(_) => (Shape::Line { a, b: z }, false),
+                None => edge_round(b, &m, index, false).unwrap_or((Shape::Other, false)),
             };
+            let length = match shape {
+                Shape::Round { radius, angle, .. } if kernel_exact => radius * angle,
+                _ => len,
+            };
+            let mut json = json!({"type": "edge", "length_mm": length,
+                "length_method": if kernel_exact { "analytic_arc" } else { "sampled_polyline" }});
             add_round(&mut json, &shape);
             Some(Item { geo: Geo::Points(densify(pts)), dir: straight, json, shape, slot: None })
         }
@@ -339,8 +357,21 @@ fn describe(s: &Session, sel: &Sel) -> Option<Item> {
             let closed = crate::cmd::inspect::encloses_volume(&body.body);
             let m = body.mesh();
             let tris: Vec<[Vec3; 3]> = m.triangles.iter().filter_map(|t| m.tri(t)).collect();
-            let v = m.measure().volume;
-            plain(Geo::Tris(tris), None, json!({"type": "body", "name": name, "closed": closed, "volume_mm3": closed.then_some(v)}))
+            // The display mesh is not the mass-properties mesh: never expose its
+            // coarse tessellated volume as if it matched inspect.measure.
+            let measured = body.measure();
+            let (volume, area, error) = match measured {
+                Ok(ref value) if value.area.is_finite() && value.area >= 0.0
+                    && (!closed || (value.volume.is_finite() && value.volume > 0.0 && value.centroid.is_finite())) =>
+                {
+                    (closed.then_some(value.volume), Some(value.area), None)
+                }
+                Ok(_) => (None, None, Some("invalid mass properties".to_string())),
+                Err(e) => (None, None, Some(e.to_string())),
+            };
+            plain(Geo::Tris(tris), None, json!({"type": "body", "name": name, "closed": closed,
+                "volume_mm3": volume, "area_mm2": area, "measurement_method": "fine_tessellation",
+                "error_bound_mm": null, "error": error}))
         }
         Sel::SketchCurve { id, sketch } => sketch_curve(sketch_of(s, &st, *sketch, |sk| sk.curve_index(id).is_some())?, id),
         Sel::ExternalSketchCurve { sketch, id } => sketch_curve(sketch_of(s, &st, Some(*sketch), |_| true)?, id),
@@ -424,6 +455,59 @@ fn closest(a: &Geo, b: &Geo) -> Option<(Vec3, Vec3)> {
             [ab, ba].into_iter().flatten().min_by(|x, y| x.0.dist(x.1).total_cmp(&y.0.dist(y.1)))
         }
     }
+}
+
+/// The closest point on a finite segment, with the endpoints included. A zero-length
+/// segment is a point rather than a division by zero.
+fn point_on_segment(p: Vec3, a: Vec3, b: Vec3) -> Vec3 {
+    let ab = b - a;
+    let n = ab.dot(ab);
+    if n <= 0.0 { a } else { a + ab * ((p - a).dot(ab) / n).clamp(0.0, 1.0) }
+}
+
+/// Exact finite segment/segment distance. The quadratic minimum is either interior to
+/// both segments, or on one of four endpoints' projections. Checking both cases also
+/// handles parallel, crossing, reversed and zero-length segments without a mesh.
+fn segments_closest(a: Vec3, b: Vec3, c: Vec3, d: Vec3) -> (Vec3, Vec3) {
+    let mut candidates = vec![
+        (a, point_on_segment(a, c, d)),
+        (b, point_on_segment(b, c, d)),
+        (point_on_segment(c, a, b), c),
+        (point_on_segment(d, a, b), d),
+    ];
+    let (u, v, w) = (b - a, d - c, a - c);
+    let (uu, uv, vv, uw, vw) = (u.dot(u), u.dot(v), v.dot(v), u.dot(w), v.dot(w));
+    let denom = uu * vv - uv * uv;
+    if denom > 1e-14 * uu * vv {
+        let s = (uv * vw - vv * uw) / denom;
+        let t = (uu * vw - uv * uw) / denom;
+        if (0.0..=1.0).contains(&s) && (0.0..=1.0).contains(&t) {
+            candidates.push((a + u * s, c + v * t));
+        }
+    }
+    candidates.into_iter().min_by(|x, y| x.0.dist(x.1).total_cmp(&y.0.dist(y.1))).unwrap_or((a, c))
+}
+
+/// This calculation applies only to geometries described as a point or a straight
+/// finite segment. Curved edges and trimmed faces continue through the sampled path.
+fn linear_ends(shape: Shape) -> Option<(Vec3, Vec3)> {
+    match shape {
+        Shape::Point(p) => Some((p, p)),
+        Shape::Line { a, b } => Some((a, b)),
+        _ => None,
+    }
+}
+
+fn exact_linear_closest(a: Shape, b: Shape) -> Option<(Vec3, Vec3)> {
+    let ((a, b), (c, d)) = (linear_ends(a)?, linear_ends(b)?);
+    Some(segments_closest(a, b, c, d))
+}
+
+fn exact_linear_farthest(a: Shape, b: Shape) -> Option<(Vec3, Vec3)> {
+    let ((a, b), (c, d)) = (linear_ends(a)?, linear_ends(b)?);
+    [(a, c), (a, d), (b, c), (b, d)]
+        .into_iter()
+        .max_by(|x, y| x.0.dist(x.1).total_cmp(&y.0.dist(y.1)))
 }
 
 /// Two straight edges sharing exactly one end define rays away from that corner. Their
@@ -517,9 +601,13 @@ pub(crate) fn measure_items(s: &Session, items: &Value) -> Result<Value> {
         }
     }
     if let [a, b] = described.as_slice() {
-        let near = closest(&a.geo, &b.geo);
-        let far = farthest(&a.geo, &b.geo);
+        let analytic_min = exact_linear_closest(a.shape, b.shape);
+        let analytic_max = exact_linear_farthest(a.shape, b.shape);
+        let near = analytic_min.or_else(|| closest(&a.geo, &b.geo));
+        let far = analytic_max.or_else(|| farthest(&a.geo, &b.geo));
         let c = centre(&a.shape, &b.shape);
+        let mut min_method = if analytic_min.is_some() { "analytic_linear" } else { "sampled_geometry" };
+        let max_method = if analytic_max.is_some() { "analytic_linear" } else { "sampled_geometry" };
         // An exact closest or farthest distance stands only where the mesh agrees with it to
         // within its chord error (a bounded face can end before the exact value's point).
         let radii = [a.shape, b.shape].iter().map(|x| if let Shape::Round { radius, .. } = x { *radius } else { 0.0 }).sum::<f64>();
@@ -529,6 +617,7 @@ pub(crate) fn measure_items(s: &Session, items: &Value) -> Result<Value> {
             && (m - exact).abs() <= slack
         {
             min = Some(exact);
+            min_method = "analytic_round";
         }
         let mut max = far.map(|(p, q)| p.dist(q));
         if let (Some(exact), Some(m)) = (c.and_then(|c| c.max), max)
@@ -542,12 +631,23 @@ pub(crate) fn measure_items(s: &Session, items: &Value) -> Result<Value> {
             out["to"] = json!(q);
             out["delta"] = json!(q - p);
             out["min"] = json!(d);
+            out["min_method"] = json!(min_method);
+            out["min_exact"] = json!(min_method != "sampled_geometry");
+            if min_method == "sampled_geometry" {
+                // Sampling and surface faceting have no certified global error bound.
+                out["min_error_bound_mm"] = Value::Null;
+            }
         }
         if let (Some((p, q)), Some(d)) = (far, max) {
             out["max"] = json!(d);
             out["max_from"] = json!(p);
             out["max_to"] = json!(q);
             out["max_delta"] = json!(q - p);
+            out["max_method"] = json!(max_method);
+            out["max_exact"] = json!(max_method == "analytic_linear");
+            if max_method == "sampled_geometry" {
+                out["max_error_bound_mm"] = Value::Null;
+            }
         }
         if let Some(c) = c {
             out["center_distance"] = json!(c.distance);
@@ -584,4 +684,63 @@ fn farthest(a: &Geo, b: &Geo) -> Option<(Vec3, Vec3)> {
         }
     }
     best.map(|(_, x, y)| (x, y))
+}
+
+#[cfg(test)]
+mod inspection_tests {
+    use super::*;
+    use std::f64::consts::PI;
+
+    fn assert_close_mm(got: f64, expected: f64, tolerance_mm: f64) {
+        assert!((got - expected).abs() <= tolerance_mm, "got {got} mm, expected {expected} ± {tolerance_mm} mm");
+    }
+
+    #[test]
+    fn point_to_point_and_finite_edge_have_analytic_witnesses() {
+        let p = Shape::Point(Vec3::new(5.0, 4.0, 0.0));
+        let q = Shape::Point(Vec3::new(5.0, 0.0, 0.0));
+        let (a, b) = exact_linear_closest(p, q).unwrap();
+        assert_eq!((a, b), (Vec3::new(5.0, 4.0, 0.0), Vec3::new(5.0, 0.0, 0.0)));
+        assert_close_mm(a.dist(b), 4.0, 1e-12);
+
+        let line = Shape::Line { a: Vec3::ZERO, b: Vec3::new(2.0, 0.0, 0.0) };
+        let (a, b) = exact_linear_closest(p, line).unwrap();
+        assert_eq!(b, Vec3::new(2.0, 0.0, 0.0)); // clamp: not infinite line
+        assert_close_mm(a.dist(b), 5.0, 1e-12);
+    }
+
+    #[test]
+    fn crossing_and_skew_segments_are_not_measured_from_chords() {
+        let a = Shape::Line { a: Vec3::new(-10.0, 0.0, 0.0), b: Vec3::new(10.0, 0.0, 0.0) };
+        let b = Shape::Line { a: Vec3::new(0.0, -10.0, 0.0), b: Vec3::new(0.0, 10.0, 0.0) };
+        assert_close_mm(exact_linear_closest(a, b).unwrap().0.dist(exact_linear_closest(a, b).unwrap().1), 0.0, 1e-12);
+        let c = Shape::Line { a: Vec3::new(0.0, -10.0, 0.001), b: Vec3::new(0.0, 10.0, 0.001) };
+        let (x, y) = exact_linear_closest(a, c).unwrap();
+        assert_close_mm(x.dist(y), 0.001, 1e-12); // a very thin 1 µm gap
+        let reversed = Shape::Line { a: Vec3::new(0.0, 10.0, 0.001), b: Vec3::new(0.0, -10.0, 0.001) };
+        let (x, y) = exact_linear_closest(a, reversed).unwrap();
+        assert_close_mm(x.dist(y), 0.001, 1e-12);
+    }
+
+    #[test]
+    fn zero_length_and_parallel_lines_stay_finite() {
+        let point = Shape::Line { a: Vec3::new(0.0, 4.0, 3.0), b: Vec3::new(0.0, 4.0, 3.0) };
+        let line = Shape::Line { a: Vec3::ZERO, b: Vec3::new(10.0, 0.0, 0.0) };
+        let (x, y) = exact_linear_closest(point, line).unwrap();
+        assert_close_mm(x.dist(y), 5.0, 1e-12);
+        let other = Shape::Line { a: Vec3::new(0.0, 4.0, 3.0), b: Vec3::new(10.0, 4.0, 3.0) };
+        let (x, y) = exact_linear_closest(line, other).unwrap();
+        assert_close_mm(x.dist(y), 5.0, 1e-12);
+    }
+
+    #[test]
+    fn analytic_circle_and_half_arc_have_correct_length_mm() {
+        let radius_mm = 5.0;
+        let full_length_mm = 2.0 * PI * radius_mm;
+        let half_length_mm = PI * radius_mm;
+        assert_close_mm(radius_mm * std::f64::consts::TAU, full_length_mm, 1e-12);
+        assert_close_mm(radius_mm * PI, half_length_mm, 1e-12);
+        let pts = arc_points(Vec3::ZERO, UnitVec3::Z, Vec3::new(radius_mm, 0.0, 0.0), PI);
+        assert!(polyline_len(&pts) < half_length_mm, "facets must not be used for arc length");
+    }
 }
