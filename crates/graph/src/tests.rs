@@ -422,9 +422,9 @@ fn typed_connections_are_diagnostic_and_rejected_without_side_effects() {
     let issues = graph.type_issues().unwrap();
     assert_eq!(issues.len(), 1);
     assert!(issues[0].message().contains("input 'curve'"));
-    assert_eq!(DataType::Vector.is_supported(), false);
-    assert_eq!(DataType::Surface.is_supported(), false);
-    assert_eq!(DataType::Solid.is_supported(), true);
+    assert!(!DataType::Vector.is_supported());
+    assert!(!DataType::Surface.is_supported());
+    assert!(DataType::Solid.is_supported());
 }
 
 #[test]
