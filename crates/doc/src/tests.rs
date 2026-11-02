@@ -725,7 +725,7 @@ fn history_missing_sketch_ref_invalidates_a_cached_success_and_recovers() {
     let FeatureKind::Extrude { sketch, .. } = &mut doc.feature_mut(consumer).unwrap().kind else { panic!("extrude"); };
     *sketch = SketchId(9_999_999);
     let graph = doc.feature_dependency_graph();
-    assert_eq!(graph.blocking_error(consumer).is_some(), true, "{graph:?}");
+    assert!(graph.blocking_error(consumer).is_some(), "{graph:?}");
     assert_eq!(graph.issues.iter().find(|p| p.feature == consumer).map(|p| p.code), Some("missing_sketch"));
     model.evaluate(&doc);
     let failed = model.result(consumer).unwrap();
