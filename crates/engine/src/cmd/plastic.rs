@@ -644,6 +644,10 @@ mod tests {
         assert!(rel(volume(&mut s) - v0, want) < 1e-6, "{}", volume(&mut s) - v0);
         let m = run(&mut s, "inspect.measure", json!({}));
         assert!((m["bodies"][0]["bbox"]["max"][0].as_f64().unwrap_or(0.0) - 40.0).abs() < 1e-9);
+        let nominal = run(&mut s, "plastic.audit", json!({}));
+        assert!(nominal["feature_checks"].as_array().is_some_and(|checks| checks.iter().any(|entry| {
+            entry["kind"] == "snap_beam_thickness" && entry["nominal_mm"] == 1.5
+        })));
         assert!(s.execute("plastic.snap_fit", &json!({"position": [5, 5, 4], "direction": [0, 0, 1], "hook": [0, 0, 1], "length": 15, "thickness": 1.5, "width": 6, "catch_depth": 1, "catch_length": 3})).is_err());
     }
 
@@ -775,6 +779,10 @@ mod tests {
         let (mut h, v0) = plate();
         run(&mut h, "plastic.rest", json!({"position": [30, 30, 3], "width": 10, "length": 20, "height": 4, "thickness": 1}));
         assert!(rel(volume(&mut h) - v0, 224.0) < 1e-6, "{}", volume(&mut h) - v0);
+        let nominal = run(&mut h, "plastic.audit", json!({}));
+        assert!(nominal["feature_checks"].as_array().is_some_and(|checks| checks.iter().any(|entry| {
+            entry["kind"] == "rest_nominal_wall" && entry["nominal_mm"] == 1.0
+        })));
         // Drafted 2°: the section shrinks by 2·s·tan 2° each way at height s.
         let (mut d, v0) = plate();
         run(&mut d, "plastic.rest", json!({"position": [30, 30, 3], "width": 10, "length": 20, "height": 4, "draft": "2 deg"}));
