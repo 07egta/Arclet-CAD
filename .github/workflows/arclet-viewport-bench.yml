@@ -53,6 +53,10 @@ jobs:
             echo "Measuring $scene with software Vulkan"
             ./target/release/examples/arclet_viewport_bench "$scene" | tee "bench-results/software/$scene.json"
           done
+      - name: Check reference-image cache regression (CPU-only unit test)
+        # The test never needs a physical GPU and checks pixel-version reuse, geometry
+        # invalidation, and opacity invalidation.
+        run: cargo test --release --locked -p solidcraft-gpu --lib reference_image_quad_buffers_have_exact_geometry_keys
       - name: Upload per-scene metrics
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
