@@ -41,7 +41,7 @@ const EDIT_COMMANDS: &[&str] = &[
     "solid.torus",
 ];
 
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum Permission {
     ModelRead,
@@ -301,8 +301,8 @@ fn validate_manifest(manifest: &Manifest) -> Result<(), String> {
     if id.is_empty()
         || id.len() > 80
         || !id.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'.' || c == b'_' || c == b'-')
-        || id.starts_with(['.', '-', '_'])
-        || id.ends_with(['.', '-', '_'])
+        || id.starts_with(&['.', '-', '_'][..])
+        || id.ends_with(&['.', '-', '_'][..])
         || id.contains("..")
     {
         return Err("Invalid plugin ID".into());
@@ -314,7 +314,7 @@ fn validate_manifest(manifest: &Manifest) -> Result<(), String> {
         return Err(format!("Incompatible plugin API: {} (host supports {API_VERSION})", manifest.api_version));
     }
     let exe = manifest.executable.as_str();
-    if exe.is_empty() || exe.starts_with('.') || exe.contains(['/', '\\', ':']) || exe.len() > 128 {
+    if exe.is_empty() || exe.starts_with('.') || exe.contains(&['/', '\\', ':'][..]) || exe.len() > 128 {
         return Err("Executable must be a filename within the plugin directory".into());
     }
     if manifest.commands.is_empty() || manifest.commands.len() > MAX_COMMANDS {
