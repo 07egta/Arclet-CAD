@@ -97,11 +97,18 @@ fn check(s: &mut Session, p: &Value) -> Result<Value> {
 pub(crate) fn analyze(positions: &[Vec3], triangles: &[[u32; 3]], tolerance: f64) -> Value {
     let (welded, unique, duplicate_vertices) = weld_vertices(positions, tolerance);
     let mut degenerate_triangles = 0usize;
+    let mut invalid_vertex_references = 0usize;
+    let mut duplicate_faces = 0usize;
+    let mut winding_conflicts = 0usize;
+    let mut short_edges = 0usize;
+    let mut seen_faces: HashSet<[usize; 3]> = HashSet::new();
+    let mut oriented: HashMap<(usize, usize), (u32, u32)> = HashMap::new();
     let mut edges: HashMap<(usize, usize), u32> = HashMap::new();
     for triangle in triangles {
         let [a, b, c] = *triangle;
         let (Some(&pa), Some(&pb), Some(&pc)) = (positions.get(a as usize), positions.get(b as usize), positions.get(c as usize)) else {
             degenerate_triangles += 1;
+            invalid_vertex_references += 1;
             continue;
         };
         if a == b || b == c || c == a || flat(pa, pb, pc) {
@@ -116,10 +123,19 @@ pub(crate) fn analyze(positions: &[Vec3], triangles: &[[u32; 3]], tolerance: f64
             // Welding collapsed the triangle: it has no side to count.
             continue;
         }
-        for (u, v) in [(wa, wb), (wb, wc), (wc, wa)] {
+        let mut face = [wa, wb, wc];
+        face.sort_unstable();
+        if !seen_faces.insert(face) {
+            duplicate_faces += 1;
+        }
+        for (u, v, distance) in [(wa, wb, pa.dist(pb)), (wb, wc, pb.dist(pc)), (wc, wa, pc.dist(pa))] {
+            if tolerance > 0.0 && distance < tolerance { short_edges += 1; }
             let key = if u < v { (u, v) } else { (v, u) };
             let n = edges.entry(key).or_insert(0);
             *n = n.saturating_add(1);
+            let counts = oriented.entry(key).or_default();
+            if u < v { counts.0 = counts.0.saturating_add(1); }
+            else { counts.1 = counts.1.saturating_add(1); }
         }
     }
     let mut naked_edges = 0usize;
@@ -131,16 +147,25 @@ pub(crate) fn analyze(positions: &[Vec3], triangles: &[[u32; 3]], tolerance: f64
             _ => non_manifold_edges += 1,
         }
     }
+    for (key, &(forward, reverse)) in &oriented {
+        if edges.get(key) == Some(&2) && (forward != 1 || reverse != 1) {
+            winding_conflicts += 1;
+        }
+    }
     let boundary_loops = boundary_loops(&edges, unique);
     json!({
         "vertices": positions.len(),
         "triangles": triangles.len(),
         "degenerate_triangles": degenerate_triangles,
+        "invalid_vertex_references": invalid_vertex_references,
+        "duplicate_faces": duplicate_faces,
+        "winding_conflicts": winding_conflicts,
+        "short_edges": short_edges,
         "duplicate_vertices": duplicate_vertices,
         "naked_edges": naked_edges,
         "non_manifold_edges": non_manifold_edges,
         "boundary_loops": boundary_loops,
-        "closed": !triangles.is_empty() && naked_edges == 0 && non_manifold_edges == 0,
+        "closed": !triangles.is_empty() && degenerate_triangles == 0 && duplicate_faces == 0 && winding_conflicts == 0 && naked_edges == 0 && non_manifold_edges == 0,
     })
 }
 
