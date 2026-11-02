@@ -3,6 +3,7 @@
 mod app;
 mod classic_look;
 mod cmdline;
+mod command_workflows;
 mod commands;
 mod panels;
 mod platform;
