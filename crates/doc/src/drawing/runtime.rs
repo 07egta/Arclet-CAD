@@ -18,7 +18,7 @@ use crate::{DocError, Result};
 
 /// One unsaved, linked drawing-view request. The source id identifies the
 /// design file; the caller must resolve/load and evaluate that design into
-/// \`defs\` and \`scene\` before generating curves.
+/// `defs` and `scene` before generating curves.
 #[derive(Clone, Copy, Debug)]
 pub struct LinkedView {
     pub sheet_id: u64,
@@ -71,9 +71,9 @@ impl Drawing {
             .map_err(|e| DocError::Invalid(e.to_string()))
     }
 
-    /// Resolve display units for dimension labels. \`FollowModel\` must use the
+    /// Resolve display units for dimension labels. `FollowModel` must use the
     /// specific source design's unit supplied by its reader, never paper mm;
-    /// \`Fixed\` takes the drawing's declared unit. Geometry stays in mm.
+    /// `Fixed` takes the drawing's declared unit. Geometry stays in mm.
     pub fn dimension_style_for(&self, source_unit: LengthUnit, mut style: DimensionStyle) -> Result<DimensionStyle> {
         self.validate()?;
         style.unit = match &self.units {
