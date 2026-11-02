@@ -126,6 +126,8 @@ pub fn tool_definitions() -> Vec<Value> {
                         "items": {"type": "object", "properties": {"command": {"type": "string"}, "params": {"type": "object"}}, "required": ["command"]},
                     },
                     "rollback": {"type": "boolean", "description": "Undo completed steps when one fails (default true)"},
+                    "if_document_id": string("Optional document_id from inspect_state; must accompany if_revision. Refuse if a different design is active"),
+                    "if_revision": {"type": "integer", "description": "Optional revision from inspect_state; must accompany if_document_id. Refuse a stale batch before executing anything"},
                     "coalesce_parameters": {"type": "boolean", "description": "Set each run of consecutive plain parameter edits (parameters.change or set_parameter with a name and a value, or changes) together, rebuilding the design once for the run instead of once per edit; a run that is refused goes step by step, naming the refused step. Other steps still see the design up to date. Each step keeps its own result; the run is one undo step (default false)"},
                     "timings": {"type": "boolean", "description": "Add `timings`: [{index, command, ms}] for every step run (the failing one included) and `total_ms` (default false)"},
                     "profile": {"type": "boolean", "description": "Like timings, and each step's `profile`: {boolean_ms, tessellate_ms, other_ms}, its time in kernel booleans, in tessellation and the rest (default false)"},
@@ -149,6 +151,20 @@ pub fn tool_definitions() -> Vec<Value> {
                     "measure": {"type": "boolean", "description": "Measure bodies (default true)"},
                     "sketches": {"type": "boolean", "description": "Full sketch contents (default true; false = summary only)"},
                     "joints": {"type": "boolean", "description": "Joint definitions as joint.inspect gives them, when the design has joints (default true)"},
+                }),
+                &[],
+            ),
+            Effect::ReadOnly,
+        ),
+        tool(
+            "inspect_state",
+            "Inspect state with edit token",
+            "A compact, read-only snapshot for AI coordination. Returns document_id and revision (an opaque pair              for optimistic batch guards) plus design: name, path, dirty, active sketch, selection, parameter values,              feature history and errors, body and sketch summaries. Optional measurements, full command catalog              and feature inputs. If the document changes while these calls are read, refuse the mixed snapshot.              The token tracks document edits, not concurrent selection changes.",
+            obj(
+                json!({
+                    "measure": {"type": "boolean", "description": "Include per-body measurements (default false)"},
+                    "commands": {"type": "boolean", "description": "Include the available engine command catalog (default false)"},
+                    "feature_inputs": {"type": "boolean", "description": "Include feature parameter inputs from parameters.list (default false)"},
                 }),
                 &[],
             ),
@@ -511,6 +527,7 @@ fn dispatch(b: &mut dyn Backend, name: &str, a: &Map<String, Value>) -> Result<V
             let v = exec(b, id, a.get("params").cloned().filter(Value::is_object).unwrap_or(json!({})))?;
             Ok(if a.get("verbose").and_then(Value::as_bool).unwrap_or(true) { v } else { compact(v) })
         }
+        "inspect_state" => inspect_state(b, a),
         "inspect_design" => {
             let measure = a.get("measure").and_then(Value::as_bool).unwrap_or(true);
             let mut d = b.call("document.inspect", json!({"measure": measure}))?;
@@ -567,6 +584,36 @@ fn dispatch(b: &mut dyn Backend, name: &str, a: &Map<String, Value>) -> Result<V
         "save" => exec(b, "file.save", pick(a, &["path", "format"])),
         other => Err(format!("unknown tool `{other}`")),
     }
+}
+
+/// Read the design and its edit token without returning a mixed model snapshot if another
+/// client changes the document during the inspection. Selection alone is not part of the token.
+fn inspect_state(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<Value, String> {
+    let before = exec(b, "document.revision", json!({}))?;
+    let measure = a.get("measure").and_then(Value::as_bool).unwrap_or(false);
+    let design = b.call("document.inspect", json!({"measure": measure}))?;
+    let commands = if a.get("commands").and_then(Value::as_bool) == Some(true) {
+        Some(b.call("engine.commands", json!({}))?)
+    } else {
+        None
+    };
+    let feature_inputs = if a.get("feature_inputs").and_then(Value::as_bool) == Some(true) {
+        Some(exec(b, "parameters.list", json!({"filter": "feature"}))?)
+    } else {
+        None
+    };
+    let after = exec(b, "document.revision", json!({}))?;
+    if before != after {
+        return Err("the document changed during inspect_state; inspect it again before editing".into());
+    }
+    let mut result = json!({"document_id": before["document_id"], "revision": before["revision"], "design": design});
+    if let Some(commands) = commands {
+        result["commands"] = commands;
+    }
+    if let Some(feature_inputs) = feature_inputs {
+        result["feature_inputs"] = feature_inputs;
+    }
+    Ok(result)
 }
 
 /// The command catalog filtered by a case-insensitive substring of id, label, panel or tab
@@ -643,6 +690,7 @@ fn batch_step(step: &Value) -> Result<(String, Value, Option<String>), String> {
             Some(_) => mapped("diagnostics.crash_report", pick(a, &["id"])),
             None => mapped("diagnostics.crash_reports", pick(a, &["limit"])),
         },
+        "inspect_state" => Err("`inspect_state` is a read-only snapshot: call it outside the batch".into()),
         "body_topology" => Err("`body_topology` is a tool, not a command: in a batch use model.edges {body} and model.faces {body}".into()),
         "screenshot" => Err("`screenshot` is a tool, not a command: call it after the batch".into()),
         "batch" => Err("batches don't nest: put the steps in this batch".into()),
@@ -663,6 +711,7 @@ const TOOL_STEPS: &[&str] = &[
     "execute",
     "export",
     "inspect_design",
+    "inspect_state",
     "list_commands",
     "measure",
     "new_design",
@@ -747,6 +796,53 @@ impl Undo {
     }
 }
 
+/// A precondition failure is a structured batch error, not a JSON-RPC failure. No command ran.
+fn batch_guard_error(len: usize, code: &str, message: String, expected: Value, actual: Value) -> Value {
+    text_result(
+        &json!({
+            "ok": false,
+            "completed": 0,
+            "failed": {"index": null, "command": null, "code": code, "error": message, "expected": expected, "actual": actual},
+            "rolled_back": false,
+            "undone": 0,
+            "applied": [],
+            "not_run": (0..len).collect::<Vec<_>>(),
+            "results": [],
+        }),
+        true,
+    )
+}
+
+/// Check the current document before attempting a guarded batch. The desktop control server
+/// repeats this check *inside* engine.batch, so another client's queued edit cannot race it.
+fn check_batch_guard(b: &mut dyn Backend, a: &Map<String, Value>, len: usize) -> Option<Value> {
+    if !a.contains_key("if_document_id") && !a.contains_key("if_revision") {
+        return None;
+    }
+    let (Some(id), Some(rev)) = (a.get("if_document_id").and_then(Value::as_str).filter(|v| !v.is_empty()), a.get("if_revision").and_then(Value::as_u64))
+    else {
+        return Some(batch_guard_error(
+            len,
+            "invalid_precondition",
+            "if_document_id (nonempty string) and if_revision (nonnegative integer) must both be provided".into(),
+            json!({"document_id": a.get("if_document_id"), "revision": a.get("if_revision")}),
+            Value::Null,
+        ));
+    };
+    let expected = json!({"document_id": id, "revision": rev});
+    match exec(b, "document.revision", json!({})) {
+        Ok(actual) if actual["document_id"].as_str() == Some(id) && actual["revision"].as_u64() == Some(rev) => None,
+        Ok(actual) => Some(batch_guard_error(
+            len,
+            "stale_state",
+            "the active design or its revision changed; call inspect_state again before retrying".into(),
+            expected,
+            actual,
+        )),
+        Err(e) => Some(batch_guard_error(len, "revision_unavailable", format!("cannot check document revision: {e}"), expected, Value::Null)),
+    }
+}
+
 /// `batch`: run steps in order, stop at the first failure and (by default) go back to the
 /// design as it was before the batch.
 fn batch(b: &mut dyn Backend, a: &Map<String, Value>) -> Value {
@@ -755,6 +851,9 @@ fn batch(b: &mut dyn Backend, a: &Map<String, Value>) -> Value {
     };
     if steps.len() > MAX_BATCH {
         return text_result(&json!(format!("batch too long ({} steps, at most {MAX_BATCH})", steps.len())), true);
+    }
+    if let Some(refusal) = check_batch_guard(b, a, steps.len()) {
+        return refusal;
     }
     let rollback = a.get("rollback").and_then(Value::as_bool).unwrap_or(true);
     let verbose = a.get("verbose").and_then(Value::as_bool).unwrap_or(true);
@@ -830,6 +929,10 @@ fn batch(b: &mut dyn Backend, a: &Map<String, Value>) -> Value {
     // The margin covers the envelope and the `allow_paths` the backend adds.
     let coalesce = a.get("coalesce_parameters").and_then(Value::as_bool).unwrap_or(false);
     let mut params = json!({"commands": steps, "rollback": rollback});
+    if let (Some(id), Some(revision)) = (a.get("if_document_id"), a.get("if_revision")) {
+        params["if_document_id"] = id.clone();
+        params["if_revision"] = revision.clone();
+    }
     if coalesce && let Some(o) = params.as_object_mut() {
         o.insert("coalesce_parameters".into(), Value::Bool(true));
     }
@@ -863,6 +966,13 @@ fn batch(b: &mut dyn Backend, a: &Map<String, Value>) -> Value {
                 return text_result(&Value::String(msg), true);
             }
         }
+    }
+    // An older app may lack engine.batch: check again before falling back to steps.
+    // In headless mode the backend is serialized; in an older bridged app a second
+    // client could still race a step, so guarded calls require a current desktop build
+    // for atomic cross-client protection.
+    if let Some(refusal) = check_batch_guard(b, a, steps.len()) {
+        return refusal;
     }
     let start = if rollback { Undo::begin(b) } else { Undo::None };
     let mut results = Vec::with_capacity(steps.len());
