@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use egui::{RichText, Sense, Stroke, Ui, pos2, vec2};
 use serde_json::{Value, json};
-use solidcraft_doc::layers::DEFAULT;
+use solidcraft_engine::doc::layers::DEFAULT;
 use solidcraft_engine::{Sel, Session};
 use solidcraft_ui_egui::i18n::{format as message, tr};
 use solidcraft_ui_egui::theme::Tokens;
