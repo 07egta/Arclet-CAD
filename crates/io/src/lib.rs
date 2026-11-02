@@ -1053,6 +1053,95 @@ mod tests {
         assert!(read_stl_verified(&nonfinite).is_err());
     }
 
+
+    /// Exchange geometry must survive import, native document persistence, and a second
+    /// exchange export. This is deliberately more demanding than merely opening the file.
+    fn assert_mm_box_state(state: &ModelState, is_brep: bool) {
+        assert_eq!(state.bodies.len(), 1, "a single solid must remain a single solid");
+        let body = &state.bodies[0].body;
+        let volume = solidcraft_kernel::measure(body).unwrap().volume;
+        assert!((volume - 6000.0).abs() <= 0.1, "expected 6000 mm^3, got {volume}");
+        if is_brep {
+            assert_eq!(body.face_count(), 6, "box B-rep must retain six faces");
+        } else {
+            assert!(body.is_mesh(), "mesh exchange should remain a mesh");
+            assert!(body.is_closed_mesh(), "mesh must not acquire open boundaries");
+        }
+        let mesh = export_mesh(body).unwrap();
+        assert!(!mesh.positions.is_empty());
+        for (axis, expected) in [10.0, 20.0, 30.0].into_iter().enumerate() {
+            let values = mesh.positions.iter().map(|p| [p.x, p.y, p.z][axis]);
+            let low = values.clone().fold(f64::INFINITY, f64::min);
+            let high = values.fold(f64::NEG_INFINITY, f64::max);
+            assert!(low.abs() < 0.01, "axis {axis} min: {low}");
+            assert!((high - expected).abs() < 0.01, "axis {axis} max: {high} (expected {expected} mm)");
+        }
+    }
+
+    #[test]
+    fn step_and_iges_exchange_survive_native_save_and_second_export() {
+        let (_, original) = model();
+        for (format, file) in [(Format::Step, "box.step"), (Format::Iges, "box.igs")] {
+            let source = export(&original.state(), &[], format, "box").unwrap();
+            if format == Format::Step {
+                assert!(String::from_utf8_lossy(&source).contains("AP242_MANAGED_MODEL_BASED_3D_ENGINEERING_MIM_LF"));
+            }
+            let imported = step_import_feature(&source, file).unwrap();
+            assert_eq!(imported.body_names.len(), 1, "{file} should have one body");
+            let mut document = Document::new("Exchange sample");
+            document.add_feature(imported.kind, None).unwrap();
+            let saved = write_design_container(&document).unwrap();
+            let reopened = read_design(&saved).unwrap();
+            assert_eq!(reopened, document, "native save must keep the import feature");
+            let mut model = Model::new();
+            model.evaluate(&reopened);
+            assert!(model.results.iter().all(|r| r.error.is_none()), "failed to rebuild {file}");
+            let state = model.state();
+            assert_mm_box_state(&state, true);
+            let outbound = export(&state, &[], format, "reexported").unwrap();
+            let second = step_import_feature(&outbound, file).unwrap();
+            assert_eq!(second.import.bodies.len(), 1);
+            let volume = solidcraft_kernel::measure(&second.import.bodies[0].body).unwrap().volume;
+            assert!((volume - 6000.0).abs() < 0.1, "{file} second import volume {volume}");
+        }
+    }
+
+    #[test]
+    fn stl_obj_3mf_exchange_survives_native_save_and_second_export() {
+        let (_, original) = model();
+        for (format, file) in [
+            (Format::StlBinary, "box.stl"),
+            (Format::Obj, "box.obj"),
+            (Format::ThreeMf, "box.3mf"),
+        ] {
+            let first = export(&original.state(), &[], format, "box").unwrap();
+            if format == Format::StlBinary {
+                assert_eq!(read_stl_verified(&first).unwrap().len(), 12);
+            }
+            let imported = mesh_import_feature(&first, file).unwrap();
+            assert_eq!(imported.body_names.len(), 1, "{file}: one mesh body");
+            let mut document = Document::new("Mesh exchange");
+            document.add_feature(imported.kind, None).unwrap();
+            let saved = write_design_container(&document).unwrap();
+            let reopened = read_design(&saved).unwrap();
+            assert_eq!(reopened, document, "{file}: native save/reopen lost data");
+            let mut model = Model::new();
+            model.evaluate(&reopened);
+            assert!(model.results.iter().all(|r| r.error.is_none()), "{file}: rebuild failed");
+            let state = model.state();
+            assert_mm_box_state(&state, false);
+            let second = export(&state, &[], format, "reexported").unwrap();
+            let imported_again = mesh_import_feature(&second, file).unwrap();
+            assert_eq!(imported_again.body_names.len(), 1);
+            let solidcraft_doc::FeatureKind::MeshImport { meshes, .. } = imported_again.kind else { panic!("expected a mesh") };
+            assert_eq!(meshes.len(), 1);
+            assert_eq!(meshes[0].triangles.len(), 36, "{file}: twelve faces worth of indices");
+            if format == Format::StlBinary {
+                assert_eq!(read_stl_verified(&second).unwrap().len(), 12);
+            }
+        }
+    }
+
     #[test]
     fn stl_round_trip_volume() {
         let (_, m) = model();
