@@ -629,7 +629,7 @@ impl ArcletApp {
                 self.plugin_result = None;
             }
             for error in self.plugins.diagnostics().iter().take(8) {
-                ui.label(error);
+                ui.label(error.as_str());
             }
             ui.separator();
             ui.label(tr("arclet.plugins.params"));
@@ -656,7 +656,7 @@ impl ArcletApp {
                 ui.label(format!("{}: {:?}", tr("arclet.plugins.permissions"), plugin.permissions));
                 if plugin.enabled {
                     for command in plugin.commands {
-                        if ui_kit::button(ui, &command, ui_kit::Button::Normal).clicked() {
+                        if ui_kit::button(ui, command.as_str(), ui_kit::Button::Normal).clicked() {
                             self.run_plugin_command(&command);
                         }
                     }
@@ -664,7 +664,7 @@ impl ArcletApp {
             }
             if let Some(result) = &self.plugin_result {
                 ui.separator();
-                ui.label(result);
+                ui.label(result.as_str());
             }
         });
         self.show_plugins &= !closed;
