@@ -416,19 +416,24 @@ impl Brep {
         for (shell_index, shell) in self.shells.iter().enumerate() {
             // Count each oriented use once, including a seam edge repeated in the
             // same wire. Opposite seam uses are permitted; a third use is not.
-            let mut usage = vec![(0u32, None::<(usize, usize, bool)>, false); shell.edges.len()];
+            let mut usage = vec![(0u32, None::<(usize, usize, bool)>, None::<(usize, usize, bool)>, false); shell.edges.len()];
             let mut visited = vec![false; shell.vertices.len()];
             for (face_index, face) in shell.faces.iter().enumerate() {
                 for (wire_index, wire) in face.loops.iter().enumerate() {
                     for use_ in wire {
-                        let Some((count, first, across_loops)) = usage.get_mut(use_.edge as usize) else {
+                        let Some((count, first, second, across_loops)) = usage.get_mut(use_.edge as usize) else {
                             return Err(Invalid("edge reference"));
                         };
                         if *count == 0 {
                             *first = Some((face_index, wire_index, use_.forward));
-                        } else if let Some((previous_face, previous_wire, _)) = *first {
+                        } else {
+                            if *count == 1 {
+                                *second = Some((face_index, wire_index, use_.forward));
+                            }
+                            if let Some((previous_face, previous_wire, _)) = *first {
                             if previous_face == face_index && previous_wire != wire_index {
                                 *across_loops = true;
+                            }
                             }
                         }
                         *count += 1;
@@ -456,7 +461,7 @@ impl Brep {
                 unused_vertices: visited.iter().filter(|&&used| !used).count(),
                 example_problem_edges: Vec::new(),
             };
-            for (edge_index, (count, first, across_loops)) in usage.into_iter().enumerate() {
+            for (edge_index, (count, first, second, across_loops)) in usage.into_iter().enumerate() {
                 let bad = match count {
                     0 => {
                         audit.unused_edges += 1;
@@ -467,12 +472,6 @@ impl Brep {
                         true
                     }
                     2 => {
-                        // Find the second use without storing all uses per edge.
-                        let second = shell.faces.iter().enumerate().flat_map(|(fi, f)| {
-                            f.loops.iter().enumerate().flat_map(move |(wi, wire)| {
-                                wire.iter().filter(move |u| u.edge as usize == edge_index).map(move |u| (fi, wi, u.forward))
-                            })
-                        }).nth(1);
                         let (Some((first_face, first_wire, first_direction)), Some((last_face, last_wire, last_direction))) = (first, second) else {
                             return Err(Invalid("edge incidence"));
                         };
