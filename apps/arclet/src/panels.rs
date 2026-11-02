@@ -139,15 +139,13 @@ impl PanelState {
         if let Some(error) = &self.error {
             ui.colored_label(Tokens::get().error, error);
         }
-        // Reserve the fold control before the scroll area claims the available
-        // vertical space. Long property lists can scroll without burying Close.
-        ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-            if ui_kit::button(ui, "›", Button::Small).on_hover_text(tr("arclet.panel.collapse")).clicked() {
-                self.open = false;
-            }
-        });
+        // Cap scrolling content before drawing the footer, so the collapse
+        // control stays reachable even with long or translated property lists.
+        let available = ui.available_height();
+        let scroll_height = (available - Tokens::get().control_height - Tokens::get().space_8).max(1.0);
         egui::ScrollArea::vertical()
             .id_salt(("arclet_inspector_content", self.tab as u8))
+            .max_height(scroll_height)
             .auto_shrink([false, false])
             .show(ui, |ui| match self.tab {
                 Tab::Properties => self.properties(cad, ui),
@@ -155,6 +153,9 @@ impl PanelState {
                 Tab::Layers => self.layers(cad, ui),
                 Tab::Display => self.display(cad, ui),
             });
+        if ui_kit::button(ui, "›", Button::Small).on_hover_text(tr("arclet.panel.collapse")).clicked() {
+            self.open = false;
+        }
     }
 
     /// Run a command through the shared host. A refusal is kept for the panel to show.
