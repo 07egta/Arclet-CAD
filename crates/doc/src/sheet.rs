@@ -485,8 +485,24 @@ impl Document {
             angle_display: AngleDisplay::parse(&r.angle_display)
                 .ok_or_else(|| DocError::Invalid(format!("unknown bend angle display `{}` (bend or included)", r.angle_display)))?,
         };
-        if !(0.0..=1.0).contains(&v.k_factor) || v.bend_radius < 0.0 {
-            return Err(DocError::Invalid("the K-factor must be 0…1 and the bend radius positive".into()));
+        if !v.k_factor.is_finite() || !(0.0..=1.0).contains(&v.k_factor) {
+            return Err(DocError::Invalid("the K-factor must be finite and between 0 and 1".into()));
+        }
+        // These are lengths, not optional switches. An unchecked NaN radius can
+        // otherwise pass a '< 0' guard and contaminate the neutral-axis length,
+        // resulting in unusable solids and DXF coordinates. Zero is supported
+        // where a hem, gap or relief is intentionally omitted.
+        for (name, length) in [
+            ("bend radius", v.bend_radius),
+            ("bend relief width", v.relief_width),
+            ("bend relief depth", v.relief_depth),
+            ("corner relief", v.corner_relief),
+            ("hem gap", v.hem_gap),
+            ("flange gap", v.gap),
+        ] {
+            if !length.is_finite() || !(0.0..=1e7).contains(&length) {
+                return Err(DocError::Invalid(format!("the sheet {name} must be finite and between 0 and 10,000,000 mm")));
+            }
         }
         Ok(v)
     }
@@ -2555,6 +2571,18 @@ impl SheetBody {
         if edges.is_empty() || edges.len() > 1000 {
             return Err(DocError::Invalid("pick 1…1000 edges".into()));
         }
+        // Unlike the rule radius, an edge flange can carry its own radius
+        // expression. Check it before modifying the base or existing panels:
+        // negative/NaN radii otherwise contaminate the bend zone and flat DXF.
+        if !radius.is_finite() || !(0.0..=1e7).contains(&radius) {
+            return Err(DocError::Invalid("the flange bend radius must be finite and between 0 and 10,000,000 mm".into()));
+        }
+        if !self.t.is_finite() || self.t <= 0.0 || !self.k.is_finite() || !(0.0..=1.0).contains(&self.k) {
+            return Err(DocError::Invalid("the sheet thickness or K-factor is invalid".into()));
+        }
+        if relief.size.is_some_and(|size| !size.is_finite() || size < 0.0 || size > 1e7) {
+            return Err(DocError::Invalid("the corner relief size must be finite and non-negative".into()));
+        }
         // With several edges a message says which one it is about.
         let on = |k: usize| if edges.len() > 1 { format!("edge {}: ", k + 1) } else { String::new() };
         // Each edge's setback and leg (the panel past the bend) follow its own angle and height.
@@ -3589,6 +3617,15 @@ impl SheetBody {
 
     /// A flat hem: a 180° bend with a tiny radius at the panel edge, `length` to its outer face.
     pub fn add_hem(&mut self, pick: Vec3, length: f64, gap: f64, flip: bool) -> Result<usize> {
+        // The hem's gap is its inner bend radius. A negative or non-finite
+        // override would otherwise build an invalid 180-degree bend even
+        // though the rule's own hem gap is validated.
+        if !gap.is_finite() || !(0.0..=1e7).contains(&gap) {
+            return Err(DocError::Invalid("the hem gap must be finite and between 0 and 10,000,000 mm".into()));
+        }
+        if !length.is_finite() || length <= 0.0 {
+            return Err(DocError::Invalid("the hem length must be finite and positive".into()));
+        }
         let (panel, a, b, top, dist) = self.edge_at(pick).ok_or_else(|| DocError::Invalid("no sheet edge there".into()))?;
         if dist > self.t * 2.0 + 1e-3 {
             return Err(DocError::Invalid("pick an edge of the sheet".into()));
@@ -3669,8 +3706,8 @@ impl SheetBody {
         if !(angle > 1e-6 && angle <= std::f64::consts::PI - 1e-6) {
             return Err(DocError::Invalid("the fold angle must be between 0 and 180°".into()));
         }
-        if !(radius >= 0.0) {
-            return Err(DocError::Invalid("the bend radius must not be negative".into()));
+        if !radius.is_finite() || !(0.0..=1e7).contains(&radius) {
+            return Err(DocError::Invalid("the fold bend radius must be finite and between 0 and 10,000,000 mm".into()));
         }
         // The panel the line lies on: both ends on its top or bottom face, the middle inside it.
         let on_face = |q: Vec3| q.z.abs() < 1e-4 || (q.z - self.t).abs() < 1e-4;
@@ -8627,4 +8664,143 @@ mod tests {
         assert_eq!(material.len(), 2);
         assert!(after.parted_from_base(&material, &two).unwrap().is_empty());
     }
+
+
+    /// Analytic reference for a 90-degree bend with no adjoining corners:
+    /// the neutral-axis arc is BA = pi/2 * (R + K*T), the outer-sharp
+    /// setback is R + T, and the formed leg is height - (R + T).
+    /// Both upward and downward bends must cut the same size blank.
+    #[test]
+    fn arclet_ninety_degree_blank_matches_neutral_axis_across_thickness_radius_and_direction() {
+        let cases = [(0.8, 0.8, 0.33), (2.0, 1.0, 0.5), (3.2, 5.0, 0.44)];
+        for (thickness, radius, k) in cases {
+            for flip in [false, true] {
+                let rule = RuleValues { thickness, k_factor: k, bend_radius: radius, ..steel() };
+                let region = rect(
+                    Vec2::ZERO, Vec2::new(100.0, 0.0),
+                    Vec2::new(100.0, 60.0), Vec2::new(0.0, 60.0),
+                );
+                let mut sheet = base_flange("Bracket", "Engineering", &rule, Plane::XY, region);
+                sheet.add_flange(
+                    Vec3::new(50.0, 0.0, thickness), 40.0,
+                    std::f64::consts::FRAC_PI_2, radius, "inside", flip,
+                ).unwrap();
+                let flange = &sheet.flanges[0];
+                let allowance = std::f64::consts::FRAC_PI_2 * (radius + k * thickness);
+                let setback = radius + thickness;
+                let expected_blank = 60.0 - setback + allowance + (40.0 - setback);
+                assert!((sheet.allowance(flange) - allowance).abs() < 1e-9);
+                assert!((flange.leg - (40.0 - setback)).abs() < 1e-9);
+                assert_eq!(flange.angle < 0.0, flip, "direction must not change neutral-axis length");
+                let (width, height) = sheet.flat_size().unwrap();
+                assert!((width - 100.0).abs() < 1e-6, "{thickness}, {radius}, {k}, {flip}: {width}");
+                assert!((height - expected_blank).abs() < 1e-6, "{thickness}, {radius}, {k}, {flip}: {height} != {expected_blank}");
+                let bends = sheet.bends();
+                assert_eq!(bends.len(), 1, "{thickness}, {radius}, {k}, {flip}");
+                assert!((bends[0].allowance - allowance).abs() < 1e-9);
+                assert!((bends[0].length - 100.0).abs() < 1e-6);
+                assert_eq!(bends[0].up, !flip);
+                let flat_before = sheet.flat_regions().unwrap();
+                assert_eq!(flat_before.len(), 1, "unrelieved bracket must have one blank");
+                let formed = sheet.solid().unwrap();
+                assert!(formed.validity().is_empty(), "the folded bracket must be a valid B-rep");
+                sheet.flat = true;
+                assert_eq!(sheet.flat_regions().unwrap(), flat_before, "unfolding preserves all the cut material");
+                let unfolded = sheet.solid().unwrap();
+                assert!(unfolded.validity().is_empty(), "unfolded blank must be a valid B-rep");
+                let flat_volume = flat_before.iter().map(Region2::area).sum::<f64>() * thickness;
+                assert!((vol(&unfolded) - flat_volume).abs() <= flat_volume * 1e-5);
+                sheet.flat = false;
+                assert!((sheet.flat_size().unwrap().1 - expected_blank).abs() < 1e-6);
+            }
+        }
+    }
+
+    #[test]
+    fn arclet_invalid_radius_and_corner_relief_never_mutate_an_existing_sheet() {
+        let before = plate(100.0, 60.0);
+        let edge = EdgeFlange {
+            pick: Vec3::new(50.0, 0.0, before.t),
+            height: 40.0, angle: std::f64::consts::FRAC_PI_2, from: HeightFrom::Outer,
+        };
+        for radius in [-1.0, f64::NAN, f64::INFINITY, 10_000_001.0] {
+            let mut sheet = before.clone();
+            assert!(sheet.add_flanges_each(&[edge], radius, "inside", false, ReliefOverride::default()).is_err(), "{radius}");
+            assert_eq!(sheet, before, "invalid flange input must not trim the base");
+        }
+        for size in [-0.1, f64::NAN, f64::INFINITY, 10_000_001.0] {
+            let mut sheet = before.clone();
+            assert!(sheet.add_flanges_each(
+                &[edge], 2.5, "inside", false,
+                ReliefOverride { shape: Some(ReliefShape::Round), size: Some(size) },
+            ).is_err(), "{size}");
+            assert_eq!(sheet, before, "invalid relief size must not change an existing panel");
+        }
+    }
+
+    #[test]
+    fn arclet_rule_length_fields_are_bounded_without_rejecting_zero_relief() {
+        let doc = Document::default();
+        let (params, _) = doc.param_values();
+        for (field, expression, reason) in [
+            ("k_factor", "-0.1", "K-factor"),
+            ("k_factor", "1.1", "K-factor"),
+            ("bend_radius", "-0.1 mm", "bend radius"),
+            ("bend_radius", "10000001 mm", "bend radius"),
+            ("relief_width", "-1 mm", "bend relief width"),
+            ("relief_depth", "-1 mm", "bend relief depth"),
+            ("corner_relief", "-1 mm", "corner relief"),
+            ("hem_gap", "-1 mm", "hem gap"),
+            ("gap", "-1 mm", "flange gap"),
+        ] {
+            let mut rule = SheetRule::steel();
+            for (name, value) in rule.fields_mut() {
+                if name == field {
+                    *value = expression.to_string();
+                }
+            }
+            let error = doc.rule_values(&params, &rule).unwrap_err().to_string();
+            assert!(error.contains(reason), "{field}={expression}: {error}");
+        }
+        let mut zero = SheetRule::steel();
+        zero.relief_width = "0 mm".into();
+        zero.relief_depth = "0 mm".into();
+        zero.corner_relief = "0 mm".into();
+        zero.hem_gap = "0 mm".into();
+        zero.gap = "0 mm".into();
+        assert!(doc.rule_values(&params, &zero).is_ok(), "legacy zero-gap/zero-relief rules stay valid");
+    }
+
+
+
+    #[test]
+    fn arclet_hem_and_fold_reject_invalid_radii_before_editing_material() {
+        let original = plate(100.0, 60.0);
+        let point = Vec3::new(50.0, 0.0, original.t);
+        for (length, gap) in [
+            (30.0, -0.1),
+            (30.0, f64::NAN),
+            (30.0, f64::INFINITY),
+            (30.0, 10_000_001.0),
+            (f64::NAN, 0.01),
+            (f64::INFINITY, 0.01),
+        ] {
+            let mut sheet = original.clone();
+            assert!(sheet.add_hem(point, length, gap, false).is_err(), "invalid hem length={length}, gap={gap}");
+            assert_eq!(sheet, original, "rejected hem must not create any flange");
+        }
+        let a = Vec3::new(0.0, 30.0, original.t);
+        let b = Vec3::new(100.0, 30.0, original.t);
+        for radius in [-1.0, f64::NAN, f64::INFINITY, 10_000_001.0] {
+            let mut sheet = original.clone();
+            let mut warning = None;
+            assert!(sheet.add_fold(
+                a, b, std::f64::consts::FRAC_PI_2, radius,
+                "centerline", false, None, &mut warning,
+            ).is_err(), "invalid fold radius={radius}");
+            assert_eq!(sheet, original, "rejected fold must not trim the existing panel");
+            assert_eq!(warning, None, "invalid radius should fail before attempting to fold");
+        }
+    }
+
 }
