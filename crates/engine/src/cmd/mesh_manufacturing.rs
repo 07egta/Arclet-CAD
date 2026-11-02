@@ -590,6 +590,33 @@ mod tests {
     }
 
     #[test]
+    fn stl_f32_rounding_far_from_origin_can_destroy_a_valid_triangle() {
+        let positions = vec![
+            Vec3::new(100_000_000.0, 0.0, 0.0),
+            Vec3::new(100_000_001.0, 0.0, 0.0),
+            Vec3::new(100_000_000.0, 1.0, 0.0),
+        ];
+        let triangle = [[0, 1, 2]];
+        let before = super::super::analyze(&positions, &triangle, 0.0);
+        assert_eq!(before["zero_area_triangles"], 0, "{before}");
+        let after = export_f32_precision(&positions, &triangle);
+        assert_eq!(after["collapsed_triangles"], 1, "{after}");
+        assert_eq!(after["safe"], false);
+        assert_eq!(after["precision_loss_warning"], true);
+        assert_eq!(after["dimension_delta_mm"][0], -1.0);
+    }
+
+    #[test]
+    fn exactly_representable_20mm_cube_survives_stl_f32_coordinates() {
+        let (positions, triangles) = box_mesh(20.0, 20.0, 20.0);
+        let precision = export_f32_precision(&positions, &triangles);
+        assert_eq!(precision["collapsed_triangles"], 0);
+        assert_eq!(precision["unrepresentable_vertices"], 0);
+        assert_eq!(precision["max_position_error_mm"], 0.0);
+        assert_eq!(precision["safe"], true);
+    }
+
+    #[test]
     fn crossed_nonadjacent_triangles_are_detected_without_shared_vertices() {
         let points = vec![
             Vec3::new(-3.0, -3.0, 0.0), Vec3::new(3.0, -3.0, 0.0), Vec3::new(0.0, 3.0, 0.0),
