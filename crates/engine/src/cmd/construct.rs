@@ -9,11 +9,11 @@
 use serde_json::Value;
 use solidcraft_doc::construct::{AxisDef, GeoRef, PointDef};
 use solidcraft_doc::{FeatureKind, PlaneRef};
-use solidcraft_geom::Vec3;
+use solidcraft_geom::{Plane, Vec3};
 
 use super::CommandSpec;
 use super::features::{add_feature, check_expr, plane_param, sketch_id};
-use crate::params::{bad, req_expr, str_, vec3};
+use crate::params::{bad, req_expr, req_vec3, str_, vec3};
 use crate::{Result, Session};
 
 const REF: &str =
@@ -64,6 +64,12 @@ pub static COMMANDS: &[CommandSpec] = &[
         .at("SOLID", "CONSTRUCT")
         .icon("point_along_path")
         .params("path: edge or sketch curve ref; t: expr, 0…1 along it (default 0.5); name?"),
+    CommandSpec::new("construct.plane.normal", "Plane At Point And Normal", plane_normal)
+        .at("SOLID", "CONSTRUCT").icon("plane_three_points")
+        .params("origin?: [x,y,z] world coordinates (default [0,0,0]); normal: [nx,ny,nz] finite nonzero vector (automatically normalized); name?: saved construction plane reusable in sketch.create"),
+    CommandSpec::new("construct.plane.through_point", "Plane Through Reference Point", plane_through_point)
+        .at("SOLID", "CONSTRUCT").icon("plane_three_points")
+        .params("plane: XY|XZ|YZ|saved construction plane id or name; point: point reference {point:[x,y,z]} | {sketch,point} | {vertex:[x,y,z]} | {construct_point:name}; name?: plane parallel to its reference and dynamically following the point"),
     CommandSpec::new("construct.plane.midplane", "Midplane", plane_mid)
         .at("SOLID", "CONSTRUCT")
         .icon("plane_midplane")
@@ -240,6 +246,24 @@ fn point_along(s: &mut Session, p: &Value) -> Result<Value> {
     let path = geo(s, p.get("path"), cmd, "path")?;
     let t = t_param(s, p, cmd)?;
     point(s, p, PointDef::AlongPath { path, t })
+}
+
+fn plane_normal(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "construct.plane.normal";
+    let origin = match p.get("origin") {
+        None | Some(Value::Null) => Vec3::ZERO,
+        Some(_) => req_vec3(cmd, p, "origin")?,
+    };
+    let normal = req_vec3(cmd, p, "normal")?;
+    let plane_ref = Plane::from_normal(origin, normal).ok_or_else(|| bad(cmd, "normal must be finite and nonzero"))?;
+    plane(s, p, PlaneRef::Custom { plane: plane_ref })
+}
+
+fn plane_through_point(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "construct.plane.through_point";
+    let base = plane_param(s, p.get("plane"), cmd)?;
+    let at = geo(s, p.get("point"), cmd, "point")?;
+    plane(s, p, PlaneRef::ThroughPoint { base: Box::new(base), point: Box::new(at) })
 }
 
 fn plane_mid(s: &mut Session, p: &Value) -> Result<Value> {

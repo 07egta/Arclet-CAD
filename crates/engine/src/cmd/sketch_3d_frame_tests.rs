@@ -417,3 +417,210 @@ fn arc3d_pipes_along_the_arc() {
     let quarter = 20.0 * std::f64::consts::FRAC_PI_2;
     assert!((measure.volume - 4.0 * std::f64::consts::PI * quarter).abs() < 0.5, "{}", measure.volume);
 }
+
+
+#[test]
+fn spatial_guide_fit_points_define_reusable_construction_plane() {
+    let mut s = Session::default();
+    let guide = run(&mut s, "sketch.create", json!({"plane":"XY","name":"Spatial guides"}))["sketch"].as_u64().unwrap();
+    run(&mut s, "sketch.options", json!({"sketch_3d":true}));
+    let wire = run(&mut s, "sketch.spline3d", json!({"points":[[0,0,0],[10,0,5],[20,0,10],[20,10,20]]}))["curves"][0]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    run(&mut s, "sketch.point3d", json!({"point":[0,10,5]}));
+    let point_id = s.doc.sketch(guide).unwrap().wires.last().unwrap().id.clone();
+    run(&mut s, "sketch.finish", json!({}));
+    run(&mut s, "construct.plane.three_points", json!({
+        "a":{"sketch":guide,"point":format!("{wire}.start")},
+        "b":{"sketch":guide,"point":format!("{wire}.1")},
+        "c":{"sketch":guide,"point":point_id},
+        "name":"Guide workplane"
+    }));
+    let created = run(&mut s, "sketch.create", json!({"plane":"Guide workplane","name":"Guide profile"}));
+    let profile = created["sketch"].as_u64().unwrap();
+    let verify = |s: &Session, b: Vec3| {
+        let st = s.world_state();
+        let plane = st.sketch(profile).unwrap().plane;
+        near(plane.origin, Vec3::ZERO);
+        assert!(plane.height(b).abs() < 1e-7, "{plane:?} {b:?}");
+        assert!(plane.height(Vec3::new(0.0, 10.0, 5.0)).abs() < 1e-7);
+        assert!((plane.x.len() - 1.0).abs() < 1e-12);
+        assert!((plane.y.len() - 1.0).abs() < 1e-12);
+        assert!(plane.normal().dot(plane.x).abs() < 1e-12);
+    };
+    verify(&s, Vec3::new(10.0, 0.0, 5.0));
+    run(&mut s, "sketch.finish", json!({}));
+    run(&mut s, "sketch.edit", json!({"sketch":guide}));
+    run(&mut s, "sketch.move3d", json!({"wire":wire,"index":1,"by":[0,2,0]}));
+    verify(&s, Vec3::new(10.0, 2.0, 5.0));
+    let restored = Session::new(solidcraft_doc::Document::from_json(&s.doc.to_json()).unwrap());
+    verify(&restored, Vec3::new(10.0, 2.0, 5.0));
+}
+
+#[test]
+fn spatial_guide_invalid_fit_point_reference_is_atomic() {
+    let mut s = Session::default();
+    let guide = run(&mut s, "sketch.create", json!({"plane":"XY","name":"Guide"}))["sketch"].as_u64().unwrap();
+    run(&mut s, "sketch.options", json!({"sketch_3d":true}));
+    let wire = run(&mut s, "sketch.line3d", json!({"points":[[0,0,1],[3,4,5]]}))["curves"][0].as_str().unwrap().to_owned();
+    run(&mut s, "sketch.finish", json!({}));
+    let original = s.doc.to_json();
+    let history = (s.undo.len(), s.redo.len());
+    for invalid in [format!("{wire}.7"), format!("{wire}.through"), wire.clone()] {
+        let result = s.execute("construct.plane.three_points", &json!({
+            "a":{"sketch":guide,"point":invalid},
+            "b":{"point":[0,0,0]},
+            "c":{"point":[0,10,0]},
+            "name":"Invalid plane"
+        }));
+        assert!(result.is_err(), "{invalid}: {result:?}");
+        assert_eq!(s.doc.to_json(), original);
+        assert_eq!((s.undo.len(), s.redo.len()), history);
+    }
+}
+
+
+#[test]
+fn spatial_polyline_and_local_xyz_uses_right_handed_workplane() {
+    let mut s = Session::default();
+    let sk = run(&mut s, "sketch.create", json!({
+        "plane":{"origin":[20,30,40],"x_dir":[0,1,0],"y_dir":[0,0,1]}, "name":"Oblique workplane"
+    }))["sketch"].as_u64().unwrap();
+    run(&mut s, "sketch.options", json!({"sketch_3d":true}));
+    let paths = run(&mut s, "sketch.polyline3d", json!({
+        "frame":"sketch", "closed":true, "points":[[0,0,0],[10,0,0],[10,5,0]]
+    }))["curves"].as_array().unwrap().clone();
+    assert_eq!(paths.len(), 3);
+    let sketched = s.doc.sketch(sk).unwrap();
+    let edges: Vec<_> = paths.iter().map(|id| sketched.wires.iter().find(|w| w.id == id.as_str().unwrap()).unwrap()).collect();
+    for i in 0..3 {
+        near(*edges[i].fit.last().unwrap(), edges[(i + 1) % 3].fit[0]);
+    }
+    near(edges[0].fit[0], Vec3::new(20.0, 30.0, 40.0));
+    near(edges[0].fit[1], Vec3::new(20.0, 40.0, 40.0));
+    near(edges[1].fit[1], Vec3::new(20.0, 40.0, 45.0));
+    let id = run(&mut s, "sketch.point3d", json!({"point":[2,3,4],"frame":"sketch"}))["point"].as_str().unwrap().to_owned();
+    near(s.doc.sketch(sk).unwrap().wires.iter().find(|w| w.id == id).unwrap().fit[0], Vec3::new(24.0,32.0,43.0));
+    run(&mut s, "sketch.move3d", json!({"wire":id,"by":[1,2,3],"frame":"sketch"}));
+    near(s.doc.sketch(sk).unwrap().wires.iter().find(|w| w.id == id).unwrap().fit[0], Vec3::new(27.0,33.0,45.0));
+    let state = s.doc.to_json();
+    let restored = solidcraft_doc::format::read(&state).unwrap();
+    assert_eq!(restored.sketch(sk).unwrap().wires, s.doc.sketch(sk).unwrap().wires);
+}
+
+#[test]
+fn spatial_local_coordinates_follow_the_selected_occurrence() {
+    let (mut s, _, _, _) = second_frame();
+    let sketch = s.active_sketch.unwrap();
+    let point = run(&mut s, "sketch.point3d", json!({"point":[2,3,5],"frame":"sketch"}))["point"].as_str().unwrap().to_owned();
+    near(s.doc.sketch(sketch).unwrap().wires.iter().find(|w| w.id == point).unwrap().fit[0], Vec3::new(2.0,3.0,5.0));
+    near(s.world_state().sketch(sketch).unwrap().sketch.wires.iter().find(|w| w.id == point).unwrap().fit[0], Vec3::new(17.0,32.0,45.0));
+    run(&mut s, "sketch.move3d", json!({"wire":point,"by":[1,2,3],"frame":"sketch"}));
+    near(s.doc.sketch(sketch).unwrap().wires.iter().find(|w| w.id == point).unwrap().fit[0], Vec3::new(3.0,5.0,8.0));
+    near(s.world_state().sketch(sketch).unwrap().sketch.wires.iter().find(|w| w.id == point).unwrap().fit[0], Vec3::new(15.0,33.0,48.0));
+}
+
+#[test]
+fn spatial_fit_insert_remove_preserves_curve_identity_undo_and_saved_file() {
+    let mut s = Session::default();
+    let sketch = run(&mut s, "sketch.create", json!({"plane":"XY","name":"Chair backrest"}))["sketch"].as_u64().unwrap();
+    run(&mut s, "sketch.options", json!({"sketch_3d":true}));
+    let wire = run(&mut s, "sketch.spline3d", json!({"points":[[0,0,0],[4,2,15],[8,6,28],[12,0,38]]}))["curves"][0]
+        .as_str().unwrap().to_owned();
+    let before = s.doc.to_json();
+    let inserted = run(&mut s, "sketch.insert_fit3d", json!({"wire":wire,"index":2,"at":[6,5,21]}));
+    assert_eq!(inserted["fit_points"], 5);
+    let w = s.doc.sketch(sketch).unwrap().wires.iter().find(|w| w.id == wire).unwrap();
+    assert_eq!(w.fit.len(), 5);
+    near(w.fit[2], Vec3::new(6.0,5.0,21.0));
+    near(*w.pts.first().unwrap(), Vec3::ZERO);
+    near(*w.pts.last().unwrap(), Vec3::new(12.0,0.0,38.0));
+    assert!(w.pts.iter().all(|p| p.is_finite()));
+    let after = s.doc.to_json();
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.doc.to_json(), before);
+    run(&mut s, "edit.redo", json!({}));
+    assert_eq!(s.doc.to_json(), after);
+    let reopened = solidcraft_doc::format::read(&after).unwrap();
+    assert_eq!(reopened.sketch(sketch).unwrap().wires, s.doc.sketch(sketch).unwrap().wires);
+    let removed = run(&mut s, "sketch.remove_fit3d", json!({"wire":wire,"index":2}));
+    assert_eq!(removed["fit_points"], 4);
+    assert_eq!(s.doc.to_json(), before);
+}
+
+#[test]
+fn spatial_closed_spline_and_bad_fit_edits_are_transactional() {
+    let mut s = Session::default();
+    let sk = run(&mut s, "sketch.create", json!({"plane":"XY","name":"Lamp spine"}))["sketch"].as_u64().unwrap();
+    run(&mut s, "sketch.options", json!({"sketch_3d":true}));
+    let id = run(&mut s, "sketch.spline3d", json!({"points":[[0,0,0],[8,0,12],[8,8,24],[0,8,12]],"closed":true}))["curves"][0]
+        .as_str().unwrap().to_owned();
+    let w = s.doc.sketch(sk).unwrap().wires.iter().find(|w| w.id == id).unwrap();
+    assert_eq!(w.fit.len(), 5);
+    near(*w.pts.first().unwrap(), *w.pts.last().unwrap());
+    assert!(w.pts.iter().all(|p| p.is_finite()));
+    let before = s.doc.to_json();
+    let history = (s.undo.len(), s.redo.len());
+    for (cmd, params) in [
+        ("sketch.insert_fit3d", json!({"wire":id,"index":0,"at":[1,2,3]})),
+        ("sketch.insert_fit3d", json!({"wire":id,"index":1,"at":[0,0,0]})),
+        ("sketch.insert_fit3d", json!({"wire":id,"index":2,"at":[1e100,0,0]})),
+        ("sketch.remove_fit3d", json!({"wire":id,"index":0})),
+        ("sketch.remove_fit3d", json!({"wire":id,"index":4})),
+        ("sketch.polyline3d", json!({"points":[[0,0,0],[1,0,0]],"closed":true})),
+        ("sketch.line3d", json!({"points":[[0,0,0],[1,0,0]],"closed":"yes"})),
+        ("sketch.point3d", json!({"point":[1,2,3],"frame":"unsupported"})),
+    ] {
+        assert!(s.execute(cmd, &params).is_err(), "{cmd} {params}");
+        assert_eq!(s.doc.to_json(), before, "{cmd}");
+        assert_eq!((s.undo.len(), s.redo.len()), history);
+    }
+}
+
+
+#[test]
+fn spatial_saved_normal_plane_and_through_point_follow_referenced_3d_point() {
+    let mut s = Session::default();
+    run(&mut s, "construct.plane.normal", json!({"origin":[3,4,5],"normal":[2,3,6],"name":"Tilted"}));
+    let tilt = run(&mut s, "sketch.create", json!({"plane":"Tilted","name":"Lamp section"}))["sketch"].as_u64().unwrap();
+    {
+        let st = s.world_state();
+        let plane = st.sketch(tilt).unwrap().plane;
+        near(plane.origin, Vec3::new(3.0,4.0,5.0));
+        near(plane.normal(), Vec3::new(2.0 / 7.0,3.0 / 7.0,6.0 / 7.0));
+    }
+    run(&mut s, "sketch.finish", json!({}));
+    let guide = run(&mut s, "sketch.create", json!({"plane":"XY","name":"Guide"}))["sketch"].as_u64().unwrap();
+    run(&mut s, "sketch.options", json!({"sketch_3d":true}));
+    let point = run(&mut s, "sketch.point3d", json!({"point":[10,20,30]}))["point"].as_str().unwrap().to_owned();
+    run(&mut s, "sketch.finish", json!({}));
+    run(&mut s, "construct.plane.through_point", json!({
+        "plane":"XY","point":{"sketch":guide,"point":point},"name":"Height through spatial point"
+    }));
+    let profile = run(&mut s, "sketch.create", json!({"plane":"Height through spatial point","name":"Dynamic section"}))["sketch"].as_u64().unwrap();
+    let check = |s: &Session, z: f64| {
+        let st = s.world_state();
+        let pl = st.sketch(profile).unwrap().plane;
+        near(pl.origin, Vec3::new(0.0,0.0,z));
+        near(pl.normal(), Vec3::Z);
+    };
+    check(&s,30.0);
+    run(&mut s, "sketch.finish", json!({}));
+    run(&mut s, "sketch.edit", json!({"sketch":guide}));
+    run(&mut s, "sketch.move3d", json!({"wire":point,"by":[0,0,5]}));
+    check(&s,35.0);
+    let reopen = Session::new(solidcraft_doc::Document::from_json(&s.doc.to_json()).unwrap());
+    check(&reopen,35.0);
+    let before = s.doc.to_json();
+    let history = (s.undo.len(), s.redo.len());
+    for bad_plane in [
+        json!({"origin":[0,0,0],"normal":[0,0,0],"name":"Bad normal"}),
+        json!({"origin":[0,0,0],"normal":[1e100,0,0],"name":"Bad normal"}),
+        json!({"origin":[0,0,0],"normal":[0,0,0.0],"name":"Bad normal"}),
+    ] {
+        assert!(s.execute("construct.plane.normal", &bad_plane).is_err());
+        assert_eq!(s.doc.to_json(), before);
+        assert_eq!((s.undo.len(), s.redo.len()), history);
+    }
+}
