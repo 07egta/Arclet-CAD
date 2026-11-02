@@ -992,6 +992,62 @@ fn distance_opening_slope(s: &State, b: &Block, v: usize) -> Option<f64> {
     }
 }
 
+/// Choose a perturbation from the geometry read by this block, not the absolute world
+/// coordinate. A 0.01 mm edge at x = 900,000,000 otherwise receives a 90 mm finite
+/// difference and its length derivative is almost zero. For a small angle guide next
+/// to a large line, use the scale local to the variable, not the whole block's bounds.
+fn derivative_scale(s: &State, block: &Block, variable: usize) -> f64 {
+    let owns = |p: usize| {
+        s.lay.pvar.get(p).copied().flatten().is_some_and(|first| variable == first || variable == first + 1)
+    };
+    let mut points = Vec::new();
+    let mut scale = f64::INFINITY;
+    for reference in block_refs(s.sk, block) {
+        let ids = match reference {
+            Ref::Point(p) => vec![p],
+            Ref::Curve(c) | Ref::Line(c) | Ref::Round(c) => {
+                let Some(curve) = s.sk.curves.get(c) else { continue };
+                let ids = curve.kind.point_ids();
+                if (ids.iter().any(|p| owns(*p)) || s.lay.rvar.get(c).copied().flatten() == Some(variable))
+                    && matches!(curve.kind, CurveKind::Circle { .. } | CurveKind::Arc { .. } | CurveKind::Ellipse { .. })
+                {
+                    let radius = s.radius_of(c).abs();
+                    if radius.is_finite() && radius > 0.0 {
+                        scale = scale.min(radius);
+                    }
+                }
+                ids
+            }
+        };
+        points.extend(ids);
+    }
+    for &p in &points {
+        if !owns(p) {
+            continue;
+        }
+        for &q in &points {
+            if p == q {
+                continue;
+            }
+            let distance = s.p(p).dist(s.p(q));
+            if distance.is_finite() && distance > 0.0 {
+                scale = scale.min(distance);
+            }
+        }
+    }
+    if scale.is_finite() { scale.max(1e-9) } else { 1.0 }
+}
+
+/// Sample at representable floating-point values; divide by their *actual* separation.
+/// A minimum of 16 ulps at large origins avoids subtraction noise without stepping
+/// across a nearby distance cusp. The local scale also works for microscopic sketches.
+fn derivative_samples(value: f64, scale: f64) -> (f64, f64, f64) {
+    let step = (1e-6 * scale).max(16.0 * f64::EPSILON * value.abs().max(1.0));
+    let high = value + step;
+    let low = value - step;
+    (high, low, high - low)
+}
+
 /// Residual vector and Jacobian (rows × all n vars) for the given blocks.
 fn system(sk: &Sketch, lay: &Layout, blocks: &[(Block, Vec<usize>)], x: &mut [f64], with_j: bool) -> (Vec<f64>, Option<Mat>, Vec<usize>) {
     #[cfg(feature = "solver-profiling")]
@@ -1026,14 +1082,14 @@ fn system(sk: &Sketch, lay: &Layout, blocks: &[(Block, Vec<usize>)], x: &mut [f6
         for &v in vars {
             let Some(x0) = x.get(v).copied() else { continue };
             let opening = distance_opening_slope(&State { sk, lay, x }, b, v);
-            let h = 1e-7 * x0.abs().max(1.0);
+            let (high, low, span) = derivative_samples(x0, derivative_scale(&State { sk, lay, x }, b, v));
             if let Some(xv) = x.get_mut(v) {
-                *xv = x0 + h;
+                *xv = high;
             }
             plus.clear();
             block_residuals(&State { sk, lay, x }, b, &mut plus);
             if let Some(xv) = x.get_mut(v) {
-                *xv = x0 - h;
+                *xv = low;
             }
             minus.clear();
             block_residuals(&State { sk, lay, x }, b, &mut minus);
@@ -1041,7 +1097,7 @@ fn system(sk: &Sketch, lay: &Layout, blocks: &[(Block, Vec<usize>)], x: &mut [f6
                 *xv = x0;
             }
             for k in 0..rows {
-                let d = (plus.get(k).copied().unwrap_or(0.0) - minus.get(k).copied().unwrap_or(0.0)) / (2.0 * h);
+                let d = (plus.get(k).copied().unwrap_or(0.0) - minus.get(k).copied().unwrap_or(0.0)) / span;
                 j.set(row + k, v, if k == 0 { opening.unwrap_or(d) } else { d });
             }
         }
@@ -1078,14 +1134,14 @@ fn local_system(
             let Some(c) = col.get(v).copied().filter(|c| *c < ncols) else { continue };
             let Some(x0) = x.get(v).copied() else { continue };
             let opening = distance_opening_slope(&State { sk, lay, x }, b, v);
-            let h = 1e-7 * x0.abs().max(1.0);
+            let (high, low, span) = derivative_samples(x0, derivative_scale(&State { sk, lay, x }, b, v));
             if let Some(xv) = x.get_mut(v) {
-                *xv = x0 + h;
+                *xv = high;
             }
             plus.clear();
             block_residuals(&State { sk, lay, x }, b, &mut plus);
             if let Some(xv) = x.get_mut(v) {
-                *xv = x0 - h;
+                *xv = low;
             }
             minus.clear();
             block_residuals(&State { sk, lay, x }, b, &mut minus);
@@ -1093,7 +1149,7 @@ fn local_system(
                 *xv = x0;
             }
             for k in 0..rows {
-                let d = (plus.get(k).copied().unwrap_or(0.0) - minus.get(k).copied().unwrap_or(0.0)) / (2.0 * h);
+                let d = (plus.get(k).copied().unwrap_or(0.0) - minus.get(k).copied().unwrap_or(0.0)) / span;
                 j.set(row + k, c, if k == 0 { opening.unwrap_or(d) } else { d });
             }
         }
@@ -1516,8 +1572,9 @@ fn accumulate(sk: &Sketch, lay: &Layout, b: &Block, unit: &[usize], x: &mut [f64
     let (mut plus, mut minus) = (Vec::new(), Vec::new());
     for (&v, dk) in unit.iter().zip(&mut d) {
         let Some(x0) = x.get(v).copied() else { continue };
-        let h = 1e-7 * x0.abs().max(1.0);
-        for (at, out) in [(x0 + h, &mut plus), (x0 - h, &mut minus)] {
+        let opening = distance_opening_slope(&State { sk, lay, x }, b, v);
+        let (high, low, span) = derivative_samples(x0, derivative_scale(&State { sk, lay, x }, b, v));
+        for (at, out) in [(high, &mut plus), (low, &mut minus)] {
             if let Some(xv) = x.get_mut(v) {
                 *xv = at;
             }
@@ -1527,7 +1584,12 @@ fn accumulate(sk: &Sketch, lay: &Layout, b: &Block, unit: &[usize], x: &mut [f64
         if let Some(xv) = x.get_mut(v) {
             *xv = x0;
         }
-        *dk = plus.iter().zip(&minus).map(|(p, m)| (p - m) / (2.0 * h)).collect();
+        *dk = plus
+            .iter()
+            .zip(&minus)
+            .enumerate()
+            .map(|(row, (p, m))| if row == 0 { opening.unwrap_or((p - m) / span) } else { (p - m) / span })
+            .collect();
     }
     let [d0, d1] = &d;
     for k in 0..r.len() {
@@ -2608,6 +2670,10 @@ fn solve_inner(
     let _timer = profiling::timer(Phase::Solve);
     #[cfg(feature = "solver-profiling")]
     profiling::count(|c| c.solve_calls = c.solve_calls.saturating_add(1));
+    // Only patterned sketches need a full snapshot: these two calls can remove constraints
+    // or rewrite copied curves before a numerical failure is known. Ordinary solves avoid
+    // the cost of cloning a large sketch.
+    let pattern_snapshot = (!sk.patterns.is_empty()).then(|| sk.clone());
     sk.prune_patterns();
     sk.refresh_pattern_shapes();
     let mut orientation_before = Vec::new();
@@ -2906,7 +2972,9 @@ fn solve_inner(
             // the angle alone must not turn that degenerate pose into a solved sketch.
             // Compare against the input length, so an already short reference still solves.
             let angular_lines = match **k {
-                ConstraintKind::Angle { a, b, .. } => Some([a, b]),
+                ConstraintKind::Angle { a, b, .. }
+                | ConstraintKind::Parallel { a, b }
+                | ConstraintKind::Perpendicular { a, b } => Some([a, b]),
                 ConstraintKind::LineAngle { l, .. } => Some([l, l]),
                 _ => None,
             };
@@ -2917,7 +2985,7 @@ fn solve_inner(
                         Some(CurveKind::Line { a, b }) => sk.point(*a).zip(sk.point(*b)).map_or(1.0, |(a, b)| a.dist(b)),
                         _ => 1.0,
                     };
-                    a.dist(b) < ACCEPT * original
+                    a.dist(b) <= (ACCEPT * original).max(1e-12)
                 })
             }) {
                 if let Some(c) = sk.constraints.get(*ci)
@@ -3095,7 +3163,10 @@ fn solve_inner(
         Some(v) => vdet(Some(v)) && vdet(Some(v + 1)),
         None => true,
     };
-    refresh_driven_dimensions(sk);
+    // A failed solve must not silently update reference dimensions.
+    if status == SolveStatus::Solved {
+        refresh_driven_dimensions(sk);
+    }
     let (dof, point_determined, curve_determined) = match analysis {
         Analysis::Full | Analysis::Freedom => (
             lay.n.saturating_sub(rank),
@@ -3104,6 +3175,11 @@ fn solve_inner(
         ),
         Analysis::StatusOnly => (0, Vec::new(), Vec::new()),
     };
+    if status == SolveStatus::Failed
+        && let Some(previous) = pattern_snapshot
+    {
+        *sk = previous;
+    }
     SolveReport {
         status,
         dof,
