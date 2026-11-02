@@ -94,11 +94,6 @@ pub struct PluginManager {
 }
 
 impl PluginManager {
-    /// A registry that performs no file-system access, also used by Arclet tests.
-    pub fn empty() -> Self {
-        Self { root: PathBuf::new(), registered: BTreeMap::new(), diagnostics: Vec::new() }
-    }
-
     /// Discover manifests in <root>/<plugin-id>/plugin.json. Nothing is executed.
     /// Missing directories are normal: Arclet launches without plugins.
     pub fn discover(root: impl AsRef<Path>) -> Self {
