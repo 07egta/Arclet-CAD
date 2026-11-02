@@ -386,6 +386,7 @@ impl Document {
         let mut occurrence_ids = BTreeSet::new();
         let mut placement_edges: HashMap<u64, Vec<u64>> = HashMap::new();
         let mut placement_degrees: HashMap<u64, usize> = component_ids.iter().map(|id| (*id, 0)).collect();
+        placement_degrees.insert(0, 0);
         for occurrence in &self.occurrences {
             if !occurrence_ids.insert(occurrence.id) || occurrence.id == 0 {
                 return Err(DocError::Invalid("duplicate or root occurrence identifier".into()));
@@ -425,7 +426,7 @@ impl Document {
                     return Err(DocError::Invalid("assembly placement exceeds nesting depth".into()));
                 }
                 for occurrence in siblings {
-                    if out.len() > MAX_PLACEMENTS {
+                    if out.len() >= MAX_PLACEMENTS {
                         return Err(DocError::Invalid("assembly instance expansion exceeds placement limit".into()));
                     }
                     let mut next_path = path.clone();
