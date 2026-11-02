@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use crate::{DocError, Document, Result};
+use crate::{DocError, Document, ModelState, Result};
 
 use super::{MAX_JOINTS, Size, Snap};
 
@@ -128,9 +128,30 @@ pub fn validate(doc: &Document) -> Result<()> {
     Ok(())
 }
 
+/// Build a solution only if stored references are coherent and every
+/// enforced joint constraint can be met. Unlike a default diagnostic solve,
+/// this rejects the entire candidate and never applies partial placements.
+pub fn solve_checked(doc: &Document, state: &ModelState) -> Result<super::Solution> {
+    validate(doc)?;
+    let solution = super::solve(doc, state);
+    if let Some((id, name, detail)) = solution.errors.first() {
+        return Err(DocError::Invalid(format!("joint {id} '{name}' could not resolve: {detail}")));
+    }
+    if let Some((id, name, detail)) = solution.conflicts.first() {
+        return Err(DocError::Invalid(format!("joint {id} '{name}' conflicts: {detail}")));
+    }
+    Ok(solution)
+}
+
 impl Document {
     /// Strict opt-in mechanism integrity check; performs no evaluation or mutation.
     pub fn validate_mechanism(&self) -> Result<()> {
         validate(self)
+    }
+
+    /// Compute a complete, constraint-consistent candidate without applying it.
+    /// The calling command/session remains responsible for an undoable commit.
+    pub fn solve_mechanism_checked(&self, state: &ModelState) -> Result<super::Solution> {
+        solve_checked(self, state)
     }
 }
