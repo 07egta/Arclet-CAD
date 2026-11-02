@@ -1043,6 +1043,95 @@ pub fn network_surface(u: Vec<NetworkCurve>, v: Vec<NetworkCurve>, tol: Toleranc
     Ok(result)
 }
 
+/// Metrics on a *finite grid* of the untrimmed tensor-product surface. These
+/// numbers are estimates, not a certificate that there is no self-intersection
+/// between samples. A highly twisted surface may need denser independent checks.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SampledSurfaceQuality {
+    /// Cell centres sampled per parameter direction.
+    pub samples_per_axis: usize,
+    /// Smallest local area Jacobian divided by the median Jacobian.
+    pub minimum_relative_jacobian: f64,
+    /// Largest change of unit normal between adjacent sample points (radians).
+    pub maximum_normal_step_rad: f64,
+    /// Largest sampled ratio of parameter-direction speeds (parameterisation distortion).
+    pub maximum_stretch_ratio: f64,
+    /// Number of adjacent sampled cells whose normals turn by 90° or more.
+    pub foldover_pairs: usize,
+}
+
+/// Sample normals and local area for a NURBS surface without changing its net.
+/// Singularities exactly at the boundary (e.g. the apex of a triangular patch)
+/// are excluded by sampling cell centres; interior singularities are refused.
+pub fn sampled_surface_quality(surface: &NurbsSurface, samples: usize) -> SplineResult<SampledSurfaceQuality> {
+    if !(4..=64).contains(&samples) {
+        return invalid("surface quality sampling must use 4 to 64 cells per axis");
+    }
+    let [ud, vd] = surface.domain();
+    let (wu, wv) = (ud[1] - ud[0], vd[1] - vd[0]);
+    if !(wu > 0.0 && wv > 0.0 && wu.is_finite() && wv.is_finite()) {
+        return invalid("the surface domain is not finite");
+    }
+    let (hu, hv) = (wu / (4.0 * samples as f64), wv / (4.0 * samples as f64));
+    let mut normals = Vec::with_capacity(samples * samples);
+    let mut areas = Vec::with_capacity(samples * samples);
+    let mut max_stretch = 1.0_f64;
+    for j in 0..samples {
+        for i in 0..samples {
+            let (u, v) = (
+                ud[0] + wu * (i as f64 + 0.5) / samples as f64,
+                vd[0] + wv * (j as f64 + 0.5) / samples as f64,
+            );
+            let su = (surface.eval(u + hu, v)? - surface.eval(u - hu, v)?) / (2.0 * hu);
+            let sv = (surface.eval(u, v + hv)? - surface.eval(u, v - hv)?) / (2.0 * hv);
+            let (lu, lv) = (su.len(), sv.len());
+            let area = su.cross(sv);
+            if !(lu > 0.0 && lv > 0.0 && lu.is_finite() && lv.is_finite() && area.is_finite()) {
+                return Err(SplineError::Unsupported("the surface has an undefined tangent inside its domain".into()));
+            }
+            max_stretch = max_stretch.max((lu / lv).max(lv / lu));
+            normals.push(area.normalized());
+            areas.push(area.len());
+        }
+    }
+    let mut sorted = areas.clone();
+    sorted.sort_by(f64::total_cmp);
+    let median = sorted[sorted.len() / 2];
+    if !(median > 0.0 && median.is_finite() && max_stretch.is_finite()) {
+        return invalid("the surface Jacobian is not finite");
+    }
+    let relative = areas[0..].iter().copied().fold(f64::INFINITY, f64::min) / median;
+    let mut angle = 0.0_f64;
+    let mut folds = 0;
+    for j in 0..samples {
+        for i in 0..samples {
+            let Some(Some(a)) = normals.get(j * samples + i) else {
+                return Err(SplineError::Unsupported("the surface has a collapsed tangent inside its domain".into()));
+            };
+            for (x, y) in [(i + 1, j), (i, j + 1)] {
+                if x >= samples || y >= samples {
+                    continue;
+                }
+                let Some(Some(b)) = normals.get(y * samples + x) else {
+                    return Err(SplineError::Unsupported("the surface has a collapsed tangent inside its domain".into()));
+                };
+                let dot = a.dot(*b).clamp(-1.0, 1.0);
+                angle = angle.max(dot.acos());
+                if dot <= 0.0 {
+                    folds += 1;
+                }
+            }
+        }
+    }
+    Ok(SampledSurfaceQuality {
+        samples_per_axis: samples,
+        minimum_relative_jacobian: relative,
+        maximum_normal_step_rad: angle,
+        maximum_stretch_ratio: max_stretch,
+        foldover_pairs: folds,
+    })
+}
+
 /// Check the actual tensor-product result, independently of the control-space fit.
 /// A small fitting residual before Gordon blending does not guarantee that subtracting
 /// the crossing interpolant leaves the final surface on every input curve, especially
@@ -1059,6 +1148,13 @@ fn verify_network_samples(
     tol: f64,
 ) -> SplineResult<()> {
     const CHECK_SAMPLES: usize = 32;
+    let quality = sampled_surface_quality(surface, 24)?;
+    if quality.minimum_relative_jacobian < 1e-5 || quality.foldover_pairs > 0 {
+        return Err(SplineError::Unsupported(format!(
+            "the interpolated surface folds or pinches inside: {} sampled normal reversals, minimum relative area Jacobian {:.3e} (24×24 grid)",
+            quality.foldover_pairs, quality.minimum_relative_jacobian
+        )));
+    }
     // Each input curve is compared against the *placed* version used by Gordon:
     // its crossing offsets are part of the surface's intended geometry.
     for (i, (track, placement)) in us.iter_mut().zip(up).enumerate() {
@@ -1657,6 +1753,35 @@ mod tests {
         for q in grid(&s, 15) {
             assert!((q.z - z(q.x, q.y)).abs() < 0.02, "{q:?}");
         }
+    }
+
+    #[test]
+    fn sampled_surface_quality_detects_a_twisted_fold() {
+        let knots = [vec![0.0, 0.0, 1.0, 1.0], vec![0.0, 0.0, 1.0, 1.0]];
+        let plane = NurbsSurface::new(
+            [1, 1],
+            knots.clone(),
+            &[Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::new(1.0, 1.0, 0.0)],
+            &[1.0; 4],
+        )
+        .unwrap();
+        let good = sampled_surface_quality(&plane, 24).unwrap();
+        assert_eq!(good.foldover_pairs, 0);
+        assert!((good.minimum_relative_jacobian - 1.0).abs() < 1e-10);
+        assert!(good.maximum_normal_step_rad < 1e-6);
+
+        // S(u,v) = (u*(1 - 2v),v,0): its first derivative reverses
+        // across v=1/2, so this is NOT a regular surface.
+        let folded = NurbsSurface::new(
+            [1, 1],
+            knots,
+            &[Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::new(-1.0, 1.0, 0.0)],
+            &[1.0; 4],
+        )
+        .unwrap();
+        let bad = sampled_surface_quality(&folded, 24).unwrap();
+        assert!(bad.foldover_pairs > 0, "{bad:?}");
+        assert!(bad.maximum_normal_step_rad > 3.0);
     }
 
     /// A shallow sinusoid crosses twice while its *whole length* remains near the
