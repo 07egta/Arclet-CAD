@@ -375,6 +375,36 @@ pub fn projection(app: &SolveApp, rect: Rect) -> Proj {
     Proj { cam, vp: cam.view_proj_bounds(aspect, &scene_bounds(app)), rect }
 }
 
+/// The world point under the pointer on the working plane: the open sketch's plane, else the world
+/// XY plane (z = 0). The status bar reads it when no model point is hovered, as Rhino's cursor
+/// readout does. `None` before the viewport has a size, or when the ray misses the plane.
+pub fn pointer_on_plane(app: &SolveApp, pos: Pos2) -> Option<[f64; 3]> {
+    let rect = app.viewport.rect?;
+    let (origin, dir) = projection(app, rect).ray(pos);
+    let plane = solidcraft_engine::view::open_sketch_plane(&app.session).unwrap_or(Plane::XY);
+    let p = ray_plane_hit(origin, dir, &plane)?;
+    Some([p.x, p.y, p.z])
+}
+
+/// Where the ray `origin + t·dir` meets the plane at `t > 0`. `None` when the ray is parallel to
+/// the plane, meets it behind the origin, or any input or the result is not finite.
+pub(crate) fn ray_plane_hit(origin: Vec3, dir: Vec3, plane: &Plane) -> Option<Vec3> {
+    if !origin.is_finite() || !dir.is_finite() || !plane.origin.is_finite() {
+        return None;
+    }
+    let n = plane.normal();
+    let den = dir.dot(n);
+    if !den.is_finite() || den.abs() < 1e-12 {
+        return None;
+    }
+    let t = (plane.origin - origin).dot(n) / den;
+    if !t.is_finite() || t <= 0.0 {
+        return None;
+    }
+    let p = origin + dir * t;
+    p.is_finite().then_some(p)
+}
+
 /// The far plane the picture's projection uses: the grid's fade ends before that plane cuts the
 /// ground (#4214). The scene's radius is not the radius the picture frames, so the planes of the
 /// projection itself are the ones that count.
@@ -5732,6 +5762,28 @@ pub fn look_at_selection(app: &mut SolveApp) {
 mod tests {
     use super::*;
     use crate::navigation::*;
+
+    #[test]
+    fn pointer_ray_meets_the_plane_or_misses_it_safely() {
+        let z0 = Plane::XY;
+        // Straight down onto z = 0 from above: the hit is directly below the eye.
+        let hit = ray_plane_hit(Vec3::new(2.0, 3.0, 10.0), Vec3::new(0.0, 0.0, -1.0), &z0);
+        assert_eq!(hit, Some(Vec3::new(2.0, 3.0, 0.0)));
+        // Oblique ray: 10 units down, 5 units along X, hits at x = 5.
+        let d = Vec3::new(0.5, 0.0, -1.0).normalized().unwrap_or(Vec3::Z);
+        let hit = ray_plane_hit(Vec3::new(0.0, 0.0, 10.0), d, &z0).unwrap_or(Vec3::ZERO);
+        assert!((hit.x - 5.0).abs() < 1e-9 && hit.z.abs() < 1e-9, "oblique hit {hit:?}");
+        // Parallel to the plane: no hit.
+        assert_eq!(ray_plane_hit(Vec3::new(0.0, 0.0, 1.0), Vec3::X, &z0), None);
+        // The plane lies behind the eye: no hit.
+        assert_eq!(ray_plane_hit(Vec3::new(0.0, 0.0, 10.0), Vec3::Z, &z0), None);
+        // Non-finite input never yields a point.
+        assert_eq!(ray_plane_hit(Vec3::new(f64::NAN, 0.0, 10.0), Vec3::new(0.0, 0.0, -1.0), &z0), None);
+        assert_eq!(ray_plane_hit(Vec3::new(0.0, 0.0, 10.0), Vec3::new(0.0, f64::INFINITY, -1.0), &z0), None);
+        // A tilted sketch plane through (0, 0, 4) with normal +X: a ray along +X from the origin hits it at x = 4.
+        let tilted = Plane::from_normal(Vec3::new(4.0, 0.0, 0.0), Vec3::X).unwrap_or(Plane::XY);
+        assert_eq!(ray_plane_hit(Vec3::ZERO, Vec3::X, &tilted), Some(Vec3::new(4.0, 0.0, 0.0)));
+    }
 
     #[test]
     fn ground_shadow_does_not_enter_see_through_geometry() -> Result<(), Box<dyn std::error::Error>> {

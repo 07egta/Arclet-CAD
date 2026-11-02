@@ -619,7 +619,7 @@ fn offer_shape(out: &mut Collector<'_>, id: &str, shape: &WorldGeometry<'_>) {
         WorldGeometry::Segment(a, b, accuracy) => {
             out.offer(id, SnapKind::End, *a, *accuracy);
             out.offer(id, SnapKind::End, *b, *accuracy);
-            out.offer(id, SnapKind::Middle, a * 0.5 + b * 0.5, *accuracy);
+            out.offer(id, SnapKind::Middle, *a * 0.5 + *b * 0.5, *accuracy);
             if let Some(p) = screen_nearest_segment(query.view, query.cursor_px, *a, *b) {
                 out.offer(id, SnapKind::Nearest, p, *accuracy);
             }
@@ -873,7 +873,7 @@ fn curve_point_and_tangent(shape: &WorldGeometry<'_>, fraction: f64) -> Option<(
         return None;
     }
     let (point, tangent) = match shape {
-        WorldGeometry::Segment(a, b, _) => (a * (1.0 - fraction) + b * fraction, *b - *a),
+        WorldGeometry::Segment(a, b, _) => (*a * (1.0 - fraction) + *b * fraction, *b - *a),
         WorldGeometry::Round(c) => {
             let theta = c.start_angle + c.sweep * fraction;
             (c.at(theta), (c.y * theta.cos() - c.x * theta.sin()) * (c.radius * c.sweep))

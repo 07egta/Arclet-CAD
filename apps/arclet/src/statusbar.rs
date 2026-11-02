@@ -13,7 +13,7 @@ use solidcraft_ui_egui::theme::Tokens;
 use solidcraft_ui_egui::ui_kit::{self, Button, Container, Edge, Surface};
 
 use crate::classic_look::chrome::{self, Density};
-use solidcraft_ui_egui::viewport::Hit;
+use solidcraft_ui_egui::viewport::{Hit, pointer_on_plane};
 
 /// Shown for any value the session does not have yet.
 const EMPTY: &str = "—";
@@ -163,7 +163,9 @@ fn readout(app: &SolveApp) -> Readout {
     } else {
         s.doc.components.iter().find(|c| c.id == s.active_component).map(|c| c.name.clone())
     };
-    Readout { plane, cursor: cursor_of(app.viewport.hover.as_ref()), units: s.doc.units.clone(), component, selected: s.selection.len() }
+    // A model point under the pointer wins; otherwise the pointer's point on the working plane.
+    let cursor = cursor_of(app.viewport.hover.as_ref()).or_else(|| app.viewport.mouse.and_then(|pos| pointer_on_plane(app, pos)));
+    Readout { plane, cursor, units: s.doc.units.clone(), component, selected: s.selection.len() }
 }
 
 /// Keep one compact strip on small laptops instead of letting disabled future
