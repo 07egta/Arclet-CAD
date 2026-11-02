@@ -182,7 +182,7 @@ pub(crate) fn analyze(positions: &[Vec3], triangles: &[[u32; 3]], tolerance: f64
         }
     }
     let non_manifold_vertices = (triangles.len() <= MAX_VERTEX_LINK_TRIANGLES)
-        .then(|| count_non_manifold_vertices(&valid_faces, unique));
+        .then(|| count_non_manifold_vertices(&valid_faces));
     let topology_closed =
         !triangles.is_empty() && degenerate_triangles == 0 && nonfinite_vertices == 0
         && duplicate_faces == 0 && naked_edges == 0 && non_manifold_edges == 0
@@ -231,18 +231,17 @@ pub(crate) fn analyze(positions: &[Vec3], triangles: &[[u32; 3]], tolerance: f64
 /// Also counts open or branching vertex fans (the edge diagnostics report
 /// their separate root causes). This is linear in the number of triangle
 /// corners, with a local connectivity search per vertex.
-fn count_non_manifold_vertices(triangles: &[[usize; 3]], unique_vertices: usize) -> usize {
-    let mut links: Vec<Vec<(usize, usize)>> = vec![Vec::new(); unique_vertices];
+fn count_non_manifold_vertices(triangles: &[[usize; 3]]) -> usize {
+    // Allocate only for vertices actually used by triangles. Imported meshes
+    // can contain many unreferenced positions with very large welded IDs.
+    let mut links: HashMap<usize, Vec<(usize, usize)>> = HashMap::new();
     for &[a, b, c] in triangles {
-        if let Some(link) = links.get_mut(a) { link.push((b, c)); }
-        if let Some(link) = links.get_mut(b) { link.push((c, a)); }
-        if let Some(link) = links.get_mut(c) { link.push((a, b)); }
+        links.entry(a).or_default().push((b, c));
+        links.entry(b).or_default().push((c, a));
+        links.entry(c).or_default().push((a, b));
     }
     let mut invalid = 0usize;
-    for wedges in links {
-        if wedges.is_empty() {
-            continue;
-        }
+    for wedges in links.into_values() {
         let mut neighbours: HashMap<usize, Vec<usize>> = HashMap::new();
         for (a, b) in wedges {
             neighbours.entry(a).or_default().push(b);
