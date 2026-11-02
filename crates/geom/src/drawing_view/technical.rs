@@ -135,7 +135,7 @@ pub struct PerspectiveFrame {
 
 impl PerspectiveFrame {
     pub fn new(eye: Vec3, target: Vec3, up: Vec3, focal_mm: f64, centre_mm: Vec2) -> Result<Self, Invalid> {
-        if !(0.0..=5000.0).contains(&focal_mm) || !focal_mm.is_finite() {
+        if !(1e-9..=5000.0).contains(&focal_mm) || !focal_mm.is_finite() {
             return Err(Invalid("focal length must be positive and at most 5000 mm"));
         }
         if !centre_mm.is_finite() || centre_mm.x.abs() > 5000.0 || centre_mm.y.abs() > 5000.0 {
