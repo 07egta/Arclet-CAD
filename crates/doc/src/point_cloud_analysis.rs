@@ -341,6 +341,46 @@ pub fn align_translation(fixed: &CloudSample, moving: &CloudSample, tolerance_mm
 }
 
 
+
+/// Maximum number of triangles indexed for a point-cloud-to-CAD mesh comparison.
+pub const MAX_CAD_TRIANGLES: usize = 500_000;
+
+/// Unsigned scan-to-tessellated-CAD surface deviation in millimetres.
+/// It is not a signed distance or an exact analytic NURBS/B-rep distance.
+#[derive(Clone, Debug, Serialize)]
+pub struct CadSurfaceDistance {
+    pub triangles: usize,
+    pub quality: FitQuality,
+    pub method: &'static str,
+}
+
+impl CloudSample {
+    pub fn distance_to_mesh(&self, mesh: &solidcraft_geom::Mesh, tolerance_mm: f64) -> Result<CadSurfaceDistance> {
+        check_tolerance(tolerance_mm)?;
+        if mesh.triangles.len() > MAX_CAD_TRIANGLES {
+            return Err(invalid("CAD mesh has too many triangles for a bounded distance analysis"));
+        }
+        let tree = solidcraft_geom::compare::TriangleTree::new(mesh);
+        if tree.is_empty() {
+            return Err(invalid("CAD mesh has no valid triangles"));
+        }
+        let mut distances = Vec::with_capacity(self.offsets.len());
+        for offset in &self.offsets {
+            let world = self.frame + *offset;
+            let distance = tree.nearest(world).ok_or_else(|| invalid("CAD mesh has no valid closest point"))?.0;
+            if !distance.is_finite() {
+                return Err(invalid("point to CAD mesh distance is not finite"));
+            }
+            distances.push(distance);
+        }
+        Ok(CadSurfaceDistance {
+            triangles: tree.len(),
+            quality: quality(&distances, tolerance_mm, self.source_count),
+            method: "unsigned_distance_to_reference_tessellation",
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -432,6 +472,29 @@ mod tests {
         let mut broken = scan.clone();
         broken.origin.x = f64::NAN;
         assert!(CloudSample::new(&broken, 1000).is_err());
+    }
+
+    #[test]
+    fn scan_to_tessellated_cad_distance_reports_known_offset() {
+        let mut mesh = solidcraft_geom::Mesh::default();
+        mesh.positions = vec![
+            Vec3::new(-10.0, -10.0, 0.0),
+            Vec3::new(10.0, -10.0, 0.0),
+            Vec3::new(10.0, 10.0, 0.0),
+            Vec3::new(-10.0, 10.0, 0.0),
+        ];
+        mesh.triangles = vec![[0, 1, 2], [0, 2, 3]];
+        let raw: Vec<[f64; 3]> = (0..10).flat_map(|i| (0..10).map(move |j| {
+            [-5.0 + i as f64, -5.0 + j as f64, 0.25]
+        })).collect();
+        let scan = cloud(raw, Vec3::ZERO);
+        let sample = CloudSample::new(&scan, 1000).unwrap();
+        let report = sample.distance_to_mesh(&mesh, 0.3).unwrap();
+        assert_eq!(report.triangles, 2);
+        assert!((report.quality.rms_mm - 0.25).abs() < 1e-8, "{report:?}");
+        assert!((report.quality.p95_mm - 0.25).abs() < 1e-8);
+        assert_eq!(report.quality.inlier_fraction, 1.0);
+        assert!(sample.distance_to_mesh(&solidcraft_geom::Mesh::default(), 0.3).is_err());
     }
 
     #[test]
