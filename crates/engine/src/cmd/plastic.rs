@@ -37,12 +37,17 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("plastic.assign_rule", "Assign Plastic Rule", assign_rule).at("PLASTIC", "SETUP").icon("plastic_assign").params(
         "bodies: [names]; rule: name (empty: no rule) — plastic features on these bodies take its draft and clearance as defaults",
     ),
-    CommandSpec::new("plastic.rules", "List Plastic Rules", list_rules).icon("plastic_rule").noundo().params("→ rules with their expressions and values, the active rule and the rules assigned to bodies"),
+    CommandSpec::new("plastic.rules", "List Plastic Rules", list_rules).icon("plastic_rule").noundo().params("→ rules with expressions, evaluated values and advisory nominal-limit warnings; active and assigned rules"),
+    CommandSpec::new("plastic.audit", "Plastic Design Audit", audit).at("PLASTIC", "INSPECT").icon("plastic_rule").noundo().params(
+        "bodies?: [body names] (default all); compares rules and feature inputs with nominal limits, not measured B-rep wall thickness or molding certification",
+    ),
 ];
 
 fn rule_json(s: &Session, r: &PlasticRule) -> Value {
     let (vals, _) = s.doc.param_values();
-    let values = s.doc.plastic_values(&vals, r).map(|v| {
+    let evaluated = s.doc.plastic_values(&vals, r);
+    let warnings = evaluated.as_ref().map(|v| v.warnings()).unwrap_or_default();
+    let values = evaluated.map(|v| {
         json!({"thickness": v.thickness, "nominal_radius": v.nominal_radius, "clearance": v.clearance, "knife_edge": v.knife_edge,
             "reveal_height": v.reveal_height, "thickness_variation": v.thickness_variation, "draft_deg": v.draft.to_degrees(),
             "max_thickness": v.max_thickness, "min_thickness": v.min_thickness, "min_draft_deg": v.min_draft.to_degrees()})
@@ -52,6 +57,7 @@ fn rule_json(s: &Session, r: &PlasticRule) -> Value {
         "name": r.name, "material": r.material, "library": library,
         "expressions": r.fields().iter().map(|(k, e, _)| (k.to_string(), json!(e))).collect::<serde_json::Map<_, _>>(),
         "values": values.unwrap_or_else(|e| json!({"error": e.to_string()})),
+        "warnings": warnings,
     })
 }
 
@@ -147,6 +153,109 @@ fn assign_rule(s: &mut Session, p: &Value) -> Result<Value> {
 fn list_rules(s: &mut Session, _p: &Value) -> Result<Value> {
     let rules: Vec<Value> = s.doc.plastic_rules().iter().map(|r| rule_json(s, r)).collect();
     Ok(json!({"rules": rules, "active": s.doc.plastic.active, "assigned": s.doc.plastic.assigned}))
+}
+
+/// A bounded, non-destructive *nominal* design audit. It intentionally does not
+/// infer wall thickness from volume or a bounding box: those are not thickness
+/// measurements. A future B-rep sampler can add geometric checks separately.
+fn audit(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "plastic.audit";
+    let targets = string_list(cmd, p, "bodies")?;
+    if targets.len() > 10_000 {
+        return Err(bad(cmd, "too many bodies"));
+    }
+    let state = s.model.state();
+    if let Some(name) = targets.iter().find(|name| state.body(name).is_none()) {
+        return Err(bad(cmd, format!("no body `{name}`")));
+    }
+    let (params, _) = s.doc.param_values();
+    let mut body_rules = Vec::new();
+    for body in &state.bodies {
+        if !targets.is_empty() && !targets.contains(&body.name) {
+            continue;
+        }
+        if let Some(rule) = s.doc.plastic_rule_for(&body.name) {
+            let values = s.doc.plastic_values(&params, &rule).map_err(|e| bad(cmd, e.to_string()))?;
+            body_rules.push(json!({
+                "body": body.name,
+                "rule": rule.name,
+                "nominal_thickness_mm": values.thickness,
+                "min_thickness_mm": values.min_thickness,
+                "max_thickness_mm": values.max_thickness,
+                "draft_deg": values.draft.to_degrees(),
+                "warnings": values.warnings(),
+            }));
+        }
+    }
+
+    let mut feature_checks = Vec::new();
+    for feature in &s.doc.features {
+        if feature.suppressed {
+            continue;
+        }
+        // If an explicit filter was given, only named associations are safe
+        // to report. Automatic body selection cannot be inferred from the
+        // feature's raw input once other features have rebuilt the model.
+        let (name, body, nominal) = match &feature.kind {
+            FeatureKind::Boss { diameter, height, hole_diameter: Some(hole), draft, body, .. } => {
+                let diameter = s.doc.eval(diameter, Kind::Length).map_err(|e| bad(cmd, e.to_string()))?;
+                let hole = s.doc.eval(hole, Kind::Length).map_err(|e| bad(cmd, e.to_string()))?;
+                let height = s.doc.eval(height, Kind::Length).map_err(|e| bad(cmd, e.to_string()))?;
+                let rule = body.as_deref().and_then(|body| s.doc.plastic_rule_for(body))
+                    .or_else(|| s.doc.plastic.active.as_deref().and_then(|name| s.doc.plastic_rule(name)));
+                let draft = match draft {
+                    Some(angle) => s.doc.eval(angle, Kind::Angle).map_err(|e| bad(cmd, e.to_string()))?,
+                    None => match rule {
+                        Some(rule) => s.doc.plastic_values(&params, &rule).map_err(|e| bad(cmd, e.to_string()))?.draft,
+                        None => 0.0,
+                    },
+                };
+                let end_radius = diameter * 0.5 - height * draft.tan();
+                ("boss_radial_wall", body.as_deref(), Some(diameter.min(2.0 * end_radius) * 0.5 - hole * 0.5))
+            }
+            FeatureKind::SnapFit { thickness, body, .. } => {
+                let t = s.doc.eval(thickness, Kind::Length).map_err(|e| bad(cmd, e.to_string()))?;
+                ("snap_beam_thickness", body.as_deref(), Some(t))
+            }
+            FeatureKind::Rest { thickness: Some(thickness), body, .. } => {
+                let t = s.doc.eval(thickness, Kind::Length).map_err(|e| bad(cmd, e.to_string()))?;
+                ("rest_nominal_wall", body.as_deref(), Some(t))
+            }
+            _ => continue,
+        };
+        if !targets.is_empty() && body.is_none_or(|name| !targets.iter().any(|target| target == name)) {
+            continue;
+        }
+        let Some(nominal) = nominal else { continue };
+        let rule = body.and_then(|name| s.doc.plastic_rule_for(name))
+            .or_else(|| s.doc.plastic.active.as_deref().and_then(|name| s.doc.plastic_rule(name)));
+        let mut warnings = Vec::new();
+        if let Some(rule) = &rule {
+            let limits = s.doc.plastic_values(&params, rule).map_err(|e| bad(cmd, e.to_string()))?;
+            if nominal < limits.min_thickness {
+                warnings.push(json!({"code":"below_rule_min", "minimum_mm":limits.min_thickness}));
+            }
+            if nominal > limits.max_thickness {
+                warnings.push(json!({"code":"above_rule_max", "maximum_mm":limits.max_thickness}));
+            }
+        }
+        feature_checks.push(json!({
+            "feature": feature.name,
+            "feature_id": feature.id,
+            "kind": name,
+            "body": body,
+            "nominal_mm": nominal,
+            "rule": rule.map(|rule| rule.name),
+            "warnings": warnings,
+        }));
+    }
+    Ok(json!({
+        "scope":"advisory_nominal_dimensions_only",
+        "geometry_thickness_sampled": false,
+        "molding_feasibility_certified": false,
+        "body_rules": body_rules,
+        "feature_checks": feature_checks
+    }))
 }
 
 fn rest(s: &mut Session, p: &Value) -> Result<Value> {
