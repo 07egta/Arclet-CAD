@@ -3128,23 +3128,24 @@ fn solve_inner(
             failing.push(id.clone());
         }
     }
-    let use_x = if status == SolveStatus::Solved { &x } else { &x0 };
-    // Write back.
-    for (i, p) in sk.points.iter_mut().enumerate() {
-        if let Some(v) = lay.pvar.get(i).copied().flatten() {
-            p.pos = Vec2::new(use_x.get(v).copied().unwrap_or(p.pos.x), use_x.get(v + 1).copied().unwrap_or(p.pos.y));
+    // On failure do not even re-write the original coordinates/radii: normalizing a
+    // radius, welding periodic endpoints, or refreshing a reference dimension on a
+    // rejected solution would turn an unsuccessful edit into a document mutation.
+    if status == SolveStatus::Solved {
+        for (i, p) in sk.points.iter_mut().enumerate() {
+            if let Some(v) = lay.pvar.get(i).copied().flatten() {
+                p.pos = Vec2::new(x.get(v).copied().unwrap_or(p.pos.x), x.get(v + 1).copied().unwrap_or(p.pos.y));
+            }
         }
-    }
-    for (i, c) in sk.curves.iter_mut().enumerate() {
-        if let (CurveKind::Circle { r, .. } | CurveKind::Ellipse { r, .. }, Some(v)) = (&mut c.kind, lay.rvar.get(i).copied().flatten()) {
-            *r = use_x.get(v).copied().unwrap_or(*r).abs().max(1e-9);
+        for (i, c) in sk.curves.iter_mut().enumerate() {
+            if let (CurveKind::Circle { r, .. } | CurveKind::Ellipse { r, .. }, Some(v)) = (&mut c.kind, lay.rvar.get(i).copied().flatten()) {
+                *r = x.get(v).copied().unwrap_or(*r).abs().max(1e-9);
+            }
         }
-    }
-    if status == SolveStatus::Solved
-        && let Some(positions) = periodic_positions
-    {
-        for (point, position) in sk.points.iter_mut().zip(positions) {
-            point.pos = position;
+        if let Some(positions) = periodic_positions {
+            for (point, position) in sk.points.iter_mut().zip(positions) {
+                point.pos = position;
+            }
         }
     }
     if status == SolveStatus::Failed {
