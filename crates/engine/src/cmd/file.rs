@@ -22,12 +22,12 @@ use crate::params::{bad, bool_, num, str_, string_list};
 use crate::{EngineError, Result, Session};
 
 pub static COMMANDS: &[CommandSpec] = &[
-    CommandSpec::new("file.new", "New Design", new_doc).icon("new").key("Ctrl+N").noundo().params("name?"),
+    CommandSpec::new("file.new", "New Design", new_doc).icon("new").key("Ctrl+N").noundo().params("name?; discard?: bool (default false: refuse to replace an unsaved design; true only after explicit confirmation)"),
     CommandSpec::new("doc.open", "Open", open)
         .icon("open")
         .key("Ctrl+O")
         .noundo()
-        .params("path: .sc design (or a .solidcraft design from an earlier release), .dxf/.svg drawing (opens as a new, unsaved design with an XY sketch, using sketch.insert_dxf/sketch.insert_svg units and defaults), or a .step/.stp/.igs/.fcstd/.3dm/.3mf/.stl/.obj/.glb/.gltf file (STEP, IGES, FreeCAD, Rhino, 3MF, STL, OBJ or glTF; opens as a new design holding the file as a component named after it, as file.insert_step and file.insert_mesh make), or a .ply/.xyz/.pts point cloud (opens as a new design holding it, as pointcloud.insert makes; its `units` and `max_points` as there); up?: z|y for a STEP, IGES, FreeCAD, Rhino or glTF file (see file.insert_step and file.insert_mesh); names?: auto|solid|product|instance for a STEP, IGES, FreeCAD or Rhino file (see file.insert_step); read_only?: bool (a design: saving to its own file is refused, file.save_as keeps the changes elsewhere) → open_elsewhere: {host, user, app, opened} when another SolidCraft has the design open (its lock file is fresh)"),
+        .params("path: .sc design (or a .solidcraft design from an earlier release), .dxf/.svg drawing (opens as a new, unsaved design with an XY sketch, using sketch.insert_dxf/sketch.insert_svg units and defaults), or a .step/.stp/.igs/.fcstd/.3dm/.3mf/.stl/.obj/.glb/.gltf file (STEP, IGES, FreeCAD, Rhino, 3MF, STL, OBJ or glTF; opens as a new design holding the file as a component named after it, as file.insert_step and file.insert_mesh make), or a .ply/.xyz/.pts point cloud (opens as a new design holding it, as pointcloud.insert makes; its `units` and `max_points` as there); up?: z|y for a STEP, IGES, FreeCAD, Rhino or glTF file (see file.insert_step and file.insert_mesh); names?: auto|solid|product|instance for a STEP, IGES, FreeCAD or Rhino file (see file.insert_step); read_only?: bool (a design: saving to its own file is refused, file.save_as keeps the changes elsewhere); discard?: bool (default false: refuse to replace an unsaved design; true only after explicit confirmation) → open_elsewhere: {host, user, app, opened} when another SolidCraft has the design open (its lock file is fresh)"),
     CommandSpec::new("file.insert_step", "Insert STEP", insert_step)
         .at("SOLID", "INSERT")
         .icon("import")
@@ -51,7 +51,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         .params("dir? (default: the recovery folder) → designs autosaved by apps that crashed or closed with unsaved changes"),
     CommandSpec::new("doc.recover", "Recover Design", recover).icon("restore")
         .noundo()
-        .params("id (from doc.recovery_list); dir?; discard?: bool (delete the entry once open) — opens it with its file path, unsaved"),
+        .params("id (from doc.recovery_list); dir?; discard?: bool (delete the recovered entry once open); discard_current?: bool (default false: refuse to replace an unsaved current design) — opens the recovery with its file path, unsaved"),
     CommandSpec::new("doc.recovery_discard", "Discard Recovered Design", recovery_discard).icon("delete").noundo().params("id, or all: true; dir?"),
     CommandSpec::new("file.export", "Export", export)
         .icon("export")
@@ -77,7 +77,20 @@ pub static COMMANDS: &[CommandSpec] = &[
         .params("→ the slicers found on this machine: [{id, name, program, icon?}]; pass an id, a name or the program path as file.send_to_slicer's or file.save_mesh's `slicer`"),
 ];
 
+/// Document replacement must be a separate, explicit decision from a failed
+/// Save. Headless commands have no dialog and must never implicitly discard a
+/// dirty design. The host's tab-level New/Open actions already keep it in a tab.
+fn require_discard_confirmation(s: &Session, p: &Value, command: &str, flag: &str) -> Result<()> {
+    if s.is_dirty() && !bool_(p, flag).unwrap_or(false) {
+        return Err(EngineError::Other(format!(
+            "{command}: the current design has unsaved changes; save it first or confirm discarding it with `{flag}: true`"
+        )));
+    }
+    Ok(())
+}
+
 fn new_doc(s: &mut Session, p: &Value) -> Result<Value> {
+    require_discard_confirmation(s, p, "file.new", "discard")?;
     let name = str_(p, "name").unwrap_or("Untitled");
     s.replace_design(Session::new(Document::new(name)));
     Ok(json!({"name": name}))
@@ -272,6 +285,7 @@ fn insert_step(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn open(s: &mut Session, p: &Value) -> Result<Value> {
     let path = path_arg(p, "doc.open")?;
+    require_discard_confirmation(s, p, "doc.open", "discard")?;
     if !solidcraft_io::is_step_path(path) && p.get("names").is_some_and(|v| !v.is_null()) {
         return Err(bad("doc.open", "`names` applies to STEP and IGES files only"));
     }
@@ -892,6 +906,7 @@ fn recovery_list(_s: &mut Session, p: &Value) -> Result<Value> {
 
 fn recover(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "doc.recover";
+    require_discard_confirmation(s, p, cmd, "discard_current")?;
     let dir = recovery_dir(p, cmd)?;
     let id = str_(p, "id").ok_or_else(|| bad(cmd, "`id` is required (see doc.recovery_list)"))?;
     let (mut doc, entry) = crate::recovery::load(&dir, id)?;
@@ -974,7 +989,7 @@ mod tests {
             std::fs::write(&path, text).unwrap();
             let mut s = Session::default();
             s.execute("sketch.create", &json!({"plane":"YZ"})).unwrap();
-            let result = s.execute("doc.open", &json!({"path":path})).unwrap();
+            let result = s.execute("doc.open", &json!({"path":path, "discard":true})).unwrap();
             assert_eq!(result["errors"], 0);
             assert_eq!(s.doc.features.len(), 1);
             let id = s.active_sketch.unwrap();
@@ -1656,6 +1671,43 @@ mod tests {
         for o in formats::DESIGN_SAVE_OPTIONS {
             assert!(params_of("file.save_as").contains(o.param), "`{}` is not a documented parameter of file.save_as", o.param);
         }
+    }
+
+    /// Headless New/Open are destructive replacements, unlike the UI's
+    /// tab-based actions. Without an explicit discard decision neither may
+    /// erase a dirty document, its feature IDs or Undo history.
+    #[test]
+    fn new_and_open_refuse_to_discard_unsaved_edits() {
+        let dir = name_dir("reliable-new-open");
+        let source = dir.join("known-good.sc");
+        let mut stored = Session::default();
+        stored.execute("solid.sphere", &json!({"diameter": 12})).unwrap();
+        stored.execute("file.save_as", &json!({"path": source})).unwrap();
+
+        let mut s = Session::default();
+        s.execute("solid.box", &json!({"length": 10, "width": 20, "height": 30})).unwrap();
+        let before = s.doc.clone();
+        let undo = s.undo.len();
+        for (id, args) in [
+            ("file.new", json!({"name": "Do not discard"})),
+            ("doc.open", json!({"path": source})),
+        ] {
+            let error = s.execute(id, &args).unwrap_err().to_string();
+            assert!(error.contains("unsaved changes"), "{error}");
+            assert!(std::sync::Arc::ptr_eq(&s.doc, &before), "{id} changed the document");
+            assert_eq!(s.undo.len(), undo, "{id} changed Undo history");
+            assert!(s.is_dirty());
+        }
+        // Explicit confirmation is accepted, without rewriting the existing file.
+        s.execute("doc.open", &json!({"path": source, "discard":true})).unwrap();
+        assert!(!s.is_dirty());
+        assert_eq!(s.doc.features.len(), 1);
+        s.execute("solid.box", &json!({"length": 2, "width": 3, "height": 4})).unwrap();
+        assert!(s.is_dirty());
+        s.execute("file.new", &json!({"name":"Fresh", "discard":true})).unwrap();
+        assert!(!s.is_dirty());
+        assert!(s.doc.features.is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     /// A different Save As target is not an implicit request to overwrite it.
