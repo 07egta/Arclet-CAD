@@ -18,10 +18,9 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("pointcloud.analyze", "Analyze Point Cloud", crate::checked!("pointcloud.analyze", analyze))
         .icon("inspect")
         .noundo()
-        .doc_only()
         .contract(&ANALYZE_CONTRACT)
         .output(output_schema_for::<AnalyzeResult>)
-        .params("cloud: id|name; mode: plane|circle|sphere|cylinder|nearest|outliers|align; max_points?: 1..100000 (default 20000); tolerance_mm?: 1e-9..1e6 (default 0.1); point?: [world x,y,z] for nearest; target?: id|name of fixed cloud for align. Read-only bounded sample; results include residuals; align estimates translation only"),
+        .params("cloud: id|name; mode: plane|circle|sphere|cylinder|nearest|outliers|align|cad_distance; body?: CAD body for cad_distance; max_points?: 1..100000 (default 20000); tolerance_mm?: 1e-9..1e6 (default 0.1); point?: [world x,y,z] for nearest; target?: id|name of fixed cloud for align. Read-only bounded sample; results include residuals; align estimates translation only"),
     CommandSpec::new("pointcloud.insert", "Insert Point Cloud", insert)
         .at("SOLID", "INSERT")
         .icon("import")
@@ -287,6 +286,14 @@ fn analyze(s: &mut Session, p: &Value) -> Result<Value> {
         "sphere" => json!(sample.fit_sphere(tolerance)?),
         "cylinder" => json!(sample.fit_cylinder(tolerance)?),
         "outliers" => json!(sample.outliers()?),
+        "cad_distance" => {
+            let name = str_(p, "body").ok_or_else(|| bad(cmd, "`body` must name the CAD body to compare"))?;
+            let world = s.world_state();
+            let body = world.body(name).ok_or_else(|| bad(cmd, format!("no CAD body `{name}`")))?;
+            // Read-only distance to evaluated tessellation, not to analytic NURBS.
+            let mesh = body.mesh();
+            json!(sample.distance_to_mesh(&mesh, tolerance)?)
+        }
         "nearest" => {
             let coords = p.get("point").and_then(Value::as_array)
                 .filter(|a| a.len() == 3)
@@ -309,7 +316,7 @@ fn analyze(s: &mut Session, p: &Value) -> Result<Value> {
             let fixed = CloudSample::new(target, max)?;
             json!(align_translation(&fixed, &sample, tolerance)?)
         }
-        _ => return Err(bad(cmd, "`mode` must be plane, circle, sphere, cylinder, nearest, outliers or align")),
+        _ => return Err(bad(cmd, "`mode` must be plane, circle, sphere, cylinder, nearest, outliers, align or cad_distance")),
     };
     Ok(json!({
         "cloud": cloud.id,
