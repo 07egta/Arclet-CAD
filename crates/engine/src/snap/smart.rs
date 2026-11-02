@@ -993,7 +993,7 @@ fn line_circle_intersections(a: Vec3, b: Vec3, circle: Round) -> Vec<Vec3> {
     let dir = d / dlength;
     let q = a - circle.center;
     let height = q.dot(circle.normal);
-    if !height.is_finite() || height.abs() > circle.radius.max(dlength).max(length(q)) * 1e-10 {
+    if !height.is_finite() {
         return Vec::new();
     }
     let slope = dir.dot(circle.normal);
@@ -1012,6 +1012,9 @@ fn line_circle_intersections(a: Vec3, b: Vec3, circle: Round) -> Vec<Vec3> {
         } else {
             Vec::new()
         };
+    }
+    if height.abs() > circle.radius.max(dlength).max(length(q)) * 1e-10 {
+        return Vec::new();
     }
     let along = -q.dot(dir);
     let transverse = q + dir * along;
