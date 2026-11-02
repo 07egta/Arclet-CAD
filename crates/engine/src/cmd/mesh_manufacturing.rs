@@ -222,11 +222,13 @@ pub(super) fn check(s: &mut Session, p: &Value) -> Result<Value> {
     // The default matches the actual STL/3MF export weld tolerance. A
     // B-rep's adjacent faces often have separate, coincident vertex indices.
     let weld = number(p, cmd, "weld_tolerance_mm", (size * 1e-6).max(1e-7), 0.0, 1000.0)?;
-    let chord = number(p, cmd, "chord_mm", (size * 5e-5).max(1e-4), 1e-6, 1000.0)?;
+    // The default matches MeshQuality::Standard in the STL/3MF exporter.
+    // An explicit chord_mm is an analysis override, not a saved export option.
+    let chord = number(p, cmd, "chord_mm", (size * 2e-4).max(1e-3), 1e-6, 1000.0)?;
     let tess = if source.body.is_mesh() {
         None
     } else {
-        Some(source.body.tessellate_with(chord, true).map_err(|e| bad(cmd, format!("mesh generation failed: {e}")))?)
+        Some(source.body.tessellate(chord).map_err(|e| bad(cmd, format!("mesh generation failed: {e}")))?)
     };
     let (positions, triangles) = match &tess {
         Some(m) => (m.positions.as_slice(), m.triangles.as_slice()),
@@ -327,7 +329,7 @@ pub(super) fn check(s: &mut Session, p: &Value) -> Result<Value> {
         "size_mm": [dimensions.x, dimensions.y, dimensions.z],
         "source_topology": source_topology,
         "topology": topology,
-        "candidate_mesh_method": "same_tolerance_weld_as_STL_3MF_export",
+        "candidate_mesh_method": "standard_STL_3MF_tessellation_and_weld_when_defaults_used",
         "candidate_mesh_vertices": print_positions.len(),
         "candidate_mesh_triangles": print_triangles.len(),
         "potential_self_intersections": intersections,
