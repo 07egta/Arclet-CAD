@@ -20,6 +20,15 @@ import traceback
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def script_commands(payload: object) -> list[dict]:
+    """The CLI recipe and history exports use {"commands": [...]}, not a bare list."""
+    if isinstance(payload, dict):
+        payload = payload.get("commands")
+    if not isinstance(payload, list) or not all(isinstance(step, dict) for step in payload):
+        raise AssertionError("expected a command script object or array")
+    return payload
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--cli", required=True, type=Path)
@@ -97,8 +106,8 @@ def main() -> None:
             recipe = ROOT / "tests/oracle/01-box/recipe.json"
             source = d / "commands.json"
             source.write_text(run("recipe", recipe), encoding="utf-8")
-            steps = json.loads(source.read_text(encoding="utf-8"))
-            if not isinstance(steps, list) or len(steps) < 4:
+            steps = script_commands(json.loads(source.read_text(encoding="utf-8")))
+            if len(steps) < 4:
                 raise AssertionError("recipe did not produce an executable script")
             base = d / "original.sc"
             stl = d / "original.stl"
@@ -125,8 +134,8 @@ def main() -> None:
             # Native document -> command script -> fresh native document.
             recovered = d / "history.json"
             run("script", base, "--out", recovered)
-            if not isinstance(json.loads(recovered.read_text(encoding="utf-8")), list):
-                raise AssertionError("exported history is not a script array")
+            if not script_commands(json.loads(recovered.read_text(encoding="utf-8"))):
+                raise AssertionError("exported history has no executable commands")
             replayed = d / "replayed.sc"
             run("run", recovered, "--save", replayed, "--quiet")
             near(volume(inspect(replayed)), 24000.0)
@@ -135,17 +144,19 @@ def main() -> None:
             history = steps + [{"command": "edit.undo", "params": {}},
                                {"command": "edit.redo", "params": {}}]
             undo_script = d / "undo_redo.json"
-            undo_script.write_text(json.dumps(history), encoding="utf-8")
+            undo_script.write_text(json.dumps({"commands": history}), encoding="utf-8")
             undone = d / "undo_redo.sc"
             run("run", undo_script, "--save", undone, "--quiet")
             near(volume(inspect(undone)), 24000.0)
 
             # Real dimension edit and recomputation on an oracle with parameter-driven sketch.
-            driven = json.loads(run("recipe", ROOT / "tests/oracle/24-user-parameters/recipe.json"))
+            driven = script_commands(json.loads(run(
+                "recipe", ROOT / "tests/oracle/24-user-parameters/recipe.json"
+            )))
             driven.append({"command": "parameters.change",
                            "params": {"name": "width", "expression": "70 mm"}})
             edited = d / "parameter_edit.json"
-            edited.write_text(json.dumps(driven), encoding="utf-8")
+            edited.write_text(json.dumps({"commands": driven}), encoding="utf-8")
             changed = d / "parameter_edit.sc"
             run("run", edited, "--save", changed, "--quiet")
             expected = (70.0 * 40.0 - math.pi * 5.0 * 5.0) * 15.0
