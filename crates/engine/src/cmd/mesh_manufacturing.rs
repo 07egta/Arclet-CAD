@@ -40,6 +40,54 @@ fn bed_size(p: &Value, cmd: &str) -> Result<Option<[f64; 3]>> {
     }
 }
 
+/// STL and ordinary (untagged) 3MF serialize positions at f32 precision.
+/// Detect changes that can erase a very thin feature far from the origin.
+/// Tagged 3MF preserves f64, but is not the default slicer export path.
+fn export_f32_precision(positions: &[Vec3], triangles: &[[u32; 3]]) -> Value {
+    let mut converted = Vec::with_capacity(positions.len());
+    let (mut overflow, mut max_error) = (0usize, 0.0_f64);
+    for &p in positions {
+        let q = Vec3::new(p.x as f32 as f64, p.y as f32 as f64, p.z as f32 as f64);
+        if !q.is_finite() {
+            overflow += 1;
+        } else if p.is_finite() {
+            max_error = max_error.max(p.dist(q));
+        }
+        converted.push(q);
+    }
+    let mut collapsed = 0usize;
+    for &[a, b, c] in triangles {
+        let (Some(&p), Some(&q), Some(&r)) =
+            (converted.get(a as usize), converted.get(b as usize), converted.get(c as usize))
+        else { continue };
+        if p.is_finite() && q.is_finite() && r.is_finite() && super::flat(p, q, r) {
+            collapsed += 1;
+        }
+    }
+    let original_bounds: Aabb3 = positions.iter().copied().collect();
+    let quantized_bounds: Aabb3 = converted.iter().copied().collect();
+    let dimension_error = if original_bounds.is_empty() || quantized_bounds.is_empty() {
+        None
+    } else {
+        let d = original_bounds.size();
+        let q = quantized_bounds.size();
+        Some([q.x - d.x, q.y - d.y, q.z - d.z])
+    };
+    json!({
+        "method": "f64_to_f32_vertex_roundtrip",
+        "formats": ["STL_binary", "STL_ascii", "3MF_untagged"],
+        "max_position_error_mm": max_error,
+        "dimension_delta_mm": dimension_error,
+        "unrepresentable_vertices": overflow,
+        "collapsed_triangles": collapsed,
+        "warning_threshold_mm": 0.01,
+        "precision_loss_warning": max_error > 0.01,
+        "safe": overflow == 0 && collapsed == 0 && max_error <= 0.01,
+        "certified_print_tolerance": false,
+        "limitations": "Does not validate 3MF ZIP/XML integrity, orientation or final slicer quantization."
+    })
+}
+
 /// A conservative triangle-pair screen: excludes common-vertex neighbours, sorts
 /// AABBs along X and uses exact triangle distances for candidates. The cap is
 /// reported, not disguised as a successful global check. Contact/overlap of
@@ -274,6 +322,10 @@ pub(super) fn check(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let dimensions = bounds.size();
     let topology_ok = !malformed_input && topology["closed"] == true;
+    let serialization = export_f32_precision(&print_positions, &print_triangles);
+    let serialization_loss = serialization["unrepresentable_vertices"].as_u64().unwrap_or(0) > 0
+        || serialization["collapsed_triangles"].as_u64().unwrap_or(0) > 0;
+    let quantization_warning = serialization["precision_loss_warning"] == true;
     let intersections = if topology_ok {
         intersection_screen(&print_positions, &print_triangles, (bounds.diagonal() * 1e-10).max(1e-10))
     } else {
@@ -299,9 +351,9 @@ pub(super) fn check(s: &mut Session, p: &Value) -> Result<Value> {
     let possible_support = orientation["possible_support_area_mm2"].as_f64().unwrap_or(0.0) > 0.0;
     let fails_bed = fit.as_ref().is_some_and(|v| v["fits_current_xy_orientation"] == false);
     let multi_shell = topology["connected_shells"].as_u64().is_some_and(|v| v > 1);
-    let verdict = if !topology_ok || self_intersections > 0 { "invalid_mesh" }
+    let verdict = if !topology_ok || serialization_loss || self_intersections > 0 { "invalid_mesh" }
         else if !checked_intersections { "inspection_incomplete" }
-        else if multi_shell || thin_warning || possible_support || fails_bed || orientation["has_flat_bed_contact"] == false { "requires_review" }
+        else if multi_shell || quantization_warning || thin_warning || possible_support || fails_bed || orientation["has_flat_bed_contact"] == false { "requires_review" }
         else { "passed_limited_screening" };
     let mut blockers = Vec::new();
     let mut warnings = Vec::new();
@@ -335,6 +387,11 @@ pub(super) fn check(s: &mut Session, p: &Value) -> Result<Value> {
     if multi_shell {
         warnings.push("multiple closed shells require cavity orientation, separation and containment review");
     }
+    if serialization_loss {
+        blockers.push("STL/untagged 3MF f32 serialization loses triangles or overflows vertices");
+    } else if quantization_warning {
+        warnings.push("STL/untagged 3MF f32 rounding exceeds the 0.01 mm screening threshold");
+    }
     Ok(json!({
         "body": name,
         "source": if source.body.is_mesh() { "imported_mesh" } else { "brep_tessellation" },
@@ -350,6 +407,7 @@ pub(super) fn check(s: &mut Session, p: &Value) -> Result<Value> {
         "candidate_mesh_method": "standard_STL_3MF_tessellation_and_weld_when_defaults_used",
         "candidate_mesh_vertices": print_positions.len(),
         "candidate_mesh_triangles": print_triangles.len(),
+        "export_coordinate_precision": serialization,
         "potential_self_intersections": intersections,
         "sampled_wall_thickness": wall,
         "orientation_and_support": orientation,
