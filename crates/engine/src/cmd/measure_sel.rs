@@ -567,6 +567,13 @@ fn exact_planar_closest(a: &Item, b: &Item) -> Option<(Vec3, Vec3)> {
     }
 }
 
+/// A fitted display edge that happens to look straight is not an authored exact
+/// line. Only points and exactly authored sketch lines carry a certified linear
+/// primitive into the analytic distance calculation.
+fn exact_linear_source(item: &Item) -> bool {
+    matches!(item.shape, Shape::Point(_)) || matches!(item.shape, Shape::Line { .. }) && item.json["length_exact"] == true
+}
+
 /// Two straight edges sharing exactly one end define rays away from that corner. Their
 /// stored directions are arbitrary, so use the rays to preserve obtuse (and straight) angles.
 /// Separate edges and coincident copies have no unique corner and keep the undirected angle.
@@ -659,13 +666,28 @@ pub(crate) fn measure_items(s: &Session, items: &Value) -> Result<Value> {
     }
     if let [a, b] = described.as_slice() {
         let analytic_min = exact_linear_closest(a.shape, b.shape);
+        let linear_exact = analytic_min.is_some() && exact_linear_source(a) && exact_linear_source(b);
         let plane_min = exact_planar_closest(a, b);
         let analytic_max = exact_linear_farthest(a.shape, b.shape);
         let near = analytic_min.or(plane_min).or_else(|| closest(&a.geo, &b.geo));
         let far = analytic_max.or_else(|| farthest(&a.geo, &b.geo));
         let c = centre(&a.shape, &b.shape);
-        let mut min_method = if analytic_min.is_some() { "analytic_linear" } else if plane_min.is_some() { "analytic_planar_interior" } else { "sampled_geometry" };
-        let max_method = if analytic_max.is_some() { "analytic_linear" } else { "sampled_geometry" };
+        let mut min_method = if linear_exact {
+            "analytic_linear"
+        } else if analytic_min.is_some() {
+            "analytic_recognized_linear"
+        } else if plane_min.is_some() {
+            "analytic_planar_interior"
+        } else {
+            "sampled_geometry"
+        };
+        let max_method = if linear_exact {
+            "analytic_linear"
+        } else if analytic_max.is_some() {
+            "analytic_recognized_linear"
+        } else {
+            "sampled_geometry"
+        };
         // An exact closest or farthest distance stands only where the mesh agrees with it to
         // within its chord error (a bounded face can end before the exact value's point).
         let radii = [a.shape, b.shape].iter().map(|x| if let Shape::Round { radius, .. } = x { *radius } else { 0.0 }).sum::<f64>();
@@ -690,9 +712,10 @@ pub(crate) fn measure_items(s: &Session, items: &Value) -> Result<Value> {
             out["delta"] = json!(q - p);
             out["min"] = json!(d);
             out["min_method"] = json!(min_method);
-            out["min_exact"] = json!(min_method != "sampled_geometry");
-            out["min_witness_exact"] = json!(analytic_min.is_some() || plane_min.is_some());
-            if min_method == "sampled_geometry" {
+            let min_exact = min_method == "analytic_linear";
+            out["min_exact"] = json!(min_exact);
+            out["min_witness_exact"] = json!(linear_exact);
+            if !min_exact {
                 // Sampling and surface faceting have no certified global error bound.
                 out["min_error_bound_mm"] = Value::Null;
             }
@@ -703,9 +726,10 @@ pub(crate) fn measure_items(s: &Session, items: &Value) -> Result<Value> {
             out["max_to"] = json!(q);
             out["max_delta"] = json!(q - p);
             out["max_method"] = json!(max_method);
-            out["max_exact"] = json!(max_method == "analytic_linear");
-            out["max_witness_exact"] = json!(analytic_max.is_some());
-            if max_method == "sampled_geometry" {
+            let max_exact = max_method == "analytic_linear";
+            out["max_exact"] = json!(max_exact);
+            out["max_witness_exact"] = json!(linear_exact);
+            if !max_exact {
                 out["max_error_bound_mm"] = Value::Null;
             }
         }
