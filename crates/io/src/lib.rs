@@ -809,7 +809,12 @@ pub fn read_design(bytes: &[u8]) -> Result<Document> {
 /// Design file bytes for an authoritative save. Never return an empty
 /// success value when serialisation fails.
 pub fn try_write_design(doc: &Document) -> Result<Vec<u8>> {
-    doc.to_json_checked().map(String::into_bytes).map_err(IoError::from)
+    let bytes = doc.to_json_checked().map(String::into_bytes)?;
+    // Verify the exact bytes that will be published, including size bounds,
+    // current/older format handling and typed field validation. A successful
+    // write of JSON that this version cannot reopen is not a successful Save.
+    read_design(&bytes).map_err(|e| IoError::Invalid(format!("refusing to save a design that cannot be reopened: {e}")))?;
+    Ok(bytes)
 }
 
 /// Design file bytes for callers that cannot report a failure. Save and export
@@ -1356,5 +1361,17 @@ mod tests {
         let mut xml = String::new();
         zip.by_name("3D/3dmodel.model").unwrap().read_to_string(&mut xml).unwrap();
         assert!(!xml.contains("ft:"));
+    }
+
+    #[test]
+    fn checked_json_writer_reopens_and_refuses_unknown_future_format() {
+        let valid = Document::new("editable");
+        let bytes = try_write_design(&valid).unwrap();
+        assert_eq!(read_design(&bytes).unwrap().name, "editable");
+
+        let mut future = Document::new("unsafe to acknowledge");
+        future.format = "solidcraft/999999".into();
+        let error = try_write_design(&future).unwrap_err().to_string();
+        assert!(error.contains("refusing to save a design that cannot be reopened"), "{error}");
     }
 }
