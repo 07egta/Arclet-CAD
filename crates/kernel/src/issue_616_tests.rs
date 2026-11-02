@@ -118,6 +118,53 @@ fn the_retry_guard_refuses_changes_away_from_the_tool() {
     assert!(crate::boolean_guard::check_retry(&tool, &bx([-1., -1., 4.], [6., 6., 6.]), BoolOp::Cut, None).is_ok());
 }
 
+/// A bounding box is not a solid: the sphere's bounds enclose the cube, but the
+/// cube corners remain outside the sphere. A failed numerical cut cannot return empty.
+#[test]
+fn empty_retry_rejects_ball_whose_box_covers_the_target() {
+    let target = bx([0., 0., 0.], [2., 2., 2.]);
+    let tool = sphere(Vec3::new(1., 1., 1.), 1.5).unwrap();
+    let target_volume = volume(&target);
+    assert!(target.tessellate(0.01).unwrap().bounds().min.x >= tool.tessellate(0.01).unwrap().bounds().min.x);
+    let error = crate::boolean_guard::check_retry(&target, &tool, BoolOp::Cut, None).unwrap_err();
+    assert!(error.to_string().contains("outside the tool"), "{error}");
+    // The failed retry took the target by shared reference and did not mutate it.
+    assert!((volume(&target) - target_volume).abs() < 1e-10);
+    assert!(target.validity().is_empty(), "{:?}", target.validity());
+}
+
+/// A cavity may lie entirely inside the tool's bounds. Refuse an empty cut of a
+/// target inside that cavity: no material was removed, even though both boxes overlap.
+#[test]
+fn empty_retry_rejects_hollow_tool_enclosing_the_target() {
+    let target = bx([0., 0., 0.], [2., 2., 2.]);
+    let outer = bx([-3., -3., -3.], [8., 8., 8.]);
+    let cavity = bx([-1., -1., -1.], [4., 4., 4.]);
+    let tool = boolean(&outer, &cavity, BoolOp::Cut).unwrap().unwrap();
+    assert!(tool.validity().is_empty(), "{:?}", tool.validity());
+    let error = crate::boolean_guard::check_retry(&target, &tool, BoolOp::Cut, None).unwrap_err();
+    assert!(error.to_string().contains("outside the tool"), "{error}");
+    assert!((volume(&target) - 8.0).abs() < 1e-8);
+}
+
+/// A true complete cut is valid: a larger ball contains the target, not merely
+/// its bounding box. Preserve this important success path for recovered retries.
+#[test]
+fn empty_retry_accepts_a_ball_that_contains_the_entire_target() {
+    let target = bx([0., 0., 0.], [2., 2., 2.]);
+    let tool = sphere(Vec3::new(1., 1., 1.), 2.1).unwrap();
+    assert!(crate::boolean_guard::check_retry(&target, &tool, BoolOp::Cut, None).is_ok());
+}
+
+/// A coplanar enclosing box is a valid full cut. It should not be refused just
+/// because every sampled target surface lies on (or inside) the cutter's boundary.
+#[test]
+fn empty_retry_accepts_exactly_coincident_boxes() {
+    let target = bx([0., 0., 0.], [2., 2., 2.]);
+    let tool = bx([0., 0., 0.], [2., 2., 2.]);
+    assert!(crate::boolean_guard::check_retry(&target, &tool, BoolOp::Cut, None).is_ok());
+}
+
 /// Random small boxes joined flush to the walls and floor of a shelled box with rounded corners
 /// (sitting on the floor, against a wall, flush with a wall's top or into its corner), and of
 /// the same box with a window through its floor (on the ledge beside the window, flush with its
