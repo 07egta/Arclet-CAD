@@ -9,6 +9,10 @@ on:
       - '.github/workflows/arclet-qa-numerics.yml'
   workflow_dispatch:
 
+concurrency:
+  group: arclet-qa-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -45,3 +49,32 @@ jobs:
         run: |
           set -euo pipefail
           cargo test --profile ci --locked -p solidcraft-geom --lib -- --test-threads=1
+
+  cli-smoke:
+    name: headless CAD save/import/export/undo/fuzz
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Check QA script syntax
+        run: python3 -m py_compile qa/scripts/ultimate_quality_cli_smoke.py
+      - name: Install native Linux build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev mesa-vulkan-drivers
+      - name: Build real CLI for end-to-end tests
+        run: cargo build --profile ci --locked -p solidcraft-cli --bin solidcraft-cli
+      - name: Exercise complete CAD workflow and capture evidence
+        run: |
+          mkdir -p target/qa-evidence
+          python3 qa/scripts/ultimate_quality_cli_smoke.py \
+            --cli target/ci/solidcraft-cli \
+            --report target/qa-evidence/headless-cli.json
+      - name: Retain evidence even if tests fail
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: arclet-headless-quality-evidence
+          path: target/qa-evidence/headless-cli.json
+          if-no-files-found: warn
+          retention-days: 14
