@@ -153,6 +153,65 @@ viewport size. Zoom takes `factor` (0.05..20, below 1 zooms in) and an optional 
 `anchor`. The returned `camera` is applied immediately by the UI, without animation,
 document edits, undo steps or a success-log entry per movement.
 
+## AI concurrency in the desktop control protocol
+
+The existing document edit token is read through
+`document.revision {}` → `{"document_id": string, "revision": integer}`.
+The ID distinguishes different open designs; the revision tracks changed document
+content. Selection-only changes need not increment the revision.
+
+New clients can check support without altering the design:
+
+```json
+{"id":10,"method":"control.capabilities","params":{}}
+```
+
+New desktop builds answer
+`{"atomic_batch_guards":true}`. Old desktop builds can reject the
+unknown method. A new MCP bridge MUST refuse guarded writes to a server that
+does not positively confirm support, rather than silently removing guards.
+
+An `engine.batch` request may optionally include **both** fields
+`if_document_id` (nonempty string) and `if_revision` (nonnegative integer),
+in addition to `commands`, `rollback`, `timings` and
+`coalesce_parameters`. The desktop checks these fields immediately before
+executing any step *inside the request queue*, so concurrent clients cannot
+interleave a mutation between the revision check and the first command.
+
+```json
+{
+  "id": 11,
+  "method": "engine.batch",
+  "params": {
+    "if_document_id": "TOKEN_FROM_document.revision",
+    "if_revision": 42,
+    "rollback": true,
+    "commands": [
+      {"command": "parameters.change", "params": {"name": "H", "expression": "20 mm"}}
+    ]
+  }
+}
+```
+
+The sample token is illustrative. If stale, or if either field is malformed,
+the result contains `completed:0`, `results:[]`, `undone:0`,
+`rolled_back:false`, `not_run:[0,...]` and
+`failed:{index:null, command:null, code, error, expected, actual}`.
+Its `code` is `stale_state` or `invalid_precondition`. No modeling step
+has executed. With a valid token the existing `engine.batch` result and
+checkpoint behavior are unchanged. Omitting the token preserves the old
+protocol exactly.
+
+Only queued **batch** execution provides atomic concurrent-client precondition
+checking; a separate read followed by a direct `engine.execute` may race an
+intervening client's edit. Clients requiring guarded edits should always send
+their mutations in one token-guarded `engine.batch` call.
+
+This guard protects document state from stale writes. It does **not** undo
+external side effects of permitted commands such as saving or exporting a file,
+and it is not authorization to bypass the existing file scope or client
+approval policy. See [MCP security and headless replay](mcp.md#security-and-authority).
+
 ## MCP
 
 `solidcraft-cli mcp --connect 127.0.0.1:PORT` bridges an MCP client (an AI agent) to this

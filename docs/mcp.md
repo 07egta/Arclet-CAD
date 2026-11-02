@@ -144,7 +144,8 @@ They cover the workflow, the command shapes, how to verify with `measure`, and t
 |---|---|---|
 | `list_commands` | `filter?` | The command catalog: id, label, tab/panel, shortcut, parameter docs, enabled now. `filter` matches id, label, tab and panel. |
 | `execute` | `command`, `params?`, `verbose?` (default true) | Run any command with JSON parameters (`list_commands` shows them). Failures leave the design unchanged. A feature command replies with the feature (`feature`, `name`), every body (`bodies`) and the bodies it created, changed and removed (`created_bodies`, `changed_bodies`, `removed_bodies`). `verbose: false` uses the same compact reply as `batch`. |
-| `batch` | `commands: [{command, params}]`, `rollback?` (default true), `verbose?` (default true) | Run steps in order, stop at the first error and undo the completed steps. The reply names the failing step (`failed.index`, `failed.command`, `failed.error`) and every result before it. `verbose: false` keeps the reply small in large designs: feature steps leave out the full body list (`created_bodies`, `changed_bodies`, `removed_bodies` stay) and sketch steps the ids they repeat outside `created`. Bridged to an app that has `engine.batch`, the whole batch is one control request (one frame of the app). Older apps, and apps showing the agent cursor, get the steps one by one. |
+| `batch` | `commands: [{command, params}]`, `rollback?` (default true), `verbose?` (default true), `if_document_id?`, `if_revision?` | Run steps in order, stop at the first error and undo the completed steps. The reply names the failing step (`failed.index`, `failed.command`, `failed.error`) and every result before it. `verbose: false` keeps the reply small in large designs: feature steps leave out the full body list (`created_bodies`, `changed_bodies`, `removed_bodies` stay) and sketch steps the ids they repeat outside `created`. Bridged to an app that has `engine.batch`, the whole batch is one control request (one frame of the app). Older apps, and apps showing the agent cursor, get the steps one by one. |
+| `inspect_state` | `measure?` (default false), `commands?`, `feature_inputs?` | Read-only model snapshot with a document ID and revision guard token; optional command and feature-input inventories (see below). |
 | `inspect_design` | `measure?` (default true), `sketches?` (default true) | Design properties (`metadata`: project, author… and other tools' keys; set them with `execute` `document.metadata.set`), parameters, timeline (type, suppressed, rolled back, error, warning, timing), bodies (volume, area, centre of mass, bbox, face/edge/vertex counts, visible), sketches (curves, points, constraints, profiles, DOF, solve status, visible), selection, undo depth. Hide helper sketches, bodies or construction planes with `execute` `browser.visibility` (`{items, visible}` or `{folder, visible}`), and joint glyphs with `{joints: [id or name], visible}` or `{folder: "joints", visible}` (a hidden joint still constrains and drives; `joint.list` reports each joint's `visible`). |
 | `measure` | `body?` | Volume (mm³), area (mm²), centre of mass, bbox and topology counts per body, with totals. |
 | `body_topology` | `body` | Edges (index, midpoint, length, ends) and faces (index, name, area, centroid, normal, `point`, and for a cylindrical face its `cylinder`: `origin`, `axis`, `radius`). An edge midpoint is the `[x,y,z]` that picks that edge for fillet and chamfer. A face's `point` lies on it and picks it (its centroid may not: that of a face with a hole is in the hole); a face's `name` picks it for the commands that take faces (`face.delete`, `solid.shell`, `solid.draft`, `solid.offset_face`, `solid.split_face`, `solid.replace_face`, and `face` of `sheet.convert`). |
@@ -167,13 +168,17 @@ Resources: `solidcraft://design` (inspect JSON with measurements) and `solidcraf
 
 Errors: an unknown tool or arguments that don't match the tool's schema are JSON-RPC
 `-32602` errors; an engine failure (bad command parameters, a feature that fails) is a tool
-result with `isError: true` and the engine's message, which the model can read and correct.
+result with `isError: true` and the engine's message, which the model can read and correct. For command failures, additive `structuredContent.error` includes `code`, `message` and `next_action` (for example `unknown_command` and `list_commands`); batch precondition errors include a structured `failed` object with `expected` and `actual` revision tokens.
 
 `batch` rollback goes back to an engine checkpoint (`edit.checkpoint`) taken before the first
 step: the design, the active sketch and the undo history are restored exactly as they were,
 however long the history is. Batches that call `file.new` or `doc.open` get the design back,
 not its file path. (An older app without checkpoints falls back to undoing as many steps as
 the batch added to the undo history.)
+
+Rollback does not undo file writes. A batch step that saves, exports or deletes a file leaves that
+file changed on disk even when the batch is rolled back. Guarded batches (with `if_document_id` or
+`if_revision`) are limited to 500 steps; longer edits should be split into several inspected batches.
 
 ## Camera and close-up recipe
 
@@ -247,3 +252,155 @@ Parameters dialog. `record_ui.sh` records it and draws the pointer and the capti
 
 The tests in `crates/mcp/src/tests.rs` run sessions like this (box → fillet → hole, parameters,
 batch rollback, hostile arguments) and check the results only through MCP.
+
+
+## Revision-guarded AI automation
+
+The modeling API is deliberately **one API**, not a second AI-only CAD kernel. Use existing
+`execute` for sketch/feature/curve/surface editing and selection (`select.set`, `timeline.edit`,
+`parameters.change`, etc.); use `measure` and `body_topology` for verification,
+`batch` for multiple commands, and `save`/`open`/`export` for files.
+`list_commands` and `describe_command` are the authoritative list of operations and
+their current parameter contracts. The headless and desktop backends expose the same tools.
+
+### State, selection and commands
+
+`inspect_state` is a read-only snapshot with a model edit token:
+
+```json
+{"name":"inspect_state","arguments":{"measure":false,"commands":false,"feature_inputs":true}}
+```
+
+It returns `document_id`, `revision` and `design` (the `document.inspect` result:
+`name`, `path`, `dirty`, `active_sketch`, `selection`, `params`, `timeline`,
+`bodies`, `sketches`, and undo/redo depth). `measure` defaults to false here to
+avoid measuring the whole CAD model on each edit. `commands:true` adds the
+`engine.commands` inventory; `feature_inputs:true` adds `parameters.list`
+filtered to feature inputs. These optional inventories can be large.
+
+The snapshot reads `document.revision` before and after gathering this information
+and returns a tool error if the document changed during that interval. This check
+does not freeze selection: selection is included as seen during the inspection, but
+a selection-only change does not advance the document edit revision.
+
+To edit a selected object, first use `inspect_state`, then the existing
+`execute {"command":"select.set","params":{"items":[...]}}` (or
+`select.clear`); use `timeline.inspect`/`timeline.edit` for features, and
+`sketch.inspect` for sketch geometry. This works without a GUI.
+
+### Optimistic concurrency and transactions
+
+To avoid applying an edit planned for a document that another agent has since
+modified, supply **both** token fields on `batch`:
+
+```json
+{
+  "name": "batch",
+  "arguments": {
+    "if_document_id": "DOCUMENT_ID_FROM_INSPECT_STATE",
+    "if_revision": 42,
+    "rollback": true,
+    "verbose": false,
+    "commands": [
+      {"command": "parameters.change", "params": {"name": "H", "expression": "20 mm"}},
+      {"command": "timeline.compute_all", "params": {}}
+    ]
+  }
+}
+```
+
+The values above are illustrative. Always copy the actual token from
+`inspect_state`; do not hard-code it. With a matching token, execution uses
+the existing `engine.batch`, which takes a checkpoint and rolls back completed
+in-memory changes on a command failure when `rollback` is true. In the desktop
+control server the precondition is rechecked **inside the same queued batch**
+before the first step runs, preventing an intervening client edit from racing the
+precheck. No new undo/history engine has been created.
+
+Stale or invalid tokens return an MCP tool error (`isError: true`) whose
+machine-readable `structuredContent` contains:
+
+```json
+{
+  "ok": false,
+  "completed": 0,
+  "failed": {
+    "index": null,
+    "command": null,
+    "code": "stale_state",
+    "error": "the active design or its revision changed; call inspect_state again before retrying",
+    "expected": {"document_id": "...", "revision": 42},
+    "actual": {"document_id": "...", "revision": 43}
+  },
+  "rolled_back": false,
+  "undone": 0,
+  "applied": [],
+  "not_run": [0],
+  "results": []
+}
+```
+
+Relevant error codes: `invalid_precondition` (missing/invalid token field),
+`stale_state` (document or revision differs), `revision_unavailable` (token
+cannot be checked), `guard_unsupported` (older desktop does not confirm
+support) and `atomic_batch_unavailable` (the guarded desktop batch cannot be
+sent atomically). Do **not** blindly retry an edit when a remote request times
+out: its execution may still be in progress; call `pending` and `inspect_state`.
+
+`structuredContent` is additive for object-shaped tool replies. The historical
+`content:[{"type":"text","text":"..."}]` remains intact for older MCP clients.
+The established MCP `initialize` versions, tool names and resource URIs do not
+change. Guard fields are opt-in; unguarded `execute`/`batch` preserve their
+previous behavior. When guarding a desktop batch, a connected old app must
+advertise `control.capabilities.atomic_batch_guards`; otherwise the MCP server
+refuses to run it instead of silently ignoring the token or retrying steps.
+
+**Transaction boundary:** a batch checkpoint restores **in-memory document state**,
+active sketch and undo history. It is not a filesystem transaction: an export,
+save or file deletion already performed during a batch is not reverted by undo.
+Separate file operations from modeling batches; make a new output filename or
+external backup before overwriting important files. Never assume a failed
+rollback happened without checking the `rolled_back` field and the current state.
+
+### Headless and reproducible example
+
+`examples/ai-automation-tube.json` is a command-only demonstration:
+new design, parameter `H`, circle sketch (radius 12 mm), extrude,
+change `H` from 12 to 20 mm, circle sketch (radius 3 mm) and extrude cut.
+Its expected closed-solid volume is `2700*pi` mm³ (approximately
+`8482.3002` mm³). Run without launching the desktop UI:
+
+```sh
+solidcraft-cli run examples/ai-automation-tube.json --save tube.sc --out tube.stl
+solidcraft-cli eval tube.sc
+solidcraft-cli eval examples/ai-automation-tube.json
+solidcraft-cli run --in tube.sc --out tube-second-session.stl
+```
+
+The two `eval` commands should agree on geometric measurements within the
+kernel's numerical tolerances. The `run --in` command loads a saved design
+in a new CLI process before exporting it. Geometry can be compared by volume,
+bbox, topology and STL triangle data; do not compare process-generated
+`document_id`, timing fields or binary file bytes as a universal reproducibility
+guarantee. Determinism also depends on fixed inputs, command ordering,
+library/kernel versions and any externally loaded assets.
+
+The end-to-end regression in `crates/mcp/src/tests.rs`
+(`ai_headless_circle_extrude_resize_hole_save_reload_and_stl`) performs the
+build, edit, measurement, save, independent-session reload and binary STL
+structure verification through MCP. It is a **test case**, not proof that every
+CAD geometry or third-party file is supported.
+
+### Security and authority
+
+An MCP client decides when to authorize tool calls. Tool annotations explicitly
+mark `execute`, `batch`, `open`, `save` and `export` as potentially
+destructive and file-accessing. `inspect_state` and the other inspection tools
+are read-only. There is no general shell-execution tool in the MCP surface;
+do not add one. Existing engine commands that write/delete files are **not**
+implicitly safe merely because they can be requested through `execute`.
+File operations are still constrained by the MCP VFS path scope described above
+(the open design's safe folder, recovery, scratch, and explicit `--allow-path`
+directories). `--allow-any-path` deliberately lifts that protection and
+must only be used for trusted clients. An MCP approval dialog and the path scope
+are independent protections; neither substitutes for the other.
