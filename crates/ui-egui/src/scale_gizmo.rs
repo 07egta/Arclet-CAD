@@ -240,7 +240,10 @@ pub(crate) fn show(app: &SolveApp, d: &mut Dialog, ui: &mut egui::Ui, painter: &
         return false;
     }
     let Some(at) = pointer.or_else(|| old.as_ref().map(|state| state.start_pointer)) else { return false };
-    let response = ui.interact(Rect::from_center_size(at, vec2(28.0, 28.0)), id.with("hit"), Sense::drag());
+    // Keep the widget under the original press while dragging: moving its hit
+    // rectangle to the current cursor can lose egui's drag ownership.
+    let anchor = old.as_ref().map_or(at, |state| state.start_pointer);
+    let response = ui.interact(Rect::from_center_size(anchor, vec2(28.0, 28.0)), id.with("hit"), Sense::drag());
     if response.hovered() || old.is_some() {
         ui.ctx().set_cursor_icon(if pressed { egui::CursorIcon::Grabbing } else { egui::CursorIcon::Grab });
     }
