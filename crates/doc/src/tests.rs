@@ -684,3 +684,113 @@ fn empty_boolean_targets_without_overlap_keep_plain_message() {
         assert_eq!(model.result(cut).unwrap().error.as_deref(), Some("there is no body to cut or intersect"));
     }
 }
+
+#[test]
+fn assembly_shared_instances_keep_unique_paths_and_checked_world_frames() {
+    let mut doc = Document::new("assembly instances");
+    let parent = doc.add_component(Some("Axle"), 0).unwrap();
+    let first = doc.occurrence_of(parent).unwrap().id;
+    let wheel = doc.add_component(Some("Wheel"), parent).unwrap();
+    let child = doc.occurrence_of(wheel).unwrap().id;
+    let second = doc.add_occurrence(parent, 0, rigid(Vec3::new(40.0, 0.0, 0.0), Vec3::ZERO, Vec3::Z, 0.0)).unwrap();
+    assert_eq!(doc.components.iter().filter(|c| c.id == wheel).count(), 1);
+    let checked = doc.placements_checked().unwrap();
+    assert_eq!(checked, doc.placements());
+    assert_eq!(checked.len(), 5, "root, two shared axles and one wheel under each");
+    assert_eq!(doc.path_placement(&[first, child]).unwrap().0, wheel);
+    let (component, frame) = doc.path_placement(&[second, child]).unwrap();
+    assert_eq!(component, wheel);
+    assert!((apply_point(&frame, Vec3::ZERO).x - 40.0).abs() < 1e-9);
+    assert!(doc.validate_mechanism().is_ok());
+    assert!(doc.body_frames_checked(&ModelState::default()).unwrap().is_empty());
+
+    let saved = doc.to_json();
+    let loaded = Document::from_json(&saved).unwrap();
+    assert_eq!(loaded.occurrences, doc.occurrences);
+    assert_eq!(loaded.placements_checked().unwrap(), checked);
+    assert_eq!(loaded.validate_mechanism(), Ok(()));
+}
+
+#[test]
+fn assembly_rejects_invalid_parent_cycles_and_nonrigid_instances_atomically() {
+    let mut doc = Document::new("assembly validation");
+    let frame = doc.add_component(Some("Frame"), 0).unwrap();
+    let wheel = doc.add_component(Some("Wheel"), frame).unwrap();
+    let frame_occ = doc.occurrence_of(frame).unwrap().id;
+    let wheel_occ = doc.occurrence_of(wheel).unwrap().id;
+    let initial = doc.clone();
+
+    let mut scaled = IDENTITY;
+    scaled[0][0] = 2.0;
+    for (component, parent, transform) in [(wheel, 123456, IDENTITY), (wheel, wheel, IDENTITY), (frame, wheel, IDENTITY), (wheel, frame, scaled)] {
+        assert!(doc.add_occurrence(component, parent, transform).is_err());
+        assert_eq!(doc, initial, "rejected occurrence edits preserve every stored ID and body definition");
+    }
+
+    doc.occurrences.iter_mut().find(|o| o.id == wheel_occ).unwrap().id = frame_occ;
+    assert!(doc.validate_assembly_tree().is_err(), "duplicate occurrence IDs are invalid");
+    doc = initial.clone();
+    doc.occurrences.iter_mut().find(|o| o.id == wheel_occ).unwrap().parent = 9999;
+    assert!(doc.validate_assembly_tree().is_err(), "dangling parents are invalid");
+    doc = initial.clone();
+    doc.occurrences.iter_mut().find(|o| o.id == frame_occ).unwrap().parent = wheel;
+    assert!(doc.validate_assembly_tree().is_err(), "mutually contained occurrences are invalid");
+    doc = initial.clone();
+    doc.components.iter_mut().find(|c| c.id == frame).unwrap().parent = wheel;
+    assert!(doc.validate_assembly_tree().is_err(), "cyclic definition parents are invalid");
+    doc = initial;
+    doc.occurrences.iter_mut().find(|o| o.id == frame_occ).unwrap().transform = scaled;
+    assert!(doc.placements_checked().is_err(), "nonrigid stored transforms cannot enter checked geometry");
+}
+
+#[test]
+fn assembly_checked_expansion_handles_many_instances_and_reports_excess_depth() {
+    let mut doc = Document::new("repeated mechanism");
+    let frame = doc.add_component(Some("Frame"), 0).unwrap();
+    let wheel = doc.add_component(Some("Wheel"), frame).unwrap();
+    for i in 1..600 {
+        doc.add_occurrence(frame, 0, rigid(Vec3::new(i as f64, 0.0, 0.0), Vec3::ZERO, Vec3::Z, 0.0)).unwrap();
+    }
+    let paths = doc.placements_checked().unwrap();
+    assert_eq!(paths.len(), 1 + 600 + 600);
+    assert_eq!(paths, doc.placements());
+    assert_eq!(paths.iter().filter(|(component, _, _)| *component == wheel).count(), 600);
+
+    let mut too_deep = Document::new("nested");
+    let mut parent = 0;
+    for index in 0..=MAX_PLACEMENT_DEPTH {
+        parent = too_deep.add_component(Some(&format!("Layer{index}")), parent).unwrap();
+    }
+    assert!(too_deep.placements_checked().is_err(), "silent truncation must not count as a valid expansion");
+}
+
+#[test]
+fn assembly_checked_body_frames_follow_shared_definition_edits() {
+    let (mut doc, _) = plate_doc();
+    let component = doc.add_component(Some("Shared panel"), 0).unwrap();
+    let first = doc.occurrence_of(component).unwrap().id;
+    let second = doc.add_occurrence(component, 0, rigid(Vec3::new(60.0, 0.0, 0.0), Vec3::ZERO, Vec3::Z, 0.0)).unwrap();
+    doc.body_components.insert("Body1".into(), component);
+    let mut model = Model::new();
+    model.evaluate(&doc);
+    let state = model.state();
+    assert_eq!(state.bodies.len(), 1, "one definition must back both instances");
+    let frames = doc.body_frames_checked(&state).unwrap();
+    assert_eq!(frames.len(), 2);
+    assert!(frames.iter().all(|(_, definition, comp, _, _)| definition == "Body1" && *comp == component));
+    let first_frame = frames.iter().find(|(_, _, _, path, _)| path.as_slice() == [first]).unwrap();
+    let second_frame = frames.iter().find(|(_, _, _, path, _)| path.as_slice() == [second]).unwrap();
+    assert_eq!(apply_point(&first_frame.4, Vec3::ZERO), Vec3::ZERO);
+    assert_eq!(apply_point(&second_frame.4, Vec3::ZERO), Vec3::new(60.0, 0.0, 0.0));
+    assert_eq!(frames, doc.body_frames_with_source(&state));
+    assert!(rel(measure(&state.bodies[0].body).unwrap().volume, 24_000.0) < 1e-9);
+
+    doc.set_param("width", "50 mm", None, None).unwrap();
+    model.evaluate(&doc);
+    let edited = model.state();
+    assert_eq!(edited.bodies.len(), 1);
+    assert!(rel(measure(&edited.bodies[0].body).unwrap().volume, 30_000.0) < 1e-9);
+    assert_eq!(doc.body_frames_checked(&edited).unwrap(), frames, "the geometry changes in its definition; instance transforms stay stable");
+    let loaded = Document::from_json(&doc.to_json()).unwrap();
+    assert_eq!(loaded.body_frames_checked(&edited).unwrap(), frames);
+}

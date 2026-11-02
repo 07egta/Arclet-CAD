@@ -1,0 +1,43 @@
+name: Arclet assembly mechanisms
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'crates/doc/src/assembly.rs'
+      - 'crates/doc/src/joints.rs'
+      - 'crates/doc/src/joints_*.rs'
+      - 'crates/doc/src/motion.rs'
+      - 'crates/doc/src/tests.rs'
+      - 'docs/arclet-assembly-mechanisms.md'
+      - '.github/workflows/arclet-assembly-mechanisms.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: arclet-assembly-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  assembly:
+    name: Document assembly regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Arclet mechanism cases and hostile references
+        run: cargo test --profile ci --locked -p solidcraft-doc --lib arclet_
+      - name: Shared instances and assembly tree cases
+        run: cargo test --profile ci --locked -p solidcraft-doc --lib assembly_
+      - name: Full document crate regression
+        run: cargo test --profile ci --locked -p solidcraft-doc --lib
+      - name: Doc crate Clippy
+        run: cargo clippy --profile ci --locked -p solidcraft-doc --all-targets -- -D warnings
+      - name: Report formatting changes
+        run: cargo fmt --package solidcraft-doc -- --check

@@ -8,6 +8,8 @@
 //! gathered for display, measuring and export (`world_bodies`). Commands take world coordinates
 //! and the engine maps a new feature's geometry into the active component's frame.
 
+use std::collections::{BTreeSet, HashMap, VecDeque};
+
 use serde::{Deserialize, Serialize};
 use solidcraft_geom::{Plane, Vec3};
 
@@ -323,6 +325,12 @@ impl Document {
     /// Every placement of each component: (component, occurrence path ids, world transform).
     /// A branch stops past [`MAX_PLACEMENT_DEPTH`] levels, the walk past [`MAX_PLACEMENTS`] placements.
     pub fn placements(&self) -> Vec<(u64, Vec<u64>, Mat)> {
+        // An index avoids scanning every occurrence for every expanded instance.
+        // Retain the original sibling order and DFS output for existing callers.
+        let mut children: HashMap<u64, Vec<&Occurrence>> = HashMap::new();
+        for occurrence in &self.occurrences {
+            children.entry(occurrence.parent).or_default().push(occurrence);
+        }
         let mut out = vec![(0, Vec::new(), IDENTITY)];
         let mut stack: Vec<(u64, Vec<u64>, Mat)> = vec![(0, Vec::new(), IDENTITY)];
         while let Some((comp, path, m)) = stack.pop() {
@@ -333,7 +341,7 @@ impl Document {
             if path.len() > MAX_PLACEMENT_DEPTH {
                 continue;
             }
-            for o in self.occurrences.iter().filter(|o| o.parent == comp) {
+            for o in children.get(&comp).into_iter().flatten() {
                 let mut p = path.clone();
                 p.push(o.id);
                 let w = mat_mul(&m, &o.transform);
@@ -342,6 +350,92 @@ impl Document {
             }
         }
         out
+    }
+
+    /// Validate the *stored* assembly graph without changing or repairing data.
+    ///
+    /// Definition parents and occurrence parent->component edges are both checked:
+    /// a definition may be instantiated under multiple parents, but neither graph
+    /// may contain cycles. IDs, references and transforms must be usable before a
+    /// caller commits placement, exports bodies or runs interference checks.
+    pub fn validate_assembly_tree(&self) -> Result<()> {
+        if self.components.len() > 10_000 || self.occurrences.len() > MAX_PLACEMENTS {
+            return Err(DocError::Invalid("assembly exceeds the component or occurrence limit".into()));
+        }
+        let component_ids: BTreeSet<u64> = self.components.iter().map(|c| c.id).collect();
+        if component_ids.len() != self.components.len() || component_ids.contains(&0) {
+            return Err(DocError::Invalid("duplicate or root component identifier".into()));
+        }
+        let mut definition_edges: HashMap<u64, Vec<u64>> = HashMap::new();
+        let mut definition_degrees: HashMap<u64, usize> = component_ids.iter().map(|id| (*id, 0)).collect();
+        for component in &self.components {
+            if component.parent != 0 && !component_ids.contains(&component.parent) {
+                return Err(DocError::Unknown(format!("parent component {}", component.parent)));
+            }
+            if component.parent != 0 {
+                definition_edges.entry(component.parent).or_default().push(component.id);
+                if let Some(degree) = definition_degrees.get_mut(&component.id) {
+                    *degree += 1;
+                }
+            }
+        }
+        if !acyclic_components(&definition_edges, &mut definition_degrees) {
+            return Err(DocError::Invalid("component definition parents contain a cycle".into()));
+        }
+
+        let mut occurrence_ids = BTreeSet::new();
+        let mut placement_edges: HashMap<u64, Vec<u64>> = HashMap::new();
+        let mut placement_degrees: HashMap<u64, usize> = component_ids.iter().map(|id| (*id, 0)).collect();
+        placement_degrees.insert(0, 0);
+        for occurrence in &self.occurrences {
+            if !occurrence_ids.insert(occurrence.id) || occurrence.id == 0 {
+                return Err(DocError::Invalid("duplicate or root occurrence identifier".into()));
+            }
+            if !component_ids.contains(&occurrence.component) || (occurrence.parent != 0 && !component_ids.contains(&occurrence.parent)) {
+                return Err(DocError::Invalid("occurrence references an unknown component".into()));
+            }
+            if !crate::valid_transfer_matrix(&occurrence.transform) {
+                return Err(DocError::Invalid(format!("occurrence {} has a non-rigid or non-finite transform", occurrence.id)));
+            }
+            placement_edges.entry(occurrence.parent).or_default().push(occurrence.component);
+            if let Some(degree) = placement_degrees.get_mut(&occurrence.component) {
+                *degree += 1;
+            }
+        }
+        if !acyclic_components(&placement_edges, &mut placement_degrees) {
+            return Err(DocError::Invalid("component occurrence parents contain a cycle".into()));
+        }
+        Ok(())
+    }
+
+    /// Complete, checked expansion of all instance paths, including shared
+    /// definitions. Unlike `placements`, never returns a truncated assembly.
+    pub fn placements_checked(&self) -> Result<Vec<(u64, Vec<u64>, Mat)>> {
+        self.validate_assembly_tree()?;
+        let mut children: HashMap<u64, Vec<&Occurrence>> = HashMap::new();
+        for occurrence in &self.occurrences {
+            children.entry(occurrence.parent).or_default().push(occurrence);
+        }
+        let mut out = vec![(0, Vec::new(), IDENTITY)];
+        let mut stack = vec![(0, Vec::new(), IDENTITY)];
+        while let Some((component, path, world)) = stack.pop() {
+            if let Some(siblings) = children.get(&component) {
+                if path.len() >= MAX_PLACEMENT_DEPTH && !siblings.is_empty() {
+                    return Err(DocError::Invalid("assembly placement exceeds nesting depth".into()));
+                }
+                for occurrence in siblings {
+                    if out.len() >= MAX_PLACEMENTS {
+                        return Err(DocError::Invalid("assembly instance expansion exceeds placement limit".into()));
+                    }
+                    let mut next_path = path.clone();
+                    next_path.push(occurrence.id);
+                    let next_world = mat_mul(&world, &occurrence.transform);
+                    out.push((occurrence.component, next_path.clone(), next_world));
+                    stack.push((occurrence.component, next_path, next_world));
+                }
+            }
+        }
+        Ok(out)
     }
 
     /// Every body as the world shows it: its world name ("Body1", or "Body1 (Occ:2)" for a
@@ -367,6 +461,30 @@ impl Document {
             }
         }
         out
+    }
+
+    /// Validated per-instance world frames for interference/clearance consumers.
+    ///
+    /// Unlike the legacy best-effort body_frames_with_source, this reports bad
+    /// hierarchy links, non-rigid transforms and expansion overflow as errors.
+    /// No Boolean, collision or contact result is implied by a frame alone.
+    pub fn body_frames_checked(&self, st: &crate::ModelState) -> Result<Vec<(String, String, u64, Vec<u64>, Mat)>> {
+        let placements = self.placements_checked()?;
+        let names = WorldNames::new(self, st);
+        let owners = self.model_body_components(st);
+        let mut by_component: HashMap<u64, Vec<&crate::ModelBody>> = HashMap::new();
+        for (body, owner) in st.bodies.iter().zip(&owners) {
+            by_component.entry(*owner).or_default().push(body);
+        }
+        let mut out = Vec::new();
+        for (component, path, matrix) in placements {
+            for body in by_component.get(&component).into_iter().flatten() {
+                let world_name = names.name(&body.name, component, &path);
+                let world = self.model_body_offset(body).map_or(matrix, |offset| mat_mul(&matrix, offset));
+                out.push((world_name, body.definition_name().to_string(), component, path.clone(), world));
+            }
+        }
+        Ok(out)
     }
 
     /// Computed placement name. Source names retain priority; ambiguous labels use full IDs.
@@ -439,19 +557,50 @@ impl Document {
         if component == 0 || !self.components.iter().any(|c| c.id == component) {
             return Err(DocError::Unknown(format!("component {component}")));
         }
+        if parent != 0 && !self.components.iter().any(|c| c.id == parent) {
+            return Err(DocError::Unknown(format!("parent component {parent}")));
+        }
+        if !crate::valid_transfer_matrix(&transform) {
+            return Err(DocError::Invalid("occurrence transform must be finite and rigid".into()));
+        }
         if self.inside_component(parent, component) {
             return Err(DocError::Invalid("a component can't contain itself".into()));
         }
-        if self.occurrences.len() >= 100_000 {
+        if self.occurrences.len() >= MAX_PLACEMENTS {
             return Err(DocError::Invalid("too many occurrences".into()));
         }
         let id = self.next_id.max(1);
-        self.next_id = id.checked_add(1).ok_or_else(|| DocError::Invalid("too many items in the design".into()))?;
+        if self.occurrences.iter().any(|o| o.id == id) || self.components.iter().any(|c| c.id == id) {
+            return Err(DocError::Invalid("occurrence identifier conflicts with existing data".into()));
+        }
+        let next = id.checked_add(1).ok_or_else(|| DocError::Invalid("too many items in the design".into()))?;
         let cname = self.components.iter().find(|c| c.id == component).map(|c| c.name.clone()).unwrap_or_default();
         let k = self.occurrences.iter().filter(|o| o.component == component).count() + 1;
         self.occurrences.push(crate::Occurrence { id, component, parent, name: format!("{cname}:{k}"), transform, grounded: false });
+        self.next_id = next;
         Ok(id)
     }
+}
+
+/// Kahn's algorithm over component IDs; repeated instance edges are counted
+/// separately and are legal as long as their graph remains acyclic.
+fn acyclic_components(edges: &HashMap<u64, Vec<u64>>, degrees: &mut HashMap<u64, usize>) -> bool {
+    let mut ready: VecDeque<u64> = degrees.iter().filter_map(|(id, degree)| (*degree == 0).then_some(*id)).collect();
+    let mut processed = 0usize;
+    while let Some(component) = ready.pop_front() {
+        processed += 1;
+        for child in edges.get(&component).into_iter().flatten() {
+            if let Some(degree) = degrees.get_mut(child) {
+                // A count below zero means the edge bookkeeping is inconsistent: report it, don't wrap.
+                let Some(next) = degree.checked_sub(1) else { return false };
+                *degree = next;
+                if *degree == 0 {
+                    ready.push_back(*child);
+                }
+            }
+        }
+    }
+    processed == degrees.len()
 }
 
 /// The names of a design's placed bodies ([`Document::world_body_name`]), with what naming one
