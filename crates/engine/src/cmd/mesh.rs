@@ -351,3 +351,91 @@ fn root(parent: &mut [usize], mut x: usize) -> usize {
         x = up;
     }
 }
+
+#[cfg(test)]
+mod model_healing_tests {
+    use super::*;
+
+    fn tetra() -> (Vec<Vec3>, Vec<[u32; 3]>) {
+        (
+            vec![
+                Vec3::new(0.0, 0.0, 0.0),
+                Vec3::new(1.0, 0.0, 0.0),
+                Vec3::new(0.0, 1.0, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+            ],
+            vec![[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]],
+        )
+    }
+
+    #[test]
+    fn healthy_solid_has_no_unresolved_topological_defects() {
+        let (p, t) = tetra();
+        let r = analyze(&p, &t, 0.0);
+        assert_eq!(r["closed"], true, "{r}");
+        for k in ["duplicate_faces", "invalid_vertex_references", "winding_conflicts", "naked_edges", "non_manifold_edges"] {
+            assert_eq!(r[k], 0, "{k}: {r}");
+        }
+    }
+
+    #[test]
+    fn duplicated_face_never_claims_watertight_solid() {
+        let (p, mut t) = tetra();
+        t.push(t[0]);
+        let r = analyze(&p, &t, 0.0);
+        assert_eq!(r["duplicate_faces"], 1, "{r}");
+        assert_eq!(r["closed"], false, "{r}");
+        assert_eq!(r["non_manifold_edges"], 3, "{r}");
+    }
+
+    #[test]
+    fn inverted_facet_is_reported_not_silently_accepted() {
+        let (p, mut t) = tetra();
+        t[0].swap(0, 1);
+        let r = analyze(&p, &t, 0.0);
+        assert_eq!(r["winding_conflicts"], 3, "{r}");
+        assert_eq!(r["closed"], false, "{r}");
+    }
+
+    #[test]
+    fn open_edge_and_non_manifold_edge_are_distinguished() {
+        let (p, mut t) = tetra();
+        t.pop();
+        let r = analyze(&p, &t, 0.0);
+        assert_eq!(r["naked_edges"], 3, "{r}");
+        assert_eq!(r["non_manifold_edges"], 0, "{r}");
+        assert_eq!(r["closed"], false);
+    }
+
+    #[test]
+    fn degenerate_and_invalid_references_are_not_certified() {
+        let (p, mut t) = tetra();
+        t.push([0, 0, 1]);
+        t.push([1, 2, 9999]);
+        let r = analyze(&p, &t, 0.0);
+        assert_eq!(r["degenerate_triangles"], 2, "{r}");
+        assert_eq!(r["invalid_vertex_references"], 1, "{r}");
+        assert_eq!(r["closed"], false, "{r}");
+    }
+
+    #[test]
+    fn near_gap_is_a_tolerance_hypothesis_not_an_exact_repair() {
+        let (mut p, mut t) = tetra();
+        p.push(Vec3::new(0.0, 0.0, 0.00001));
+        t[1][0] = 4;
+        let exact = analyze(&p, &t, 0.0);
+        let close = analyze(&p, &t, 0.001);
+        assert_eq!(exact["closed"], false);
+        assert_eq!(close["duplicate_vertices"], 1);
+        // A check made with tolerance is not evidence that coordinates were moved.
+        assert_eq!(p[4], Vec3::new(0.0, 0.0, 0.00001));
+    }
+
+    #[test]
+    fn large_gap_remains_open_at_a_small_tolerance() {
+        let (mut p, mut t) = tetra();
+        p.push(Vec3::new(0.0, 0.0, 0.25));
+        t[1][0] = 4;
+        assert_eq!(analyze(&p, &t, 0.001)["closed"], false);
+    }
+}
