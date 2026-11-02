@@ -562,6 +562,59 @@ mod tests {
     }
 
     #[test]
+    fn history_navigation_restores_the_unfinished_draft() {
+        let mut history = CommandHistory::default();
+        history.push(HistoryLine { kind: LineKind::Entered, text: "Line".into(), fill: "Line".into() });
+        history.push(HistoryLine { kind: LineKind::Started, text: "sketch.line".into(), fill: "sketch.line".into() });
+        history.push(HistoryLine { kind: LineKind::Entered, text: "Box".into(), fill: "Box".into() });
+        history.push(HistoryLine { kind: LineKind::Failed, text: "error".into(), fill: "Box".into() });
+
+        let mut recall = HistoryRecall::default();
+        let mut edit = "my unfinished command".to_owned();
+        recall.step(&history, &mut edit, true);
+        assert_eq!(edit, "Box");
+        recall.step(&history, &mut edit, true);
+        assert_eq!(edit, "Line", "started and failed messages must not become commands");
+        recall.step(&history, &mut edit, true);
+        assert_eq!(edit, "Line", "oldest command is the upper bound");
+        recall.step(&history, &mut edit, false);
+        assert_eq!(edit, "Box");
+        recall.step(&history, &mut edit, false);
+        assert_eq!(edit, "my unfinished command", "the draft must be restored on return");
+        recall.step(&history, &mut edit, false);
+        assert_eq!(edit, "my unfinished command");
+        recall.reset();
+        recall.step(&history, &mut edit, true);
+        assert_eq!(edit, "Box");
+    }
+
+    #[test]
+    fn history_does_not_recall_error_messages_or_empty_text() {
+        let mut line = CommandLine::default();
+        line.failed("", "No command");
+        line.started("solid.box");
+        let mut edit = "keep this".to_owned();
+        line.recall(&mut edit, true);
+        assert_eq!(edit, "keep this");
+        line.entered("solid.box");
+        line.recall(&mut edit, true);
+        assert_eq!(edit, "solid.box");
+    }
+
+    #[test]
+    fn popup_stays_within_viewport_at_laptop_and_high_dpi_logical_sizes() {
+        for (width, height) in [(960.0, 600.0), (1280.0, 720.0), (1366.0, 768.0), (1920.0, 1080.0)] {
+            let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(width, height));
+            for left in [0.0, width - 160.0] {
+                let editor = egui::Rect::from_min_size(pos2(left, height - 92.0), vec2(290.0, 30.0));
+                let popup = popup_rect(viewport, editor, 285.0);
+                assert!(viewport.contains(popup.min) && viewport.contains(popup.max), "{width}x{height}: {popup:?}");
+                assert!(popup.height() > 150.0);
+            }
+        }
+    }
+
+    #[test]
     fn changing_the_text_drops_the_highlight() {
         let mut line = CommandLine::default();
         line.refresh("li");
