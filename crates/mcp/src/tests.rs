@@ -2544,3 +2544,16 @@ fn ai_headless_circle_extrude_resize_hole_save_reload_and_stl() {
     assert_eq!(bytes.len(), 84 + 50 * count, "binary STL triangle records are incomplete");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn ai_command_errors_are_structured_and_shell_execution_is_not_exposed() {
+    let mut s = server();
+    let unexpected = raw_tool(&mut s, "execute", json!({
+        "command":"shell.execute", "params":{"program":"sh","args":["-c","echo unexpected"]}
+    }));
+    assert_eq!(unexpected["result"]["isError"], true, "{unexpected}");
+    assert_eq!(unexpected["result"]["structuredContent"]["error"]["code"], "unknown_command", "{unexpected}");
+    assert_eq!(unexpected["result"]["structuredContent"]["error"]["next_action"], "list_commands", "{unexpected}");
+    assert!(unexpected["result"]["content"][0]["text"].as_str().unwrap().contains("unknown command"), "{unexpected}");
+    assert_eq!(tool(&mut s, "measure", json!({}))["body_count"], 0);
+}
