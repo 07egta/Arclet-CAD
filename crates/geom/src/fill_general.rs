@@ -188,6 +188,23 @@ pub fn fill_general(
             })
             .collect()
     };
+    // A side is sampled at t in [0,1), so without inspecting the exact
+    // endpoints a small seam gap can be silently bridged by the fit. Refuse
+    // a discontinuity greater than the caller's own positional tolerance
+    // before spending any time developing or optimising the surface.
+    let endpoints = sample(&[0.0, 1.0])?;
+    for k in 0..sides {
+        let end = endpoints[k][1].p;
+        let start = endpoints[(k + 1) % sides][0].p;
+        let gap = end.dist(start);
+        if !(gap <= spec.tol) {
+            return invalid(format!(
+                "boundary sides {k} and {} have a {gap:.6e} mm gap (position tolerance {:.6e} mm)",
+                (k + 1) % sides,
+                spec.tol
+            ));
+        }
+    }
     let mut per = 16usize;
     let mut fit = sample(&(0..per).map(|i| i as f64 / per as f64).collect::<Vec<_>>())?;
     let mut best = Shortfall::default();
