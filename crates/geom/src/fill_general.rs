@@ -80,6 +80,9 @@ const BLEND_SHARE: f64 = 0.4;
 /// How close, in grid cells, a station is to a corner when it is near it (see [`Near`]): G1 and
 /// G2 stations that near a corner whose neighbours disagree are not held to the angle tolerance.
 const CLASH_CELLS: f64 = 2.0;
+/// At a checked G2 station, accept at most a two-percent relative normal
+/// curvature mismatch (or two percent of one inverse characteristic length).
+const G2_CURVATURE_REL_TOL: f64 = 0.02;
 
 /// What the face beside a station asks the patch to repeat across it.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -220,6 +223,9 @@ pub fn fill_general(
     if !spec.points.is_empty() {
         why += &format!(", {:e} off its points", best.points);
     }
+    if fit.iter().flatten().any(|s| s.across.is_some_and(|a| a.bend.is_some())) {
+        why += &format!(", sampled normal curvature mismatch {:e} /mm (G2 criterion not met)", best.curvature);
+    }
     Err(SplineError::Unsupported(why))
 }
 
@@ -235,11 +241,12 @@ struct Shortfall {
     deviation: f64,
     angle: f64,
     points: f64,
+    curvature: f64,
 }
 
 impl Default for Shortfall {
     fn default() -> Shortfall {
-        Shortfall { deviation: f64::INFINITY, angle: f64::INFINITY, points: f64::INFINITY }
+        Shortfall { deviation: f64::INFINITY, angle: f64::INFINITY, points: f64::INFINITY, curvature: f64::INFINITY }
     }
 }
 
@@ -640,7 +647,10 @@ fn fit_round(st: &[Station], spec: &FillSpec, start: usize) -> SplineResult<Roun
         let (net, located) = fit_grid(&grid, st, &dev, spec, &near, &fade)?;
         let got = measure(&net, st, &dev, spec, &located, &near, &fade)?;
         best = best.min(got.shortfall);
-        let within = got.shortfall.deviation <= spec.tol && got.shortfall.angle <= spec.angle_tol && got.shortfall.points <= spec.tol;
+        // A good position and G1 fit does not certify G2: explicitly check the
+        // measured normal curvature mismatch before accepting the surface.
+        let g2_ok = got.curvature <= g2_curvature_tolerance(st);
+        let within = got.shortfall.deviation <= spec.tol && got.shortfall.angle <= spec.angle_tol && got.shortfall.points <= spec.tol && g2_ok;
         if within && holds {
             check_folds(&net, &dev.d, lo, hi)?;
             let ctrl: Vec<HPoint> = net.ctrl.iter().map(|p| HPoint::weighted(*p, 1.0)).collect();
@@ -664,6 +674,30 @@ fn fit_round(st: &[Station], spec: &FillSpec, start: usize) -> SplineResult<Roun
         level *= 2;
     }
     Ok(Round::Exhausted(best))
+}
+
+/// Scale-aware normal-curvature tolerance in 1/mm at the sampled G2 stations.
+/// A zero-curvature neighbour needs an absolute tolerance tied to model size.
+fn g2_curvature_tolerance(st: &[Station]) -> f64 {
+    let mut low = Vec3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
+    let mut high = Vec3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+    let mut curvature = 0.0_f64;
+    let mut has_g2 = false;
+    for station in st {
+        low = low.min(station.p);
+        high = high.max(station.p);
+        if let Some(across) = station.across
+            && let Some(bend) = across.bend
+        {
+            has_g2 = true;
+            curvature = curvature.max(across.normal.dot(bend).abs());
+        }
+    }
+    if !has_g2 {
+        return f64::INFINITY;
+    }
+    let scale = low.dist(high);
+    G2_CURVATURE_REL_TOL * curvature.max(1.0 / scale.max(1e-9))
 }
 
 /// Which stations are close to a corner, and to a corner whose neighbours disagree, on one grid.
@@ -1077,7 +1111,7 @@ fn measure(net: &Net, st: &[Station], dev: &Developed, spec: &FillSpec, located:
     if ![deviation, angle, angle_all, curvature, points].iter().all(|x| x.is_finite()) {
         return invalid("the fit is not finite");
     }
-    Ok(Measured { shortfall: Shortfall { deviation, angle, points }, angle_all, curvature })
+    Ok(Measured { shortfall: Shortfall { deviation, angle, points, curvature }, angle_all, curvature })
 }
 
 /// The fill with its crown (see [`FillSpec::crown`]).
