@@ -472,7 +472,7 @@ fn layer_rows(session: &Session) -> Vec<LayerRow> {
     // Bodies with no explicit assignment (or a stale, deleted assignment) are
     // on Default; count from the evaluated body names, not from the assignment map.
     let default_count = session.world_state().bodies.iter()
-        .filter(|body| layers.layer_of(&body.name) == DEFAULT).count();
+        .filter(|body| layers.of.get(&body.name).is_none_or(|id| !valid.contains(id))).count();
     let mut rows = vec![LayerRow {
         id: DEFAULT,
         name: tr("arclet.layers.default").to_string(),
