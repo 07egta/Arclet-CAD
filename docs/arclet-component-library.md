@@ -33,6 +33,15 @@ Example (make sure to replace the digest with the real hash of the saved file):
 
 ## Commands
 
+Register an existing saved .sc design (do not register an unsaved model):
+
+```json
+{"command":"components.register","params":{"path":"/path/to/parts.json","entry":"chair","version":1,"name":"Chair","category":"furniture","tags":["seating"],"source":"furniture/chair.sc","unit":"mm","preview":{"bounds":[450,420,900],"description":"Chair source design"},"parameters":[{"name":"seat_width","default":450,"min":300,"max":650,"unit":"mm"}]}}
+```
+
+This computes SHA-256 from the actual source and writes the manifest without silently overwriting existing (ID, version) pairs. The source design must already exist and be a readable design. The manifest updates use crash-safe atomic writes with a backup for existing manifests (native targets).
+
+
 ```json
 {"command":"components.catalog","params":{"path":"/path/to/parts.json","query":"chair","tags":["seating"]}}
 ```
@@ -50,7 +59,7 @@ The normal `component.insert_design` implementation owns ID allocation, linked g
 - Manifest validation is bounded to 1 MiB and 256 entries; fields and parameter bounds are checked; malformed and unknown fields are rejected.
 - Source designs are read with the engine's bounded design-file reader and checked against the exact SHA-256 before inserting.
 - The existing insertion command reads the file again, so concurrent replacement between hash verification and insertion remains an unresolved TOCTOU risk.
-- This iteration does **not** provide an end-user catalog editor, registration workflow, source-byte caching, preview images, automatic unit conversion or copying source parameter dependencies into the assembly.
+- This iteration does **not** provide an end-user catalog editor or registration UI, source-byte caching, preview images, automatic unit conversion or copying source parameter dependencies into the assembly.
 - The manifest preview is descriptive metadata, **not** trusted geometry.
 - No mass-produced model library or unverified standards-compliance claim is included.
 
