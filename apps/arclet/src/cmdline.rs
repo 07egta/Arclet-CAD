@@ -319,6 +319,7 @@ pub(crate) fn show(ui: &mut Ui, line: &mut CommandLine, command: &mut String, fo
     let mut run_requested = false;
     let mut picked = Action::Nothing;
     let mut editor = egui::Rect::NOTHING;
+    let compact_layout = ui.available_width() < 530.0;
 
     ui.horizontal_centered(|ui| {
         ui.label(RichText::new(tr("arclet.command")).strong().color(tokens.text));
@@ -353,7 +354,7 @@ pub(crate) fn show(ui: &mut Ui, line: &mut CommandLine, command: &mut String, fo
         }
     });
 
-    if command != &initial {
+    if command.as_str() != initial.as_str() {
         // Text may have changed inside the egui editor in this same frame.
         // Refresh *before* Enter chooses the highlighted suggestion, otherwise
         // a stale highlight could execute a different command.
@@ -370,7 +371,7 @@ pub(crate) fn show(ui: &mut Ui, line: &mut CommandLine, command: &mut String, fo
     }
     // Compact chrome never removes Finish: put it on a second line only on
     // very small logical screens, while the editor keeps a usable hit target.
-    if ui.available_width() < 530.0 && ui_kit::button(ui, tr("arclet.finish"), ui_kit::Button::Normal).clicked() {
+    if compact_layout && ui_kit::button(ui, tr("arclet.finish"), ui_kit::Button::Normal).clicked() {
         action = Action::Finish;
     }
 
@@ -382,7 +383,7 @@ pub(crate) fn show(ui: &mut Ui, line: &mut CommandLine, command: &mut String, fo
         let area = Container::new(ui.ctx(), Surface::Popup)
             .area(egui::Id::new("arclet_command_popup"))
             .fixed_pos(rect.min);
-        let shown = area.show(ui.ctx(), |ui| {
+        area.show(ui.ctx(), |ui| {
             Container::popup_frame(ui.style()).show(ui, |ui| {
                 ui.set_min_width((rect.width() - 20.0).max(40.0));
                 egui::ScrollArea::vertical()
@@ -421,7 +422,6 @@ pub(crate) fn show(ui: &mut Ui, line: &mut CommandLine, command: &mut String, fo
         if picked != Action::Nothing {
             action = picked;
         }
-        let _ = shown;
     }
     action
 }
