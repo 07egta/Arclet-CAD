@@ -564,7 +564,9 @@ impl ArcletApp {
     /// A specific Boolean command sets the live operation selector, not merely the generic
     /// Combine tool. The underlying engine and its default remain unchanged.
     fn preset_boolean_operation(&mut self, id: &str, entered: &str) {
-        if id == "solid.combine" && let Some(operation) = commands::boolean_alias(entered) {
+        if id == "solid.combine"
+            && let Some(operation) = commands::boolean_alias(entered)
+        {
             self.set_boolean_operation(operation);
         }
     }
