@@ -577,3 +577,50 @@ fn spatial_closed_spline_and_bad_fit_edits_are_transactional() {
         assert_eq!((s.undo.len(), s.redo.len()), history);
     }
 }
+
+
+#[test]
+fn spatial_saved_normal_plane_and_through_point_follow_referenced_3d_point() {
+    let mut s = Session::default();
+    run(&mut s, "construct.plane.normal", json!({"origin":[3,4,5],"normal":[2,3,6],"name":"Tilted"}));
+    let tilt = run(&mut s, "sketch.create", json!({"plane":"Tilted","name":"Lamp section"}))["sketch"].as_u64().unwrap();
+    {
+        let st = s.world_state();
+        let plane = st.sketch(tilt).unwrap().plane;
+        near(plane.origin, Vec3::new(3.0,4.0,5.0));
+        near(plane.normal(), Vec3::new(2.0 / 7.0,3.0 / 7.0,6.0 / 7.0));
+    }
+    run(&mut s, "sketch.finish", json!({}));
+    let guide = run(&mut s, "sketch.create", json!({"plane":"XY","name":"Guide"}))["sketch"].as_u64().unwrap();
+    run(&mut s, "sketch.options", json!({"sketch_3d":true}));
+    let point = run(&mut s, "sketch.point3d", json!({"point":[10,20,30]}))["point"].as_str().unwrap().to_owned();
+    run(&mut s, "sketch.finish", json!({}));
+    run(&mut s, "construct.plane.through_point", json!({
+        "plane":"XY","point":{"sketch":guide,"point":point},"name":"Height through spatial point"
+    }));
+    let profile = run(&mut s, "sketch.create", json!({"plane":"Height through spatial point","name":"Dynamic section"}))["sketch"].as_u64().unwrap();
+    let check = |s: &Session, z: f64| {
+        let st = s.world_state();
+        let pl = st.sketch(profile).unwrap().plane;
+        near(pl.origin, Vec3::new(0.0,0.0,z));
+        near(pl.normal(), Vec3::Z);
+    };
+    check(&s,30.0);
+    run(&mut s, "sketch.finish", json!({}));
+    run(&mut s, "sketch.edit", json!({"sketch":guide}));
+    run(&mut s, "sketch.move3d", json!({"wire":point,"by":[0,0,5]}));
+    check(&s,35.0);
+    let reopen = Session::new(solidcraft_doc::Document::from_json(&s.doc.to_json()).unwrap());
+    check(&reopen,35.0);
+    let before = s.doc.to_json();
+    let history = (s.undo.len(), s.redo.len());
+    for bad_plane in [
+        json!({"origin":[0,0,0],"normal":[0,0,0],"name":"Bad normal"}),
+        json!({"origin":[0,0,0],"normal":[1e100,0,0],"name":"Bad normal"}),
+        json!({"origin":[0,0,0],"normal":[0,0,0.0],"name":"Bad normal"}),
+    ] {
+        assert!(s.execute("construct.plane.normal", &bad_plane).is_err());
+        assert_eq!(s.doc.to_json(), before);
+        assert_eq!((s.undo.len(), s.redo.len()), history);
+    }
+}
