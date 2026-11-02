@@ -163,7 +163,10 @@ pub(crate) fn check_retry(a: &Body, b: &Body, op: BoolOp, result: Option<&Body>)
         let ma = a.tessellate(chord).map_err(|_| bad(op, "the target could not be checked".into()))?;
         let mb = b.tessellate(chord).map_err(|_| bad(op, "the tool could not be checked".into()))?;
         let (ba, bb) = (ma.bounds(), mb.bounds());
-        let tol = 2.0 * chord;
+        // A very large cutter must not give a tiny target an equally large clearance.
+        // Otherwise a cavity several millimetres away from a small part is classified as
+        // coincident just because the outer cutter spans thousands of millimetres.
+        let tol = (2.0 * chord).min((a.size() * 1e-3).max(1e-6));
         if ba.is_empty()
             || bb.is_empty()
             || ba.min.x < bb.min.x - tol
