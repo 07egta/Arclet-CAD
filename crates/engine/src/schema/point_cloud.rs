@@ -12,7 +12,7 @@ use crate::schema::types::{IdOrName, present};
 pub struct AnalyzeParams {
     /// Source point cloud name or id.
     pub cloud: IdOrName,
-    /// plane, circle, sphere, cylinder, nearest, outliers, or align.
+    /// plane, circle, sphere, cylinder, nearest, outliers, align or cad_distance.
     pub mode: String,
     /// Bounded sample count (1..100000, default 20000).
     #[serde(default, deserialize_with = "present")]
@@ -26,6 +26,9 @@ pub struct AnalyzeParams {
     /// Fixed target point cloud for align; the source is moved toward the target.
     #[serde(default, deserialize_with = "present")]
     pub target: Option<IdOrName>,
+    /// Evaluated CAD body name for unsigned scan-to-mesh surface distances.
+    #[serde(default, deserialize_with = "present")]
+    pub body: Option<String>,
 }
 
 /// Analysis metadata and shape-dependent numeric result.
@@ -51,6 +54,6 @@ mod tests {
 
     #[test]
     fn analysis_schema_keys_match_handler() {
-        assert_keys(input_schema_for::<AnalyzeParams>(), &["cloud", "max_points", "mode", "point", "target", "tolerance_mm"]);
+        assert_keys(input_schema_for::<AnalyzeParams>(), &["body", "cloud", "max_points", "mode", "point", "target", "tolerance_mm"]);
     }
 }
