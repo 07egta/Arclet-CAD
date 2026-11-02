@@ -49,6 +49,7 @@ pub(crate) use assistant_entry::*;
 pub use checks::checkbox;
 #[cfg(test)]
 pub(crate) use checks::tests::{raster as raster_ui, textures_update as update_test_textures};
+#[cfg(test)]
 pub(crate) use checks::*;
 pub(crate) use choice::*;
 pub(crate) use color::*;

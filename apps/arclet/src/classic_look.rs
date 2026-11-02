@@ -9,10 +9,13 @@ use solidcraft_ui_egui::prefs::Prefs;
 
 /// The built-in theme id Arclet starts with.
 pub(crate) const THEME_ID: &str = "arclet-industrial";
+/// The look Arclet starts with: the Melt3D palette (dark neutral greys, green accent), so the two
+/// apps share one colour language. Arclet Industrial and Classic stay selectable.
+pub(crate) const DEFAULT_THEME_ID: &str = "melt3d";
 
 /// Apply Arclet's new-user theme before loading saved preferences; saved choices win.
 pub(crate) fn apply_default(prefs: &mut Prefs) {
-    prefs.theme = THEME_ID.into();
+    prefs.theme = DEFAULT_THEME_ID.into();
 }
 
 /// Desktop chrome measurements in egui **logical points**. The operating system's
@@ -144,5 +147,17 @@ mod tests {
         assert!((0x60..=0xb0).contains(&t.viewport_top.r()), "viewport is mid grey");
         assert!(t.body_selected.r() > t.body_selected.b() + 60 && t.body_selected.g() > t.body_selected.b(), "selected body is yellowish");
         assert!(t.icon_palette.is_some(), "the classic theme carries an icon palette");
+    }
+
+    #[test]
+    fn arclet_starts_with_the_melt3d_palette_and_it_stays_readable() {
+        assert_eq!(DEFAULT_THEME_ID, "melt3d");
+        let file = theme_files::find(DEFAULT_THEME_ID, &[]).expect("the Melt3D theme is built in");
+        let t = theme_files::resolve(file);
+        assert_eq!((t.accent.r(), t.accent.g(), t.accent.b()), (52, 178, 120), "Melt3D green accent");
+        assert!(t.viewport_bottom.r() < 0x30 && t.panel.r() < 0x30, "dark neutral surfaces");
+        let mut prefs = Prefs::default();
+        apply_default(&mut prefs);
+        assert_eq!(prefs.theme, DEFAULT_THEME_ID);
     }
 }
