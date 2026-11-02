@@ -145,6 +145,20 @@ fn declared_capabilities_do_not_grant_undeclared_edits() {
 }
 
 #[test]
+fn even_an_edit_enabled_plugin_cannot_run_unlisted_engine_commands() {
+    let fixture = Fixture::new();
+    let mut manager = fixture.registered();
+    manager.set_enabled(ID, true).expect("enable");
+    let mut session = Session::default();
+    let error = manager
+        .execute(&mut session, "plugin.org.arclet.sample.report", &json!({"try_forbidden":true}))
+        .expect_err("file.save must never reach the engine");
+    assert!(error.contains("allowlist"), "{error}");
+    let measured = session.execute("inspect.measure", &json!({})).expect("host remains operational");
+    assert_eq!(measured["body_count"], 0);
+}
+
+#[test]
 fn invalid_commands_and_missing_directories_are_safe() {
     let fixture = Fixture::new();
     let mut manager = fixture.registered();
