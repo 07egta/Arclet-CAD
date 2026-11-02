@@ -692,11 +692,13 @@ mod tests {
 
     #[test]
     fn toolbar_metrics_leave_room_for_pointer_targets() {
-        assert!(STANDARD_BUTTON >= 30.0);
-        assert!(MAIN_BUTTON >= 34.0);
-        assert!(MAIN_WIDTH >= MAIN_BUTTON + 2.0 * chrome::SECTION_GAP);
-        assert!(ICON < STANDARD_BUTTON && ICON < MAIN_BUTTON);
-        assert!(chrome::FLYOUT_WIDTH >= 200.0);
+        const {
+            assert!(STANDARD_BUTTON >= 30.0);
+            assert!(MAIN_BUTTON >= 34.0);
+            assert!(MAIN_WIDTH >= MAIN_BUTTON + 2.0 * chrome::SECTION_GAP);
+            assert!(ICON < STANDARD_BUTTON && ICON < MAIN_BUTTON);
+            assert!(chrome::FLYOUT_WIDTH >= 200.0);
+        }
     }
 
     #[test]
