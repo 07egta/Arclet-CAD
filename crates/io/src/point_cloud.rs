@@ -13,6 +13,8 @@ use crate::{IoError, Result};
 pub const MAX_POINT_CLOUD_BYTES: usize = 1 << 30;
 /// Points kept from a file unless asked for another number.
 pub const DEFAULT_MAX_POINTS: usize = 5_000_000;
+/// A scan row has only coordinates, optional intensity/normals/colour, never unbounded text.
+const MAX_XYZ_LINE_BYTES: usize = 16 << 10;
 /// Is this a point cloud file we read (`.ply`, `.xyz`, `.pts`, any case)?
 pub fn is_point_cloud_path(path: &str) -> bool {
     std::path::Path::new(path).extension().and_then(|e| e.to_str()).is_some_and(|e| ["ply", "xyz", "pts"].iter().any(|x| e.eq_ignore_ascii_case(x)))
@@ -54,8 +56,15 @@ impl Keep {
             self.bad += 1;
             return;
         }
-        let o = *self.origin.get_or_insert(p);
+        let o = self.origin.unwrap_or(p);
         let d = p - o;
+        // Every stored offset must also satisfy the document's f32 coordinate bound.
+        // Two individually valid absolute positions can differ by more than MAX_COORD.
+        if ![d.x, d.y, d.z].iter().all(|v| v.is_finite() && v.abs() <= MAX_COORD) {
+            self.bad += 1;
+            return;
+        }
+        self.origin = Some(o);
         self.out.points.extend([d.x as f32, d.y as f32, d.z as f32]);
         if self.colored {
             self.out.colors.extend(rgb.unwrap_or([255; 3]));
@@ -118,8 +127,7 @@ fn numbers(line: &str, out: &mut Vec<f64>) -> bool {
     for tok in line.split([' ', '\t', ',', ';']).filter(|t| !t.is_empty()) {
         match tok.parse::<f64>() {
             Ok(v) if out.len() < 16 => out.push(v),
-            Ok(_) => {}
-            Err(_) => return false,
+            Ok(_) | Err(_) => return false,
         }
     }
     true
@@ -127,14 +135,23 @@ fn numbers(line: &str, out: &mut Vec<f64>) -> bool {
 
 /// Read an XYZ file into `keep`; returns the thinning stride.
 fn read_xyz(bytes: &[u8], keep: &mut Keep) -> Result<u64> {
-    let text = String::from_utf8_lossy(bytes);
+    // A whole-file lossy UTF-8 conversion can duplicate an almost 1 GB input in RAM.
+    // Validate each line only when it is visited; malformed bytes count as bad input.
     let lines = bytes.iter().filter(|b| **b == b'\n').count() as u64 + 1;
     let stride = lines.div_ceil(keep.max as u64).max(1);
     let mut v = Vec::with_capacity(16);
     // Where the colour is: after x, y, z (6 numbers), or after an intensity too (7, as PTS).
     let mut rgb_at: Option<Option<usize>> = None;
     let mut data = 0u64;
-    for line in text.lines() {
+    for raw in bytes.split(|b| *b == b'\n') {
+        if raw.len() > MAX_XYZ_LINE_BYTES {
+            keep.bad += 1;
+            continue;
+        }
+        let Ok(line) = std::str::from_utf8(raw) else {
+            keep.bad += 1;
+            continue;
+        };
         if !numbers(line, &mut v) {
             if !line.trim().is_empty() && !line.trim_start().starts_with('#') && !line.trim_start().starts_with("//") {
                 keep.bad += 1;
@@ -215,6 +232,65 @@ mod tests {
         assert!((c.points[3] - 25.4).abs() < 1e-6);
         let plain = read_point_cloud(b"0 0 0\n1 0 0\n", "a.xyz", 1.0, 1).unwrap();
         assert_eq!(plain.points.len(), 3, "thinned to one point");
+    }
+
+    #[test]
+    fn remote_origin_keeps_local_offsets_without_accepting_an_oversized_span() {
+        let xyz = b"999999990 0 0\n999999990.125 0 0\n-999999990 0 0\n";
+        let read = read_point_cloud(xyz, "remote.xyz", 1.0, DEFAULT_MAX_POINTS).unwrap();
+        assert_eq!(read.origin, Vec3::new(999999990.0, 0.0, 0.0));
+        assert_eq!(read.points, [0.0, 0.0, 0.0, 0.125, 0.0, 0.0]);
+        assert_eq!(read.source_points, 3);
+        assert_eq!(read.warnings.len(), 1, "the far-away offset is outside the stored range");
+        assert!(read.warnings[0].contains("1 point"));
+    }
+
+    #[test]
+    fn non_utf8_and_nan_lines_are_skipped_without_a_full_file_copy() {
+        let xyz = b"10 20 30 1 2 3\n\xff\xfe\nNaN 0 0\n11 20 30 4 5 6\n";
+        let read = read_point_cloud(xyz, "bad.xyz", 1.0, DEFAULT_MAX_POINTS).unwrap();
+        assert_eq!(read.points, [0.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+        assert_eq!(read.colors, [1, 2, 3, 4, 5, 6]);
+        assert_eq!(read.warnings.len(), 1);
+        assert!(read.warnings[0].contains("2 point"));
+    }
+
+
+    #[test]
+    fn overwide_xyz_rows_are_rejected_without_large_transient_allocations() {
+        let mut raw = vec![b'9'; MAX_XYZ_LINE_BYTES + 1];
+        raw.extend_from_slice(b"\n1 2 3 255 0 0\n2 2 3 0 255 0\n");
+        let result = read_point_cloud(&raw, "overwide.xyz", 1.0, DEFAULT_MAX_POINTS).unwrap();
+        assert_eq!(result.source_points, 2);
+        assert_eq!(result.points, [0.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+        assert_eq!(result.colors, [255, 0, 0, 0, 255, 0]);
+        assert_eq!(result.warnings.len(), 1);
+    }
+
+    /// Optional staged benchmark; no wall-clock assertion on shared CI runners.
+    /// Run with `cargo test -p solidcraft-io million_point_cloud_benchmark -- --ignored --nocapture`.
+    /// Set ARCLET_LARGE_POINT_BENCH=1 to include the 10-million point stage.
+    #[test]
+    #[ignore = "resource-intensive point cloud benchmark; run manually with --ignored"]
+    fn million_point_cloud_benchmark() {
+        let mut counts = vec![100_000, 1_000_000];
+        if std::env::var_os("ARCLET_LARGE_POINT_BENCH").is_some() {
+            counts.push(10_000_000);
+        }
+        for count in counts {
+            let input = ply_points(count);
+            let started = std::time::Instant::now();
+            let read = read_point_cloud(&input, "bench.ply", 1.0, 100_000).unwrap();
+            let elapsed = started.elapsed();
+            assert_eq!(read.source_points, count as u64);
+            assert!(read.points.len() / 3 <= 100_000);
+            assert!(read.colors.is_empty());
+            eprintln!(
+                "scan: source={} kept={} input_bytes={} retained_point_bytes={} elapsed_ms={}",
+                count, read.points.len() / 3, input.len(), read.points.len() * 4,
+                elapsed.as_millis()
+            );
+        }
     }
 
     #[test]
