@@ -9,7 +9,7 @@
 use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
-use solidcraft_geom::{Vec2, Vec3, nurbs_curve::NurbsCurve};
+use solidcraft_geom::{Vec3, nurbs_curve::NurbsCurve};
 
 use super::{SnapKind, snap_points};
 use crate::{Sel, Session};
@@ -617,13 +617,30 @@ fn offer_shape(out: &mut Collector<'_>, id: &str, shape: &WorldGeometry) {
                 out.offer(id, SnapKind::End, *a, SnapAccuracy::DisplayApproximate);
                 out.offer(id, SnapKind::End, *b, SnapAccuracy::DisplayApproximate);
             }
-            if let Some(p) = points.get(points.len() / 2) {
-                out.offer(id, SnapKind::Middle, *p, SnapAccuracy::DisplayApproximate);
-            }
-            for edge in points.windows(2) {
-                if let Some(p) = screen_nearest_segment(query.view, query.cursor_px, edge[0], edge[1]) {
-                    out.offer(id, SnapKind::Nearest, p, SnapAccuracy::DisplayApproximate);
+            let segments = points.windows(2).map(|w| length(w[1] - w[0])).collect::<Vec<_>>();
+            let total = segments.iter().sum::<f64>();
+            if total.is_finite() && total > 0.0 {
+                let mut remaining = total * 0.5;
+                for (edge, distance) in points.windows(2).zip(&segments) {
+                    if *distance > 0.0 && remaining <= *distance {
+                        let t = (remaining / distance).clamp(0.0, 1.0);
+                        out.offer(id, SnapKind::Middle, edge[0] * (1.0 - t) + edge[1] * t, SnapAccuracy::DisplayApproximate);
+                        break;
+                    }
+                    remaining -= distance;
                 }
+            }
+            // Search all segments but publish just one closest proposal. A very
+            // dense displayed polyline must not allocate thousands of candidates.
+            let nearest = points.windows(2)
+                .filter_map(|edge| screen_nearest_segment(query.view, query.cursor_px, edge[0], edge[1]))
+                .filter_map(|p| Some((p, query.view.project(p)?.pixel.distance(query.cursor_px))))
+                .min_by(|a, b| a.1.total_cmp(&b.1)
+                    .then_with(|| a.0.x.total_cmp(&b.0.x))
+                    .then_with(|| a.0.y.total_cmp(&b.0.y))
+                    .then_with(|| a.0.z.total_cmp(&b.0.z)));
+            if let Some((p, _)) = nearest {
+                out.offer(id, SnapKind::Nearest, p, SnapAccuracy::DisplayApproximate);
             }
         }
         WorldGeometry::Round(circle) => {
