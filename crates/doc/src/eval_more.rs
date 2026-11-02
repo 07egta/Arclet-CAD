@@ -1952,6 +1952,9 @@ pub(super) fn plastic_eval(doc: &Document, vals: &BTreeMap<String, Value>, f: &F
                 .as_deref()
                 .map(|e| plastic_size("boss", "hole_diameter", len(e)?))
                 .transpose()?;
+            if hole.is_none() && hole_depth.is_some() {
+                return Err(DocError::Invalid("the boss hole_depth needs a hole_diameter".into()));
+            }
             let depth = if hole.is_some() {
                 Some(match hole_depth {
                     Some(e) => plastic_size("boss", "hole_depth", len(e)?)?,
@@ -1973,6 +1976,9 @@ pub(super) fn plastic_eval(doc: &Document, vals: &BTreeMap<String, Value>, f: &F
             // The post: a (tapered) cylinder from a little inside the face.
             let base = Plane::new(position.0 - z * delta, x, z.cross(x)).ok_or_else(|| DocError::Invalid("boss frame".into()))?;
             let r_in = r0 + delta * dr.tan();
+            if !(r_in > 0.0 && r_in.is_finite()) {
+                return Err(DocError::Invalid("the boss draft closes the post at its buried root".into()));
+            }
             let disc = Region2 { outer: Loop2::circle(Vec2::ZERO, r_in), holes: Vec::new() };
             let post = if dr.abs() > 1e-12 {
                 vec![kernel::extrude_tapered(&base, &disc, h + delta, 1.0, -dr)?]
@@ -2177,18 +2183,32 @@ pub(super) fn plastic_eval(doc: &Document, vals: &BTreeMap<String, Value>, f: &F
                 return Err(DocError::Invalid("the rest's draft must be under 57°".into()));
             }
             let shrink = h * dr.tan();
-            // A hollow rest's limiting top dimension is its INNER opening:
-            // (minimum outside width - twice the wall). Comparing the
-            // taper to the wall thickness rejects valid tall hollow rests and
-            // admits some whose inner opening has already collapsed.
-            let smallest_opening = w.min(l.unwrap_or(w)) - 2.0 * t.unwrap_or(0.0);
-            if !(smallest_opening.is_finite() && smallest_opening > 2.0 * shrink) {
+            // Extrude-taper offsets each boundary toward the material for
+            // positive taper: on a hollow rest the outer wall shrinks while
+            // its hole expands. Thus positive draft is bounded by the wall
+            // thickness, not by the inner opening. Negative draft does the
+            // opposite and can close the inner opening at the far end.
+            let shortest = w.min(l.unwrap_or(w));
+            if let Some(wall) = t {
+                if 2.0 * shrink >= wall {
+                    return Err(DocError::Invalid("the draft closes the rest wall before its top".into()));
+                }
+                if -2.0 * shrink >= shortest - 2.0 * wall {
+                    return Err(DocError::Invalid("the draft closes the rest inner opening before its top".into()));
+                }
+            } else if 2.0 * shrink >= shortest {
                 return Err(DocError::Invalid("the draft closes the rest before its top".into()));
             }
             let delta = (h * 0.05).clamp(1e-3, 0.5);
+            // The tool begins below the picked face to permit a robust join.
+            // A negative draft shrinks the outer profile at that buried root;
+            // it must not consume the wall there either.
+            let e = delta * dr.tan();
+            if t.is_some_and(|wall| -2.0 * e >= wall) {
+                return Err(DocError::Invalid("the draft closes the rest wall at its buried root".into()));
+            }
             let (x, y, z) = local_frame(direction.0, along.map(Vec3::from))?;
             // Sized at the face: the tool starts a little inside, grown by the draft over that.
-            let e = delta * dr.tan();
             let shape = |grow: f64| match l {
                 Some(l) => Loop2::polygon(&[
                     Vec2::new(-l / 2.0 - grow, -w / 2.0 - grow),
