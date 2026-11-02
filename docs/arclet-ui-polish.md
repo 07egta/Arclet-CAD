@@ -84,7 +84,9 @@ HiDPI rendering.
 **No Rust test from this PR has yet been observed passing.** The test cases
 are written and committed; the Actions result must be inspected separately.
 The same caveat applies to `cargo fmt`, `cargo clippy`,
-`cargo xtask lists`, and `cargo xtask ui-containers`.
+`cargo xtask lists`, `cargo xtask ui-containers`, `cargo xtask assets`,
+and `cargo xtask icons`. The native workflow executes each gate independently
+and retains the real capture/log artifact when available.
 
 ### Actual-render capture automation
 
