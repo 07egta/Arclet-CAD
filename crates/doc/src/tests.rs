@@ -860,3 +860,34 @@ fn history_deep_dependencies_are_bounded_and_iterative() {
     assert_eq!(graph.cycles[0].len(), ids.len() + 1);
     assert!(graph.blocking_error(first).is_some());
 }
+
+
+#[test]
+fn history_live_preview_never_commits_its_geometry_or_primes_a_normal_evaluation() {
+    let (doc, sketch_id) = plate_doc();
+    let mut model = Model::new();
+    model.evaluate(&doc);
+    let saved_doc = doc.to_json();
+    let settled = model.state().sketch(sketch_id).unwrap().clone();
+    let mut preview = settled.sketch.clone();
+    assert!(preview.points.len() > 1);
+    preview.points[1].pos.x += 5.0;
+
+    let mut other = model.clone();
+    assert!(model.show_live_sketch(sketch_id, preview, settled.report.clone()));
+    assert!(model.is_stale());
+    assert!(!model.is_current(&doc));
+
+    // A calculation completed for a preview is never valid as the committed document's
+    // state. primed results explicitly filter stale entries, even when context matches.
+    other.prime(&model);
+    other.evaluate(&doc);
+    assert!(!other.is_stale());
+    assert!(other.results.iter().all(|r| r.error.is_none()));
+    assert!(rel(measure(&other.state().bodies[0].body).unwrap().volume, 24_000.0) < 1e-8);
+    model.evaluate(&doc);
+    assert!(!model.is_stale());
+    assert!(model.is_current(&doc));
+    assert!(rel(measure(&model.state().bodies[0].body).unwrap().volume, 24_000.0) < 1e-8);
+    assert_eq!(doc.to_json(), saved_doc, "live preview is not a document edit");
+}
