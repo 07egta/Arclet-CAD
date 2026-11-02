@@ -404,11 +404,17 @@ impl Toolbars {
             * (Tokens::get().control_height + chrome::FLYOUT_ROW_PADDING)
             + Tokens::get().space_12;
         let size = vec2(width, desired_height.min(max_height));
-        let origin = chrome::flyout_origin(viewport, anchor, size);
+        // Subsequent frames use the *measured* popup dimensions, not merely
+        // estimated row heights, to keep translated menus inside the viewport.
+        let measured = self.flyout_rect.map_or(size, |rect| rect.size());
+        let origin = chrome::flyout_origin(viewport, anchor, measured);
         let area = Container::new(ctx, Surface::Popup).area(Id::new(("arclet_flyout", group.id))).fixed_pos(origin);
         let shown = area.show(ctx, |ui| {
             Container::popup_frame(ui.style()).show(ui, |ui| {
-                ui.set_min_width(width);
+                // The outer Popup frame also owns padding. Reserve it so
+                // callers do not accidentally size the content wider than the
+                // viewport-constrained outer flyout.
+                ui.set_min_width((width - Tokens::get().space_24).max(1.0));
                 egui::ScrollArea::vertical()
                     .id_salt(("arclet_flyout_scroll", group.id))
                     .max_height(max_height)
@@ -683,7 +689,6 @@ mod tests {
             }
         }
     }
-
 
     #[test]
     fn toolbar_metrics_leave_room_for_pointer_targets() {
