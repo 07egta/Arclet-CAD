@@ -232,8 +232,11 @@ pub(super) fn check(s: &mut Session, p: &Value) -> Result<Value> {
         Some(m) => (m.positions.as_slice(), m.triangles.as_slice()),
         None => source.body.triangle_mesh().ok_or_else(|| bad(cmd, "mesh body has no triangles"))?,
     };
-    if positions.len() > 6_000_000 || triangles.len() > 2_000_000 {
-        return Err(bad(cmd, "mesh exceeds preflight resource limit (6M vertices or 2M triangles)"));
+    // The existing 3MF weld also checks T-junctions between open edges; on an
+    // adversarial mesh that step can be superlinear. Bound the read-only GUI
+    // command independently of the exporter's much larger format limits.
+    if positions.len() > 180_000 || triangles.len() > 60_000 {
+        return Err(bad(cmd, "mesh exceeds print-preflight resource limit (180000 vertices or 60000 triangles); use external mesh validation"));
     }
     if triangles.is_empty() {
         return Err(bad(cmd, "body contains no mesh triangles"));
@@ -288,6 +291,32 @@ pub(super) fn check(s: &mut Session, p: &Value) -> Result<Value> {
         else if !checked_intersections { "inspection_incomplete" }
         else if thin_warning || possible_support || fails_bed || orientation["has_flat_bed_contact"] == false { "requires_review" }
         else { "passed_limited_screening" };
+    let mut blockers = Vec::new();
+    let mut warnings = Vec::new();
+    if malformed_input {
+        blockers.push("source mesh has invalid/duplicate triangles");
+    }
+    if !topology_ok {
+        blockers.push("export candidate is not a closed, outward, two-manifold solid");
+    }
+    if self_intersections > 0 {
+        blockers.push("potential self-intersecting triangle pairs were found");
+    }
+    if !checked_intersections {
+        warnings.push("self-intersection screening was incomplete");
+    }
+    if thin_warning {
+        warnings.push("a sampled inward wall distance is below the nozzle diameter");
+    }
+    if possible_support {
+        warnings.push("downward-facing surfaces may require supports");
+    }
+    if orientation["has_flat_bed_contact"] == false {
+        warnings.push("no horizontal underside was found on the lowest mesh plane");
+    }
+    if fails_bed {
+        warnings.push("bounding box exceeds specified build volume in the current orientation");
+    }
     Ok(json!({
         "body": name,
         "source": if source.body.is_mesh() { "imported_mesh" } else { "brep_tessellation" },
@@ -306,6 +335,8 @@ pub(super) fn check(s: &mut Session, p: &Value) -> Result<Value> {
         "orientation_and_support": orientation,
         "bed_fit": fit,
         "verdict": verdict,
+        "blockers": blockers,
+        "warnings": warnings,
         "manufacturing_certified": false,
         "unchecked": [
             "minimum_wall_thickness_certification",
