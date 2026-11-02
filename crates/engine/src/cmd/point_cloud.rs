@@ -3,13 +3,25 @@
 
 use serde_json::{Value, json};
 use solidcraft_doc::Mat;
+use solidcraft_doc::point_cloud_analysis::{CloudSample, DEFAULT_ANALYSIS_POINTS, MAX_ANALYSIS_POINTS, align_translation};
 use solidcraft_doc::point_cloud::{ColorBy, Colors, MAX_COORD, MAX_POINTS, POINT_SIZE, PointCloud, Points, UNITS, unit_scale};
 
 use super::CommandSpec;
 use crate::params::{bad, bool_, str_};
+use crate::schema::point_cloud::{AnalyzeParams, AnalyzeResult};
+use crate::schema::{TypedContract, output_schema_for};
 use crate::{EngineError, Result, Session};
 
+const ANALYZE_CONTRACT: TypedContract<AnalyzeParams> = TypedContract::new();
+
 pub static COMMANDS: &[CommandSpec] = &[
+    CommandSpec::new("pointcloud.analyze", "Analyze Point Cloud", crate::checked!("pointcloud.analyze", analyze))
+        .icon("inspect")
+        .noundo()
+        .doc_only()
+        .contract(&ANALYZE_CONTRACT)
+        .output(output_schema_for::<AnalyzeResult>)
+        .params("cloud: id|name; mode: plane|circle|sphere|cylinder|nearest|outliers|align; max_points?: 1..100000 (default 20000); tolerance_mm?: 1e-9..1e6 (default 0.1); point?: [world x,y,z] for nearest; target?: id|name of fixed cloud for align. Read-only bounded sample; results include residuals; align estimates translation only"),
     CommandSpec::new("pointcloud.insert", "Insert Point Cloud", insert)
         .at("SOLID", "INSERT")
         .icon("import")
@@ -248,6 +260,65 @@ fn edit(s: &mut Session, p: &Value) -> Result<Value> {
     let slot = s.doc_mut().point_clouds.get_mut(i).ok_or_else(|| bad(cmd, "point cloud"))?;
     *slot = c;
     Ok(json!({"cloud": id}))
+}
+
+
+/// Read-only reverse-engineering diagnostics. Never builds a feature, changes a point
+/// cloud, or claims that an arbitrary scan has a unique NURBS reconstruction.
+fn analyze(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "pointcloud.analyze";
+    let index = find(s, p, cmd)?;
+    let mode = str_(p, "mode").ok_or_else(|| bad(cmd, "`mode` is required"))?;
+    let max = match p.get("max_points") {
+        None => DEFAULT_ANALYSIS_POINTS,
+        Some(v) => v.as_u64().filter(|n| (1..=MAX_ANALYSIS_POINTS as u64).contains(n)).map(|n| n as usize)
+            .ok_or_else(|| bad(cmd, "`max_points` must be an integer from 1 to 100000"))?,
+    };
+    let tolerance = match p.get("tolerance_mm") {
+        None => 0.1,
+        Some(value) => value.as_f64().filter(|v| v.is_finite() && (1e-9..=1e6).contains(v))
+            .ok_or_else(|| bad(cmd, "`tolerance_mm` must be 1e-9..1e6"))?,
+    };
+    let cloud = s.doc.point_clouds.get(index).ok_or_else(|| bad(cmd, "point cloud not found"))?;
+    let sample = CloudSample::new(cloud, max)?;
+    let result = match mode {
+        "plane" => json!(sample.fit_plane(tolerance)?),
+        "circle" => json!(sample.fit_circle(tolerance)?),
+        "sphere" => json!(sample.fit_sphere(tolerance)?),
+        "cylinder" => json!(sample.fit_cylinder(tolerance)?),
+        "outliers" => json!(sample.outliers()?),
+        "nearest" => {
+            let coords = p.get("point").and_then(Value::as_array)
+                .filter(|a| a.len() == 3)
+                .ok_or_else(|| bad(cmd, "`point` must be a world [x,y,z] vector"))?;
+            let xyz: Vec<f64> = coords.iter().map(|v| v.as_f64().filter(|v| v.is_finite() && v.abs() <= 1e12))
+                .collect::<Option<_>>().ok_or_else(|| bad(cmd, "`point` must have finite coordinates within 1e12 mm"))?;
+            json!(sample.nearest_world(solidcraft_geom::Vec3::new(xyz[0], xyz[1], xyz[2]))?)
+        }
+        "align" => {
+            let name = match p.get("target") {
+                Some(Value::String(s)) => s.clone(),
+                Some(Value::Number(n)) => n.to_string(),
+                _ => return Err(bad(cmd, "`target` must identify the fixed point cloud")),
+            };
+            let target = s.doc.point_clouds.iter().find(|c| c.id.to_string() == name || c.name == name)
+                .ok_or_else(|| bad(cmd, format!("no target cloud `{name}`")))?;
+            if target.id == cloud.id {
+                return Err(bad(cmd, "the source and target clouds must differ"));
+            }
+            let fixed = CloudSample::new(target, max)?;
+            json!(align_translation(&fixed, &sample, tolerance)?)
+        }
+        _ => return Err(bad(cmd, "`mode` must be plane, circle, sphere, cylinder, nearest, outliers or align")),
+    };
+    Ok(json!({
+        "cloud": cloud.id,
+        "mode": mode,
+        "sampled": sample.offsets.len(),
+        "source_points": sample.source_count,
+        "stride": sample.stride,
+        "result": result,
+    }))
 }
 
 fn delete(s: &mut Session, p: &Value) -> Result<Value> {
