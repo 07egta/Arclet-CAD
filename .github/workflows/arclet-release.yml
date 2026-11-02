@@ -1,0 +1,226 @@
+name: Arclet Windows and Web release candidate
+
+# Isolated from build.yml, melt3d-release.yml and the YURACAD rolling release.
+on:
+  push:
+    branches:
+      - release/arclet-windows-web
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      create_draft:
+        description: "Create an unpublished Arclet-only Release draft after all checks"
+        type: boolean
+        default: false
+      acceptance_approved:
+        description: "Human Windows AND browser acceptance performed and reviewed"
+        type: boolean
+        default: false
+      acceptance_record_url:
+        description: "URL of the human acceptance record (required for draft)"
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: arclet-release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  TRUNK_VERSION: v0.21.14
+
+jobs:
+  windows:
+    name: Windows x64 - Arclet tests, GUI and portable ZIP
+    runs-on: windows-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: arclet-windows
+      - name: Test Arclet including native save/edit/reopen roundtrip
+        run: cargo test --profile ci --locked -p arclet
+      - name: Build only Arclet Windows executable
+        run: cargo build --release --locked -p arclet
+      - name: Verify Arclet executable and create portable ZIP
+        shell: pwsh
+        run: ./packaging/arclet-windows/package.ps1
+      - name: Launch Arclet GUI and capture actual WGPU frames
+        shell: pwsh
+        run: ./scripts/ci/arclet-windows-smoke.ps1
+      - name: Copy startup diagnostics to CI evidence folder
+        if: always()
+        shell: pwsh
+        run: |
+          $source = Join-Path $env:LOCALAPPDATA 'Arclet/logs'
+          $dest = Join-Path $env:RUNNER_TEMP 'arclet-smoke/logs'
+          if (Test-Path $source) {
+            New-Item -ItemType Directory -Force -Path $dest | Out-Null
+            Copy-Item -Path (Join-Path $source '*.log') -Destination $dest -ErrorAction SilentlyContinue
+          }
+      - name: Upload Windows GUI and diagnostics evidence even after failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: arclet-windows-evidence
+          path: ${{ runner.temp }}/arclet-smoke/
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Upload tested Windows candidate (not a published Release)
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: arclet-windows-candidate
+          path: |
+            dist/arclet-windows/*.zip
+            dist/arclet-windows/*.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  web:
+    name: Arclet Trunk/WebAssembly - real Chromium
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: arclet-web
+      - name: Install pinned Trunk
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.local/bin"
+          curl -fsSL "https://github.com/trunk-rs/trunk/releases/download/$TRUNK_VERSION/trunk-x86_64-unknown-linux-gnu.tar.gz" | tar -xz -C "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Build the Arclet wasm app (not SolidCraft Web)
+        working-directory: apps/arclet
+        run: trunk build --release --public-url ./
+      - name: Validate Web bundle and isolate it from SolidCraft
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s dist/arclet-web/index.html
+          find dist/arclet-web -type f -name '*.wasm' -size +100k | grep -q .
+          find dist/arclet-web -type f -name '*.js' -size +1k | grep -q .
+          test ! -e dist/web/index.html
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install Playwright and headless Chromium
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --no-save --no-package-lock playwright@1.56.1
+          npx playwright install --with-deps chromium
+      - name: Browser startup, GPU backend and download/reupload tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m http.server 8782 --bind 127.0.0.1 --directory dist/arclet-web > "$RUNNER_TEMP/arclet-web-server.log" 2>&1 &
+          server=$!
+          trap 'kill "$server" 2>/dev/null || true' EXIT
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8782/ >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:8782/ >/dev/null
+          node scripts/ci/arclet-web-smoke.mjs http://127.0.0.1:8782
+      - name: Upload Web browser screenshots and test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: arclet-web-evidence
+          path: dist/arclet-web-smoke/
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Include notices, create independent Web bundle and checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(cargo metadata --no-deps --format-version 1 --locked | python3 -c 'import json,sys; m=json.load(sys.stdin); print(next(p["version"] for p in m["packages"] if p["name"] == "arclet"))')"
+          mkdir -p dist/arclet-web/legal
+          cp LICENSE-MIT LICENSE-APACHE NOTICE ATTRIBUTION.md THIRD-PARTY-LICENSES.txt LICENSE_AUDIT.md dist/arclet-web/legal/
+          cp apps/arclet/README.md dist/arclet-web/README-Arclet.md
+          printf 'Arclet CAD %s (development Web bundle)\nCommit: %s\nActions run: %s/%s/actions/runs/%s\nWebGPU preferred; use ?webgl for WebGL2. Save downloads a copy, not an overwrite.\n' "$version" "$GITHUB_SHA" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > dist/arclet-web/BUILD.txt
+          archive="ArcletCAD-$version-web.tar.gz"
+          tar -czf "dist/$archive" -C dist arclet-web
+          (cd dist && sha256sum "$archive" > "$archive.sha256")
+      - name: Upload tested Web candidate (not a published Release)
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: arclet-web-candidate
+          path: |
+            dist/ArcletCAD-*-web.tar.gz
+            dist/ArcletCAD-*-web.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  release_draft:
+    name: Gated UNPUBLISHED Arclet-only Release draft
+    needs: [windows, web]
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/main' &&
+      inputs.create_draft == true &&
+      inputs.acceptance_approved == true &&
+      inputs.acceptance_record_url != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    concurrency:
+      group: arclet-release-draft
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: arclet-*-candidate
+          merge-multiple: true
+          path: dist
+      - name: Verify hashes and identify exact Arclet assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          test "$(find . -maxdepth 1 -name 'ArcletCAD-*-windows-x64.zip' | wc -l)" -eq 1
+          test "$(find . -maxdepth 1 -name 'ArcletCAD-*-web.tar.gz' | wc -l)" -eq 1
+          for sum in *.sha256; do sha256sum -c "$sum"; done
+      - name: Create unique unpublished Arclet draft only
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACCEPTANCE_EVIDENCE_URL: ${{ inputs.acceptance_record_url }}
+        run: |
+          set -euo pipefail
+          case "$ACCEPTANCE_EVIDENCE_URL" in https://*) ;; *) echo 'Evidence URL must be HTTPS' >&2; exit 1 ;; esac
+          version="$(cargo metadata --no-deps --format-version 1 --locked | python3 -c 'import json,sys; m=json.load(sys.stdin); print(next(p["version"] for p in m["packages"] if p["name"] == "arclet"))')"
+          tag="arclet-v$version-rc.$GITHUB_RUN_ID"
+          cat > notes.md <<EOF
+          # Arclet CAD $version - UNPUBLISHED development Release draft
+
+          Commit: $GITHUB_SHA
+          CI: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
+          Interactive acceptance record (reviewed by the dispatching maintainer): $ACCEPTANCE_EVIDENCE_URL
+
+          Arclet executable is arclet.exe, separate from Melt3D and YURACAD.
+          ZIP is unsigned; third-party licensing audit requires review.
+          The Web tarball is a separate Trunk build; no deployed website is implied.
+          Human publication requires additional review.
+          EOF
+          gh release create "$tag" dist/ArcletCAD-* \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "Arclet CAD $version - candidate" \
+            --notes-file notes.md --draft --prerelease
