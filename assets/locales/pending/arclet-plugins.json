@@ -1,0 +1,26 @@
+{
+  "en": {
+    "arclet.plugins.directory": "Plugin directory",
+    "arclet.plugins.disable": "Disable",
+    "arclet.plugins.empty": "No compatible plugins found",
+    "arclet.plugins.enable": "Enable (trust executable)",
+    "arclet.plugins.menu": "Plugins",
+    "arclet.plugins.params": "Parameters (JSON)",
+    "arclet.plugins.permissions": "Requested permissions",
+    "arclet.plugins.rescan": "Rescan plugins (disables all)",
+    "arclet.plugins.title": "Arclet plugins",
+    "arclet.plugins.trust_warning": "Executable plugins can access your computer. Process isolation prevents a plugin crash from directly crashing Arclet, but does not restrict OS file or network access. Enable only plugins you trust."
+  },
+  "ja": {
+    "arclet.plugins.directory": "プラグインの保存先",
+    "arclet.plugins.disable": "無効化",
+    "arclet.plugins.empty": "互換性のあるプラグインが見つかりません",
+    "arclet.plugins.enable": "有効化（実行ファイルを信頼）",
+    "arclet.plugins.menu": "プラグイン",
+    "arclet.plugins.params": "パラメータ（JSON）",
+    "arclet.plugins.permissions": "要求する権限",
+    "arclet.plugins.rescan": "再スキャン（すべて無効化）",
+    "arclet.plugins.title": "Arclet プラグイン",
+    "arclet.plugins.trust_warning": "実行形式のプラグインはPC上のファイルやネットワークにアクセスできます。別プロセス実行はプラグインのクラッシュをArclet本体から隔離しますが、OS権限を制限しません。信頼できるプラグインだけを有効化してください。"
+  }
+}

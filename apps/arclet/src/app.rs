@@ -178,6 +178,14 @@ pub struct ArcletApp {
     awaiting_document_quit: bool,
     toolbars: crate::toolbars::Toolbars,
     panels: panels::PanelState,
+    #[cfg(not(target_arch = "wasm32"))]
+    plugins: crate::plugins::PluginManager,
+    #[cfg(not(target_arch = "wasm32"))]
+    show_plugins: bool,
+    #[cfg(not(target_arch = "wasm32"))]
+    plugin_args: String,
+    #[cfg(not(target_arch = "wasm32"))]
+    plugin_result: Option<String>,
 }
 
 impl ArcletApp {
@@ -264,6 +272,14 @@ impl ArcletApp {
             awaiting_document_quit: false,
             toolbars: Default::default(),
             panels: panels::PanelState::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            plugins: crate::plugins::PluginManager::discover(crate::plugins::default_directory()),
+            #[cfg(not(target_arch = "wasm32"))]
+            show_plugins: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            plugin_args: "{}".to_owned(),
+            #[cfg(not(target_arch = "wasm32"))]
+            plugin_result: None,
         }
     }
 
@@ -499,6 +515,14 @@ impl ArcletApp {
     }
 
     fn tools_menu_actions(&mut self, ui: &mut Ui) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if ui_kit::button(ui, tr("arclet.plugins.menu"), ui_kit::Button::Normal).clicked() {
+                self.show_plugins = true;
+                ui.close();
+            }
+            ui.separator();
+        }
         if ui_kit::button(ui, tr("arclet.all_tools"), ui_kit::Button::Normal).clicked() {
             self.start("ui.palette");
             ui.close();
@@ -588,6 +612,13 @@ impl ArcletApp {
             }
             return;
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.command.trim().starts_with("plugin.") {
+            let id = self.command.trim().to_owned();
+            self.cmdline.entered(&id);
+            self.run_plugin_command(&id);
+            return;
+        }
         self.cmdline.entered(&self.command);
         match commands::resolve(&self.command) {
             Ok(id) => {
@@ -630,6 +661,90 @@ impl ArcletApp {
             Some(error) => self.cmdline.failed(id, &error),
             None => self.cmdline.started(id),
         }
+    }
+
+    /// A dynamic, fully namespaced plugin command is never interpreted as a script.
+    /// All parameters go through the same JSON editor as the plugin window.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn run_plugin_command(&mut self, id: &str) {
+        let result = serde_json::from_str::<Value>(&self.plugin_args)
+            .map_err(|error| format!("Invalid plugin parameters JSON: {error}"))
+            .and_then(|params| self.plugins.execute(&mut self.cad.session, id, &params));
+        match result {
+            Ok(value) => {
+                self.plugin_result = Some(value.to_string());
+                self.command_error = None;
+                self.cmdline.started(id);
+                self.command.clear();
+            }
+            Err(error) => {
+                self.plugin_result = Some(error.clone());
+                self.command_error = Some(error.clone());
+                self.cmdline.failed(id, &error);
+            }
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn plugin_window(&mut self, ctx: &egui::Context) {
+        if !self.show_plugins {
+            return;
+        }
+        let closed = ui_kit::Window::new(
+            egui::Id::new("arclet_plugins"),
+            "plugins",
+            tr("arclet.plugins.title"),
+        )
+        .cards(1.5)
+        .show_body(ctx, |ui| {
+            ui.set_max_width(550.0);
+            ui.label(tr("arclet.plugins.trust_warning"));
+            ui.label(format!("{}: {}", tr("arclet.plugins.directory"), self.plugins.root().display()));
+            if ui_kit::button(ui, tr("arclet.plugins.rescan"), ui_kit::Button::Normal).clicked() {
+                let directory = self.plugins.root().to_path_buf();
+                self.plugins = crate::plugins::PluginManager::discover(directory);
+                self.plugin_result = None;
+            }
+            for error in self.plugins.diagnostics().iter().take(8) {
+                ui.label(error.as_str());
+            }
+            ui.separator();
+            ui.label(tr("arclet.plugins.params"));
+            ui.add(egui::TextEdit::multiline(&mut self.plugin_args).desired_rows(3));
+            let plugins = self.plugins.list();
+            if plugins.is_empty() {
+                ui.label(tr("arclet.plugins.empty"));
+            }
+            for plugin in plugins {
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.label(format!("{}  v{}", plugin.id, plugin.version));
+                    let button = if plugin.enabled {
+                        tr("arclet.plugins.disable")
+                    } else {
+                        tr("arclet.plugins.enable")
+                    };
+                    if ui_kit::button(ui, button, ui_kit::Button::Normal).clicked()
+                        && let Err(error) = self.plugins.set_enabled(&plugin.id, !plugin.enabled)
+                    {
+                        self.plugin_result = Some(error);
+                    }
+                });
+                ui.label(format!("{}: {:?}", tr("arclet.plugins.permissions"), plugin.permissions));
+                if plugin.enabled {
+                    for command in plugin.commands {
+                        if ui_kit::button(ui, command.as_str(), ui_kit::Button::Normal).clicked() {
+                            self.run_plugin_command(&command);
+                        }
+                    }
+                }
+            }
+            if let Some(result) = &self.plugin_result {
+                ui.separator();
+                ui.label(result.as_str());
+            }
+        });
+        self.show_plugins &= !closed;
     }
 
     fn command_bar(&mut self, ui: &mut Ui) {
@@ -712,6 +827,8 @@ impl ArcletApp {
         panels::show(ui, &mut self.cad, &mut self.panels);
         self.cad.ui_after_host(ui);
         self.help(&ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.plugin_window(&ctx);
         let unsaved = solidcraft_ui_egui::documents::any_dirty(&self.cad) || self.cad.nodes.editor.is_dirty() || platform::has_unsaved_downloads();
         if let Err(error) = platform::set_unsaved(unsaved) {
             self.command_error = Some(error);

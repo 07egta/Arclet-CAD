@@ -7,6 +7,8 @@ mod cmdline;
 mod diagnostics;
 mod commands;
 mod panels;
+#[cfg(not(target_arch = "wasm32"))]
+mod plugins;
 mod platform;
 mod statusbar;
 mod toolbars;
