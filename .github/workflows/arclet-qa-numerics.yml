@@ -1,0 +1,47 @@
+name: Arclet QA - numeric reliability (Mission 30)
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'crates/geom/**'
+      - 'qa/**'
+      - '.github/workflows/arclet-qa-numerics.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  numeric:
+    name: geometry property checks (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Toolchain and environment
+        shell: bash
+        run: |
+          rustc --version
+          cargo --version
+          echo "Runner: $RUNNER_OS, arch=$RUNNER_ARCH"
+      - name: Run bounded analytic and property regression tests
+        shell: bash
+        env:
+          RUST_TEST_THREADS: '1'
+        run: |
+          set -euo pipefail
+          cargo test --profile ci --locked -p solidcraft-geom --lib ultimate_quality_ -- --test-threads=1
+      - name: Run full geometry library regression suite
+        shell: bash
+        env:
+          RUST_TEST_THREADS: '1'
+        run: |
+          set -euo pipefail
+          cargo test --profile ci --locked -p solidcraft-geom --lib -- --test-threads=1
