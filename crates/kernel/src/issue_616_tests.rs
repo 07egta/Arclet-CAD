@@ -150,6 +150,21 @@ fn empty_retry_rejects_hollow_tool_enclosing_the_target() {
     assert!((volume(&target) - 8.0).abs() < 1e-8);
 }
 
+/// The cutter spans metres but its void is only millimetres from a tiny target.
+/// Using the cutter's diagonal as a proximity tolerance used to treat the
+/// target as touching the inner wall and incorrectly accept an empty result.
+#[test]
+fn empty_retry_rejects_small_part_in_a_huge_cutters_void() {
+    let target = bx([0., 0., 0.], [2., 2., 2.]);
+    let outer = bx([-1000., -1000., -1000.], [2000., 2000., 2000.]);
+    let cavity = bx([-5., -5., -5.], [12., 12., 12.]);
+    let tool = boolean(&outer, &cavity, BoolOp::Cut).unwrap().unwrap();
+    assert!(tool.validity().is_empty(), "{:?}", tool.validity());
+    let error = crate::boolean_guard::check_retry(&target, &tool, BoolOp::Cut, None).unwrap_err();
+    assert!(error.to_string().contains("refused"), "{error}");
+    assert!((volume(&target) - 8.0).abs() < 1e-8);
+}
+
 /// A true complete cut is valid: a larger ball contains the target, not merely
 /// its bounding box. Preserve this important success path for recovered retries.
 #[test]
