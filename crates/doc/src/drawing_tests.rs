@@ -551,3 +551,63 @@ fn mutate(v: &mut Value, pick: &mut usize, lie: &Value, how: u64) -> bool {
         _ => false,
     }
 }
+
+
+/// A persisted drawing can generate fresh, source-linked technical view frames
+/// without changing or silently upgrading its on-disk drawing format.
+#[test]
+fn runtime_three_views_use_saved_paper_and_source_ids_without_schema_changes() {
+    use crate::drawing::runtime::LinkedView;
+    use solidcraft_geom::drawing_view::technical::{LineDisplay, ProjectionConvention};
+    use solidcraft_geom::hlr;
+    use solidcraft_geom::mesh::Aabb3;
+    use solidcraft_geom::{Vec2, Vec3};
+    let d = plate();
+    let initial_file = d.to_json().unwrap();
+    let bounds = Aabb3 { min: Vec3::ZERO, max: Vec3::new(100.0, 50.0, 20.0) };
+    let sheet_id = d.sheets[0].id;
+    let frames = d.three_view_frames(sheet_id, bounds, ProjectionConvention::ThirdAngle, 12.0).unwrap();
+    assert_eq!(frames.front.scale().to_string(), "2:1");
+    assert_eq!(frames.front.scale(), frames.right.scale());
+    assert!((frames.front.to_paper(Vec3::new(100.0, 0.0, 0.0))
+        - frames.front.to_paper(Vec3::ZERO)).len() - 200.0 < 1e-10);
+    let request = LinkedView { sheet_id, source_id: d.sources[0].id, frame: frames.front, display: LineDisplay::Visible };
+    let opts = hlr::Options::default();
+    let cancelled = || false;
+    assert!(d.render_orthographic_view(&LinkedView { source_id: 0, ..request }, &[], &[], &opts, &cancelled).is_err());
+    assert!(d.render_orthographic_view(&LinkedView { sheet_id: 0, ..request }, &[], &[], &opts, &cancelled).is_err());
+    assert!(d.three_view_frames(0, bounds, ProjectionConvention::FirstAngle, 12.0).is_err());
+    assert_eq!(d.to_json().unwrap(), initial_file, "derived view requests never mutate saved sheets");
+    assert_eq!(d.sheets[0].sheet.size_mm().unwrap(), Vec2::new(420.0, 297.0));
+}
+
+/// The view document's fixed unit overrides the source unit for display text,
+/// while FollowModel requires the caller's actual model unit (not paper mm).
+#[test]
+fn drawing_runtime_dimension_unit_selection_is_explicit() {
+    use solidcraft_geom::drawing_view::dimensions::{DimensionStyle, LengthUnit, linear_dimension};
+    use solidcraft_geom::drawing_view::{NamedView, ViewFrame};
+    use solidcraft_geom::Vec3;
+    let mut d = plate();
+    let frame = ViewFrame::new(NamedView::Front.basis(), "1:2".parse().unwrap(),
+        solidcraft_geom::Vec2::ZERO, solidcraft_geom::Vec2::new(100.0, 100.0)).unwrap();
+    let style = d.dimension_style_for(LengthUnit::Millimetre, DimensionStyle::default()).unwrap();
+    assert_eq!(style.unit, LengthUnit::Inch);
+    let drawing = linear_dimension(&frame, Vec3::ZERO, Vec3::new(25.4, 0.0, 0.0), 10.0, style).unwrap();
+    assert_eq!(drawing.label, "1.00 in");
+    assert_eq!(drawing.measured_value, 25.4);
+    d.units = Units::FollowModel;
+    let model_style = d.dimension_style_for(LengthUnit::Centimetre, DimensionStyle::default()).unwrap();
+    assert_eq!(model_style.unit, LengthUnit::Centimetre);
+    let another = linear_dimension(&frame, Vec3::ZERO, Vec3::new(25.4, 0.0, 0.0), 10.0, model_style).unwrap();
+    assert_eq!(drawing.strokes, another.strokes, "only the text unit changes");
+    assert_eq!(another.label, "2.54 cm");
+    for (unit, expected) in [
+        ("um", LengthUnit::Micrometre), ("µm", LengthUnit::Micrometre), ("in", LengthUnit::Inch),
+        ("yd", LengthUnit::Yard), ("km", LengthUnit::Kilometre),
+        ("mil", LengthUnit::Mil), ("nm", LengthUnit::Nanometre),
+    ] {
+        d.units = Units::Fixed { unit: unit.to_string() };
+        assert_eq!(d.dimension_style_for(LengthUnit::Millimetre, DimensionStyle::default()).unwrap().unit, expected);
+    }
+}
