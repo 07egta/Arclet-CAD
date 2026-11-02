@@ -55,6 +55,7 @@ mod frame;
 pub(crate) mod inspect;
 mod interference;
 pub(crate) mod joints;
+mod layers;
 mod libraries;
 mod material_properties;
 mod materials;
@@ -314,6 +315,7 @@ pub fn command_specs() -> Vec<&'static CommandSpec> {
     v.extend(parts::COMMANDS.iter());
     v.extend(bom::COMMANDS.iter());
     v.extend(browser::COMMANDS.iter());
+    v.extend(layers::COMMANDS.iter());
     v.extend(delete::COMMANDS.iter());
     v.extend(edit::COMMANDS.iter());
     v.extend(clipboard::COMMANDS.iter());

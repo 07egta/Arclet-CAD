@@ -137,6 +137,7 @@ fn same_geometry_inputs(a: &Document, b: &Document) -> bool {
         named_views,
         visibility,
         point_clouds,
+        layers,
     } = a;
     (Arc::ptr_eq(render, &b.render) || *render == b.render)
         && *format == b.format
@@ -170,6 +171,7 @@ fn same_geometry_inputs(a: &Document, b: &Document) -> bool {
         && *timeline_groups == b.timeline_groups
         && *browser_order == b.browser_order
         && *named_views == b.named_views
+        && *layers == b.layers
         && *visibility == b.visibility
         && *point_clouds == b.point_clouds
 }

@@ -1,0 +1,17 @@
+{
+  "en": {
+    "arclet.layers.assign": "Move selection here",
+    "arclet.layers.current": "current",
+    "arclet.layers.default": "Default",
+    "arclet.layers.hide": "Hide layer",
+    "arclet.layers.hint": "Choose a layer, then move the selected bodies onto it. Its eye and lock apply to them.",
+    "arclet.layers.items": "{count} bodies",
+    "arclet.layers.lock": "Lock",
+    "arclet.layers.make_current": "Set current",
+    "arclet.layers.new": "New layer",
+    "arclet.layers.rename": "Rename",
+    "arclet.layers.show": "Show layer",
+    "arclet.layers.unlock": "Unlock",
+    "arclet.panel.tab.layers": "Layers"
+  }
+}
