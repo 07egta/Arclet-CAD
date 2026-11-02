@@ -206,6 +206,11 @@ jobs:
         run: |
           set -euo pipefail
           case "$ACCEPTANCE_EVIDENCE_URL" in https://*) ;; *) echo 'Evidence URL must be HTTPS' >&2; exit 1 ;; esac
+          current_main="$(gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq .commit.sha)"
+          if [ "$current_main" != "$GITHUB_SHA" ]; then
+            echo "Main moved to $current_main after this workflow started; refusing a stale acceptance draft" >&2
+            exit 1
+          fi
           version="$(cargo metadata --no-deps --format-version 1 --locked | python3 -c 'import json,sys; m=json.load(sys.stdin); print(next(p["version"] for p in m["packages"] if p["name"] == "arclet"))')"
           tag="arclet-v$version-rc.$GITHUB_RUN_ID"
           cat > notes.md <<EOF
