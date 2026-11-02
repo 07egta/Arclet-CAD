@@ -30,6 +30,8 @@
 //! family's format check, every number in range, the upgrade, the typed record, then
 //! [`Drawing::validate`].
 
+pub mod runtime;
+
 use std::collections::BTreeSet;
 use std::sync::Arc;
 

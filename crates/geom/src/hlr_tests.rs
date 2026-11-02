@@ -2211,3 +2211,78 @@ fn chords_only_near_each_other_still_meet_their_crossings() {
     assert_eq!(crossings(&mut tracks, &ctx).unwrap(), 2);
     assert!(tracks.iter().all(|t| t.splits.len() == 2), "{:?}", tracks.iter().map(|t| &t.splits).collect::<Vec<_>>());
 }
+
+
+/// Technical views consume classified analytic B-rep edges. Editing the model
+/// regenerates paper coordinates at the same scale without copying stale curves.
+#[test]
+fn technical_front_view_uses_latest_box_geometry_at_unchanged_paper_scale() {
+    use crate::drawing_view::technical::{LineDisplay, project_brep};
+    use crate::drawing_view::{NamedView, ViewFrame};
+    let opts = Options::default();
+    let frame = ViewFrame::new(NamedView::Front.basis(), "1:2".parse().unwrap(), Vec2::ZERO, Vec2::new(120.0, 80.0)).unwrap();
+    let make = |width| {
+        let prepared = prepare(&cuboid([0.0; 3], [width, 30.0, 20.0]), &opts).unwrap();
+        project_brep(&[prepared], &[identity(0, [0.0; 3])], &frame, LineDisplay::Visible, &opts, &never).unwrap()
+    };
+    let before = make(40.0);
+    let after = make(80.0);
+    let x_extent = |drawing: &crate::drawing_view::technical::PaperProjection| {
+        let mut xs = Vec::new();
+        for curve in &drawing.curves {
+            if let Seg2::Line { a, b } = curve.geometry {
+                xs.extend([a.x, b.x]);
+            }
+        }
+        let lo = xs.iter().copied().fold(f64::INFINITY, f64::min);
+        let hi = xs.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        hi - lo
+    };
+    assert!(!before.curves.is_empty() && !after.curves.is_empty());
+    assert!((x_extent(&before) - 20.0).abs() < 1e-8, "40 mm model at 1:2 should use 20 mm paper");
+    assert!((x_extent(&after) - 40.0).abs() < 1e-8, "edited 80 mm model should use 40 mm paper");
+    assert!(after.curves.iter().all(|c| c.visibility == Visibility::Visible));
+    assert!(after.unsupported.is_empty(), "planar box is within HLR's supported subset");
+}
+
+/// Hidden edges are preserved when requested and can be excluded, but uncertain
+/// geometry must never masquerade as visible. Runs over the same model are
+/// deterministic in their projected curve order and coordinates.
+#[test]
+fn technical_isometric_view_filters_hidden_edges_repeatably() {
+    use crate::drawing_view::technical::{LineDisplay, project_brep};
+    use crate::drawing_view::{NamedView, ViewFrame};
+    let opts = Options::default();
+    let frame = ViewFrame::new(NamedView::IsoFrontRight.basis(), "1:2".parse().unwrap(), Vec2::ZERO, Vec2::new(100.0, 100.0)).unwrap();
+    let def = prepare(&cuboid([0.; 3], [20.0, 30.0, 40.0]), &opts).unwrap();
+    let scene = [identity(0, [0.; 3])];
+    let all = project_brep(&[def], &scene, &frame, LineDisplay::VisibleAndHidden, &opts, &never).unwrap();
+    assert!(all.curves.iter().any(|c| c.visibility == Visibility::Hidden));
+    assert!(all.curves.iter().any(|c| c.visibility == Visibility::Visible));
+    let def = prepare(&cuboid([0.; 3], [20.0, 30.0, 40.0]), &opts).unwrap();
+    let visible = project_brep(&[def], &scene, &frame, LineDisplay::Visible, &opts, &never).unwrap();
+    assert!(!visible.curves.is_empty());
+    assert!(visible.curves.iter().all(|c| c.visibility == Visibility::Visible));
+    let def = prepare(&cuboid([0.; 3], [20.0, 30.0, 40.0]), &opts).unwrap();
+    let again = project_brep(&[def], &scene, &frame, LineDisplay::VisibleAndHidden, &opts, &never).unwrap();
+    let snapshot = |drawing: &crate::drawing_view::technical::PaperProjection| {
+        drawing.curves.iter().map(|c| (c.geometry, c.accuracy, c.visibility, c.placement, c.source)).collect::<Vec<_>>()
+    };
+    assert_eq!(snapshot(&all), snapshot(&again), "times and internal stats excluded");
+}
+
+/// A placed assembly is drawn as a single scene, preserving source occurrence
+/// indices so the UI can identify which component owns each resulting curve.
+#[test]
+fn technical_assembly_view_keeps_distinct_placements() {
+    use crate::drawing_view::technical::{LineDisplay, project_brep};
+    use crate::drawing_view::{NamedView, ViewFrame};
+    let opts = Options::default();
+    let frame = ViewFrame::new(NamedView::Top.basis(), "1:2".parse().unwrap(), Vec2::ZERO, Vec2::new(100.0, 100.0)).unwrap();
+    let b = prepare(&cuboid([0.; 3], [20.; 3]), &opts).unwrap();
+    let scene = [identity(0, [0.; 3]), identity(0, [40.0, 0., 0.])];
+    let projection = project_brep(&[b], &scene, &frame, LineDisplay::Visible, &opts, &never).unwrap();
+    assert!(projection.curves.iter().any(|c| c.placement == 0));
+    assert!(projection.curves.iter().any(|c| c.placement == 1));
+    assert!(projection.unsupported.is_empty());
+}
