@@ -162,7 +162,8 @@ mod tests {
         bad.keys[0].points = vec![(0.0, 0.0), (10.0, f64::NAN)];
         assert!(bad.validate(&assembly).is_err(), "non-finite pose");
         let mut bad = original.clone();
-        bad.keys.push(bad.keys[0].clone());
+        let duplicate = bad.keys[0].clone();
+        bad.keys.push(duplicate);
         assert!(bad.validate(&assembly).is_err(), "conflicting drivers in a study");
     }
 
