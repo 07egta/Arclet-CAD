@@ -420,6 +420,11 @@ fn text_result(v: &Value, is_error: bool) -> Value {
         v => serde_json::to_string_pretty(v).unwrap_or_default(),
     };
     let mut r = json!({"content": [{"type": "text", "text": text}]});
+    // MCP 2025-06-18 supports machine-readable tool responses. Keep the
+    // legacy text content unchanged for clients using earlier revisions.
+    if v.is_object() {
+        r["structuredContent"] = v.clone();
+    }
     if is_error {
         r["isError"] = json!(true);
     }
