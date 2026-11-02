@@ -23,6 +23,17 @@ const JOIN_CONTRACT: TypedContract<JoinParams> = TypedContract::new();
 const HELIX_CONTRACT: TypedContract<HelixParams> = TypedContract::new();
 const SPIRAL_CONTRACT: TypedContract<SpiralParams> = TypedContract::new();
 
+fn in_sketch_3d(s: &Session) -> std::result::Result<(), String> {
+    in_sketch(s)?;
+    let id = s.active_sketch.ok_or_else(|| "no active sketch".to_string())?;
+    let sketch = s.doc.sketch(id).map_err(|_| "active sketch was not found".to_string())?;
+    if sketch.view.three_d {
+        Ok(())
+    } else {
+        Err("turn on 3D Sketch (sketch.options sketch_3d: true) to create a helix".into())
+    }
+}
+
 pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("sketch.polyline", "Polyline", crate::checked!("sketch.polyline", polyline))
         .at("SKETCH", "CREATE")
@@ -41,7 +52,7 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("sketch.helix", "Helix", crate::checked!("sketch.helix", helix))
         .at("SKETCH", "CREATE")
         .icon("spline")
-        .enabled(in_sketch)
+        .enabled(in_sketch_3d)
         .contract(&HELIX_CONTRACT)
         .output(output_schema_for::<PathResult>)
         .params("center, axis: world [x,y,z], radius > 0, turns > 0, height != 0; phase?: degrees (default 0), samples_per_turn?: 4..256 (default 48), sketch?: id|name. Requires sketch_3d:true. Returns one sampled 3D fit wire usable as a sweep/pipe path, its id, sample count and approximation status."),

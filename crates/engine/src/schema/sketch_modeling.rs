@@ -7,6 +7,7 @@ use super::types::{Point2, Point3, SketchRef, present};
 
 fn default_samples() -> usize { 48 }
 fn default_tolerance() -> f64 { 1e-6 }
+fn default_connect() -> bool { true }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -20,7 +21,7 @@ pub struct PolylineParams {
     pub construction: bool,
     #[serde(default)]
     pub infer: bool,
-    #[serde(default)]
+    #[serde(default = "default_connect")]
     pub connect: bool,
     #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
     #[schemars(with = "SketchRef")]
@@ -32,6 +33,10 @@ pub struct PolylineResult {
     pub curves: Vec<String>,
     pub constraints: Vec<String>,
     pub sketch: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created: Option<Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub param_warnings: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -54,6 +59,10 @@ pub struct JoinResult {
     pub closed: bool,
     pub constraints: Vec<String>,
     pub sketch: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created: Option<Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub param_warnings: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -100,4 +109,8 @@ pub struct PathResult {
     pub samples: usize,
     pub approximation: String,
     pub sketch: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created: Option<Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub param_warnings: Vec<String>,
 }
