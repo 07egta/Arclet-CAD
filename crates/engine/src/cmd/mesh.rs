@@ -21,6 +21,8 @@ use crate::{
 
 /// The largest welding distance `mesh.check` takes (mm).
 const MAX_CHECK_TOLERANCE: f64 = 1e6;
+/// More than this many faces: vertex-link topology is not certified.
+const MAX_VERTEX_LINK_TRIANGLES: usize = 500_000;
 
 pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("mesh.convert", "Convert Mesh", convert)
@@ -114,6 +116,7 @@ pub(crate) fn analyze(positions: &[Vec3], triangles: &[[u32; 3]], tolerance: f64
     // insufficient: two triangles can traverse a shared edge in the same direction.
     let mut edges: HashMap<(usize, usize), (u32, i32)> = HashMap::new();
     let mut faces: HashSet<[usize; 3]> = HashSet::new();
+    let mut valid_faces = Vec::new();
     let (mut degenerate_triangles, mut invalid_index_triangles, mut nonfinite_triangles) = (0usize, 0usize, 0usize);
     let (mut zero_area_triangles, mut collapsed_after_weld, mut duplicate_faces) = (0usize, 0usize, 0usize);
     let (mut area_mm2, mut six_volume_mm3) = (0.0, 0.0);
@@ -154,6 +157,9 @@ pub(crate) fn analyze(positions: &[Vec3], triangles: &[[u32; 3]], tolerance: f64
         if !faces.insert(ordered) {
             duplicate_faces += 1;
         }
+        if triangles.len() <= MAX_VERTEX_LINK_TRIANGLES {
+            valid_faces.push([wa, wb, wc]);
+        }
         for (u, v) in [(wa, wb), (wb, wc), (wc, wa)] {
             let (key, dir) = if u < v { ((u, v), 1) } else { ((v, u), -1) };
             let entry = edges.entry(key).or_insert((0, 0));
@@ -175,9 +181,12 @@ pub(crate) fn analyze(positions: &[Vec3], triangles: &[[u32; 3]], tolerance: f64
             _ => non_manifold_edges += 1,
         }
     }
+    let non_manifold_vertices = (triangles.len() <= MAX_VERTEX_LINK_TRIANGLES)
+        .then(|| count_non_manifold_vertices(&valid_faces, unique));
     let topology_closed =
         !triangles.is_empty() && degenerate_triangles == 0 && nonfinite_vertices == 0
-        && duplicate_faces == 0 && naked_edges == 0 && non_manifold_edges == 0;
+        && duplicate_faces == 0 && naked_edges == 0 && non_manifold_edges == 0
+        && non_manifold_vertices == Some(0);
     let consistently_oriented = topology_closed && winding_conflicts == 0;
     // Relative to a nearby origin to avoid catastrophic cancellation when a
     // small printable part lies far from the world origin.
@@ -201,6 +210,8 @@ pub(crate) fn analyze(positions: &[Vec3], triangles: &[[u32; 3]], tolerance: f64
         "duplicate_faces": duplicate_faces,
         "naked_edges": naked_edges,
         "non_manifold_edges": non_manifold_edges,
+        "non_manifold_vertices": non_manifold_vertices,
+        "vertex_manifold_complete": non_manifold_vertices.is_some(),
         "winding_conflicts": winding_conflicts,
         "boundary_loops": boundary_loops(&incidence, unique),
         "topologically_closed": topology_closed,
@@ -210,6 +221,50 @@ pub(crate) fn analyze(positions: &[Vec3], triangles: &[[u32; 3]], tolerance: f64
         "surface_area_mm2": area_mm2.is_finite().then_some(area_mm2),
         "closed": closed,
     })
+}
+
+/// The link of every vertex in an orientable closed triangle surface is one
+/// single cycle. Two otherwise valid closed shells touching at only one welded
+/// vertex have no non-manifold *edges*, but the shared vertex has two disconnected
+/// cycles and cannot be treated as a printable two-manifold solid.
+///
+/// Also counts open or branching vertex fans (the edge diagnostics report
+/// their separate root causes). This is linear in the number of triangle
+/// corners, with a local connectivity search per vertex.
+fn count_non_manifold_vertices(triangles: &[[usize; 3]], unique_vertices: usize) -> usize {
+    let mut links: Vec<Vec<(usize, usize)>> = vec![Vec::new(); unique_vertices];
+    for &[a, b, c] in triangles {
+        if let Some(link) = links.get_mut(a) { link.push((b, c)); }
+        if let Some(link) = links.get_mut(b) { link.push((c, a)); }
+        if let Some(link) = links.get_mut(c) { link.push((a, b)); }
+    }
+    let mut invalid = 0usize;
+    for wedges in links {
+        if wedges.is_empty() {
+            continue;
+        }
+        let mut neighbours: HashMap<usize, Vec<usize>> = HashMap::new();
+        for (a, b) in wedges {
+            neighbours.entry(a).or_default().push(b);
+            neighbours.entry(b).or_default().push(a);
+        }
+        if neighbours.values().any(|v| v.len() != 2) {
+            invalid += 1;
+            continue;
+        }
+        let Some(first) = neighbours.keys().next().copied() else { continue };
+        let mut visited = HashSet::new();
+        let mut pending = vec![first];
+        while let Some(v) = pending.pop() {
+            if visited.insert(v) {
+                pending.extend(neighbours.get(&v).into_iter().flatten().copied());
+            }
+        }
+        if visited.len() != neighbours.len() {
+            invalid += 1;
+        }
+    }
+    invalid
 }
 
 /// A triangle with no area: three collinear points (or three at the same place), by the same
