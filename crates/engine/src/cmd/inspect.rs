@@ -1070,6 +1070,18 @@ mod geometry_inspection_tests {
         close(&cylinder["volume_mm3"], cylinder_v, cylinder_v * 0.0015, "mm^3");
         // Side area is 2*pi*r*h; the body's two planar end caps add 2*pi*r^2.
         close(&cylinder["area_mm2"], 2.0 * std::f64::consts::PI * 3.0 * 13.0, 0.4, "mm^2");
+        // The side may be split into several B-rep patches: add every cylindrical
+        // face, not the planar caps. Its analytic reference is 2*pi*r*h.
+        let faces = run(&mut s, "model.faces", json!({"body": "Cylinder"}));
+        let lateral: Vec<_> = faces["faces"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|f| f["cylinder"].is_object())
+            .collect();
+        assert!(!lateral.is_empty(), "the cylinder must expose a cylindrical surface: {faces}");
+        let lateral_area_mm2: f64 = lateral.iter().filter_map(|f| f["area"].as_f64()).sum();
+        close(&json!(lateral_area_mm2), 2.0 * std::f64::consts::PI * 3.0 * 10.0, 0.4, "mm^2");
     }
 
     #[test]
