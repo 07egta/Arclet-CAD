@@ -2768,6 +2768,9 @@ pub struct Document {
     /// it saves.
     #[serde(default, skip_serializing_if = "Visibility::is_empty")]
     pub visibility: Visibility,
+    /// Layers: named sets of bodies with an eye and a lock, and the current layer.
+    #[serde(default, skip_serializing_if = "crate::layers::Layers::is_empty")]
+    pub layers: crate::layers::Layers,
 }
 
 /// The browser's view of a design: items and folders hidden or shown, sketch profiles and
@@ -2990,6 +2993,7 @@ impl Document {
             browser_order: Default::default(),
             named_views: Vec::new(),
             visibility: Visibility::default(),
+            layers: crate::layers::Layers::default(),
         }
     }
 
@@ -3041,6 +3045,7 @@ impl Document {
                 *k = new.to_string();
             }
         }
+        self.layers.rename_body(old, new);
         for (_, v) in self.browser_order.iter_mut().filter(|(k, _)| k.ends_with("/bodies")) {
             for k in v.iter_mut().filter(|k| *k == old) {
                 *k = new.to_string();

@@ -4,14 +4,16 @@
 //! command bar. Each action runs an engine command through [`SolveApp::run`]. Measurements use the
 //! read-only `inspect.measure` command and are kept until the selection or the design changes.
 //!
-//! Arclet has no layer objects in the engine. The Groups tab is therefore the design's browser
-//! groups (`browser.group`, `browser.rename_group`, `browser.ungroup`), and its eye toggles the
-//! group itself through `browser.visibility`. It has no lock or colour, because nothing backs them.
+//! The Groups tab is the design's browser groups (`browser.group`, `browser.rename_group`,
+//! `browser.ungroup`), and its eye toggles the group through `browser.visibility`. The Layers tab
+//! lists the design's layers (`layer.*` commands): each with an eye, a lock, a colour swatch and
+//! a current-layer marker, plus New, Rename, Move selection here and Set current.
 
 use std::sync::Arc;
 
 use egui::{RichText, Sense, Stroke, Ui, pos2, vec2};
 use serde_json::{Value, json};
+use solidcraft_doc::layers::DEFAULT;
 use solidcraft_engine::{Sel, Session};
 use solidcraft_ui_egui::i18n::{format as message, tr};
 use solidcraft_ui_egui::theme::Tokens;
@@ -33,6 +35,7 @@ const STYLES: [(&str, &str); 4] = [
 enum Tab {
     Properties,
     Groups,
+    Layers,
     Display,
 }
 
@@ -45,6 +48,10 @@ pub struct PanelState {
     chosen_group: Option<u64>,
     /// A rename in progress: the group and the name typed so far.
     rename: Option<(u64, String)>,
+    /// The layer that Rename, Move selection here and Set current act on (`None`: the default).
+    chosen_layer: Option<u64>,
+    /// A layer rename in progress: the layer and the name typed so far.
+    layer_rename: Option<(u64, String)>,
     error: Option<String>,
     measured: Option<Measured>,
 }
@@ -66,7 +73,16 @@ struct GroupRow {
 
 impl Default for PanelState {
     fn default() -> Self {
-        Self { open: true, tab: Tab::Properties, chosen_group: None, rename: None, error: None, measured: None }
+        Self {
+            open: true,
+            tab: Tab::Properties,
+            chosen_group: None,
+            rename: None,
+            chosen_layer: None,
+            layer_rename: None,
+            error: None,
+            measured: None,
+        }
     }
 }
 
@@ -99,6 +115,7 @@ impl PanelState {
             for (tab, label) in [
                 (Tab::Properties, "arclet.panel.tab.properties"),
                 (Tab::Groups, "arclet.panel.tab.groups"),
+                (Tab::Layers, "arclet.panel.tab.layers"),
                 (Tab::Display, "arclet.panel.tab.display"),
             ] {
                 let style = if self.tab == tab { Button::Primary } else { Button::Ghost };
@@ -114,6 +131,7 @@ impl PanelState {
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| match self.tab {
             Tab::Properties => self.properties(cad, ui),
             Tab::Groups => self.groups(cad, ui),
+            Tab::Layers => self.layers(cad, ui),
             Tab::Display => self.display(cad, ui),
         });
         ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
@@ -244,6 +262,87 @@ impl PanelState {
         }
     }
 
+    fn layers(&mut self, cad: &mut SolveApp, ui: &mut Ui) {
+        let tokens = Tokens::get();
+        let rows = layer_rows(&cad.session);
+        let current = cad.session.doc.layers.current;
+        let bodies = selected_bodies(&cad.session.selection);
+        let target = self.chosen_layer.filter(|id| rows.iter().any(|row| row.id == *id)).unwrap_or(DEFAULT);
+
+        ui.label(RichText::new(tr("arclet.layers.hint")).color(tokens.text_dim));
+        ui.horizontal_wrapped(|ui| {
+            if ui_kit::button(ui, tr("arclet.layers.new"), Button::Primary).clicked()
+                && let Some(made) = self.exec(cad, "layer.new", json!({}))
+            {
+                self.chosen_layer = made.get("layer").and_then(Value::as_u64);
+            }
+            if ui_kit::button(ui, tr("arclet.layers.rename"), Button::Enabled(target != DEFAULT)).clicked()
+                && let Some(row) = rows.iter().find(|row| row.id == target)
+            {
+                self.layer_rename = Some((target, row.name.clone()));
+            }
+            if ui_kit::button(ui, tr("arclet.layers.assign"), Button::Enabled(!bodies.is_empty())).clicked() {
+                self.exec(cad, "layer.assign", json!({ "bodies": bodies, "layer": target }));
+            }
+            if ui_kit::button(ui, tr("arclet.layers.make_current"), Button::Enabled(target != current)).clicked() {
+                self.exec(cad, "layer.set_current", json!({ "layer": target }));
+            }
+        });
+        if let Some((id, mut text)) = self.layer_rename.take() {
+            let mut keep = true;
+            ui.horizontal(|ui| {
+                ui.add(egui::TextEdit::singleline(&mut text).desired_width(150.0));
+                if ui_kit::button(ui, tr("arclet.panel.group_save"), Button::Primary).clicked() {
+                    let name = text.trim().to_string();
+                    // A refused name keeps the editor open with the reason shown above.
+                    keep = name.is_empty() || self.exec(cad, "layer.rename", json!({ "layer": id, "name": name })).is_none();
+                }
+                if ui_kit::button(ui, tr("arclet.panel.group_cancel"), Button::Normal).clicked() {
+                    keep = false;
+                }
+            });
+            if keep {
+                self.layer_rename = Some((id, text));
+            }
+        }
+
+        ui.add_space(6.0);
+        for row in &rows {
+            ui.horizontal(|ui| {
+                if row.id == DEFAULT {
+                    ui.add_space(52.0);
+                } else {
+                    let (rect, response) = ui.allocate_exact_size(vec2(24.0, 24.0), Sense::click());
+                    icons::paint_icon(ui.painter(), rect.shrink(3.0), "eye", if row.visible { 1.0 } else { 0.35 });
+                    if !row.visible {
+                        ui.painter().line_segment(
+                            [pos2(rect.left() + 5.0, rect.bottom() - 5.0), pos2(rect.right() - 5.0, rect.top() + 5.0)],
+                            Stroke::new(1.5, tokens.text_dim),
+                        );
+                    }
+                    let toggle = if row.visible { tr("arclet.layers.hide") } else { tr("arclet.layers.show") };
+                    if response.on_hover_text(toggle).clicked() {
+                        self.exec(cad, "layer.set_visible", json!({ "layer": row.id, "visible": !row.visible }));
+                    }
+                    let lock = if row.locked { tr("arclet.layers.unlock") } else { tr("arclet.layers.lock") };
+                    let look = if row.locked { Button::SmallSelected } else { Button::Small };
+                    if ui_kit::button(ui, lock, look).clicked() {
+                        self.exec(cad, "layer.set_locked", json!({ "layer": row.id, "locked": !row.locked }));
+                    }
+                }
+                let (swatch, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
+                ui.painter().rect_filled(swatch, 2.0, parse_colour(&row.colour, tokens.text_dim));
+                let mut label = format!("{} ({})", row.name, message("arclet.layers.items", &[("count", &row.count.to_string())]));
+                if row.id == current {
+                    label = format!("{label} · {}", tr("arclet.layers.current"));
+                }
+                if ui.selectable_label(target == row.id, label).clicked() {
+                    self.chosen_layer = Some(row.id);
+                }
+            });
+        }
+    }
+
     fn display(&mut self, cad: &mut SolveApp, ui: &mut Ui) {
         let tokens = Tokens::get();
         ui.label(RichText::new(tr("arclet.panel.display_style")).color(tokens.text_dim));
@@ -347,6 +446,46 @@ fn group_target(groups: &[GroupRow], chosen: Option<u64>, bodies: &[String]) -> 
     groups.iter().find(|g| g.items.iter().any(|item| bodies.contains(item))).map(|g| g.id)
 }
 
+/// A layer as the Layers tab shows it. The default layer comes first and has no eye or lock.
+struct LayerRow {
+    id: u64,
+    name: String,
+    colour: String,
+    visible: bool,
+    locked: bool,
+    count: usize,
+}
+
+fn layer_rows(session: &Session) -> Vec<LayerRow> {
+    let layers = &session.doc.layers;
+    let mut rows = vec![LayerRow {
+        id: DEFAULT,
+        name: tr("arclet.layers.default").to_string(),
+        colour: String::new(),
+        visible: true,
+        locked: false,
+        count: layers.members(DEFAULT).len(),
+    }];
+    rows.extend(layers.items.iter().map(|l| LayerRow {
+        id: l.id,
+        name: l.name.clone(),
+        colour: l.colour.clone(),
+        visible: l.visible,
+        locked: l.locked,
+        count: layers.members(l.id).len(),
+    }));
+    rows
+}
+
+/// A `#rrggbb` colour; anything else is drawn in the given fallback.
+fn parse_colour(hex: &str, fallback: egui::Color32) -> egui::Color32 {
+    let channel = |i: usize| u8::from_str_radix(hex.get(i..i + 2).unwrap_or(""), 16).ok();
+    match (channel(1), channel(3), channel(5)) {
+        (Some(r), Some(g), Some(b)) if hex.len() == 7 => egui::Color32::from_rgb(r, g, b),
+        _ => fallback,
+    }
+}
+
 /// The preset `prefs::graphics_preset` names, from the same values. Manual edits show as custom.
 fn graphics_preset(ambient_occlusion: bool, display_quality: &str, supersampling: f32, adaptive: bool) -> &'static str {
     // The presets are exact values a preset button writes, so equality is intended.
@@ -445,6 +584,14 @@ mod tests {
         assert_eq!(graphics_preset(true, "fine", 2.0, false), "custom");
         let names: Vec<&str> = STYLES.iter().map(|(name, _)| *name).collect();
         assert_eq!(names, ["shaded_with_edges", "shaded", "wireframe", "shaded_with_hidden_edges"]);
+    }
+
+    #[test]
+    fn layer_colours_parse_and_fall_back() {
+        let fallback = egui::Color32::GRAY;
+        assert_eq!(parse_colour("#4a90d9", fallback), egui::Color32::from_rgb(0x4a, 0x90, 0xd9));
+        assert_eq!(parse_colour("", fallback), fallback);
+        assert_eq!(parse_colour("#zz0000", fallback), fallback);
     }
 
     #[test]

@@ -37,6 +37,7 @@ mod history_names;
 pub mod hole_reference;
 pub mod ids;
 mod inline_params;
+pub mod layers;
 pub use format_offsets::whole_profile_selection_from_value;
 pub use inline_params::Defined;
 pub mod joints;
