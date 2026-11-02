@@ -46,16 +46,16 @@ pub(crate) use actions::*;
 pub use actions::{Button, button};
 pub(crate) use assistant::*;
 pub(crate) use assistant_entry::*;
+pub use checks::checkbox;
 #[cfg(test)]
 pub(crate) use checks::tests::{raster as raster_ui, textures_update as update_test_textures};
 pub(crate) use checks::*;
-pub use checks::checkbox;
 pub(crate) use choice::*;
 pub(crate) use color::*;
 pub(crate) use confirm::{Confirm, Tone};
 pub use container::{Container, DockEdges, Edge, Surface};
-pub(crate) use disclosure::*;
 pub use disclosure::panel_disclosure_button_at;
+pub(crate) use disclosure::*;
 pub(crate) use drag::*;
 pub(crate) use fields::*;
 pub use fields::{bounded_cell_editor, cell_editor};

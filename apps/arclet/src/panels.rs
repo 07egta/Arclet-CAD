@@ -199,7 +199,8 @@ impl PanelState {
         let target = group_target(&groups, self.chosen_group, &bodies);
 
         ui.horizontal_wrapped(|ui| {
-            if ui_kit::button(ui, tr("arclet.panel.group_new"), if bodies.is_empty() { ui_kit::Button::Enabled(false) } else { Button::Primary }).clicked()
+            if ui_kit::button(ui, tr("arclet.panel.group_new"), if bodies.is_empty() { ui_kit::Button::Enabled(false) } else { Button::Primary })
+                .clicked()
                 && let Some(made) = self.exec(cad, "browser.group", json!({ "folder": "bodies", "component": 0, "items": bodies }))
             {
                 self.chosen_group = made.get("group").and_then(Value::as_u64);
