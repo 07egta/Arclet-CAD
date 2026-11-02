@@ -194,6 +194,54 @@ fn post_crown_quality_check_rejects_an_interior_fold() {
     assert!(err.to_string().contains("pinches") || err.to_string().contains("folds"), "{err}");
 }
 
+/// The requested general boundary fill supports odd-sided nonrectangular
+/// outlines without inventing a fourth Coons side. Planarity is checked
+/// independently over the untrimmed surface domain, not just on the rim.
+#[test]
+fn an_irregular_five_sided_loop_stays_in_its_exact_plane() {
+    let corners = [
+        Vec3::new(0.0, 0.0, 0.0),
+        Vec3::new(12.0, 0.0, 0.0),
+        Vec3::new(17.0, 5.0, 0.0),
+        Vec3::new(9.0, 14.0, 0.0),
+        Vec3::new(-3.0, 8.0, 0.0),
+    ];
+    let mut stations = |k: usize, ts: &[f64]| -> Result<Vec<Station>, String> {
+        let a = corners[k];
+        let b = corners[(k + 1) % corners.len()];
+        Ok(ts.iter().map(|&t| Station { p: a.lerp(b, t), up: Vec3::Z, across: None, corner: t == 0.0, clash: false }).collect())
+    };
+    let fill = fill_general(5, &mut stations, &spec(&[])).unwrap();
+    assert!(fill.deviation <= TOL, "{fill:?}");
+    for i in 0..=12 {
+        for j in 0..=12 {
+            let q = at(&fill.surface, i as f64 / 12.0, j as f64 / 12.0);
+            assert!(q.z.abs() < 1e-8, "{q:?} left the plane");
+        }
+    }
+}
+
+/// A missing endpoint connection is a geometry error, not permission to make
+/// a smooth surface with a hidden seam. An exactly closed loop is accepted.
+#[test]
+fn small_boundary_gaps_are_compared_with_the_requested_tolerance() {
+    let corners = [Vec3::ZERO, Vec3::X * 10.0, Vec3::new(10.0, 10.0, 0.0), Vec3::Y * 10.0];
+    let fill = |gap: f64| {
+        let mut stations = |k: usize, ts: &[f64]| -> Result<Vec<Station>, String> {
+            let mut a = corners[k];
+            let b = corners[(k + 1) % corners.len()];
+            if k == 2 {
+                a.y += gap;
+            }
+            Ok(ts.iter().map(|&t| Station { p: a.lerp(b, t), up: Vec3::Z, across: None, corner: t == 0.0, clash: false }).collect())
+        };
+        fill_general(4, &mut stations, &spec(&[]))
+    };
+    assert!(fill(0.0).unwrap().deviation <= TOL);
+    let e = fill(0.001).unwrap_err().to_string();
+    assert!(e.contains("gap") && e.contains("sides 1 and 2"), "{e}");
+}
+
 #[test]
 fn hostile_loops_and_specs_are_refused() {
     let ok = |s: &FillSpec| fill_general(1, &mut tube_end(10.0, false), s);
