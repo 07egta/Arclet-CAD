@@ -343,6 +343,33 @@ pub(crate) fn batch_step_command(step: &Value) -> Option<&str> {
     command(step)
 }
 
+/// The active design must still match the token the agent inspected. This check runs
+/// inside the same queued request as the edits, before the first step can change state.
+fn batch_guard(app: &mut SolveApp, p: &Value, len: usize) -> Option<Outcome> {
+    let id = p.get("if_document_id");
+    let revision = p.get("if_revision");
+    if id.is_none() && revision.is_none() {
+        return None;
+    }
+    let requested = json!({"document_id": id, "revision": revision});
+    let actual_id = app.session.document_id.clone();
+    let actual_rev = app.session.design_revision();
+    let actual = json!({"document_id": actual_id, "revision": actual_rev});
+    let (code, message) = match (id.and_then(Value::as_str).filter(|s| !s.is_empty()), revision.and_then(Value::as_u64)) {
+        (Some(expected_id), Some(expected_rev)) if expected_id == actual_id && expected_rev == actual_rev => return None,
+        (Some(_), Some(_)) => ("stale_state", "the active design or its revision changed; inspect_state again before retrying"),
+        _ => ("invalid_precondition", "if_document_id and if_revision must both be provided as a nonempty string and a nonnegative integer"),
+    };
+    Some(ok(json!({
+        "completed": 0,
+        "results": [],
+        "failed": {"index": null, "command": null, "code": code, "error": message, "expected": requested, "actual": actual},
+        "undone": 0,
+        "rolled_back": false,
+        "not_run": (0..len).collect::<Vec<_>>(),
+    })))
+}
+
 /// `engine.batch {commands, rollback?, timings?, profile?}`: the steps in one request, so in one
 /// frame (#743). With `timings` the reply adds each step's time and `total_ms`, with `profile`
 /// each step's kernel share too (`solidcraft_engine::timing`, #1833). Each
@@ -358,6 +385,9 @@ fn batch(app: &mut SolveApp, p: &Value) -> Outcome {
     // batch: `agent_cursor::intercept`.)
     if let Some(why) = batch_refusal(steps) {
         return err(why);
+    }
+    if let Some(refusal) = batch_guard(app, p, steps.len()) {
+        return refusal;
     }
     // A step the batch would refuse at its turn refuses it now, before anything runs (#5853).
     if let Some(refusal) = solidcraft_engine::batch_preflight::check(steps, app.session.param_check, &["view.pick"]) {
@@ -521,6 +551,9 @@ fn dispatch(app: &mut SolveApp, ctx: &egui::Context, method: &str, p: &Value) ->
             wrap(execute(app, id, p.get("params").cloned().filter(|v| !v.is_null()).unwrap_or(json!({}))))
         }
         "engine.batch" => batch(app, p),
+        // Capability negotiation is explicit: old desktop builds must not silently
+        // ignore optimistic concurrency guards supplied by a newer MCP bridge.
+        "control.capabilities" => ok(json!({"atomic_batch_guards": true})),
         "ui.agent_cursor" => {
             let s = &mut app.ui.agent_cursor;
             if let Some(v) = p.get("show").and_then(Value::as_bool) {
