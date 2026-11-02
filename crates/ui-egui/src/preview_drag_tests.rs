@@ -235,7 +235,11 @@ fn a_new_selection_does_not_wait_for_the_previous_selections_preview() {
         let (_tx, progress) = running(&mut pv, &picks[0]);
         pv.running_tool = tool;
         pv.poll(key, stream);
-        assert!(pv.running.is_some() && !progress.is_cancelled() && pv.detached.is_empty(), "tool {tool}, stream {stream:?}");
+        if stream.is_some() {
+            assert!(pv.running.is_some() && !progress.is_cancelled() && pv.detached.is_empty(), "compatible tool stream stays active");
+        } else {
+            assert!(progress.is_cancelled() && pv.detached.len() == 1, "unstreamed changes cancel obsolete tools");
+        }
     }
 
     // A dialog closed with jobs left behind still counts the one it leaves (it keeps running),
@@ -290,4 +294,58 @@ fn a_preview_left_behind_stops_before_its_next_feature() {
         pv.poll(key, stream);
     }
     assert!(pv.shown_key.is_none() && !pv.active && pv.error.is_none(), "its result is never shown");
+}
+
+#[test]
+fn distinct_documents_and_placements_have_distinct_preview_keys() {
+    let a = Session::default();
+    let mut b = Session::default();
+    assert_eq!(a.revision, b.revision);
+    assert_ne!(session_key(&a), session_key(&b), "same revision does not mean same open document");
+    b = a.scratch();
+    assert_eq!(session_key(&a), session_key(&b), "a scratch copy belongs to the original document");
+    b.active_component = 7;
+    assert_ne!(session_key(&a), session_key(&b), "component context changes preview geometry");
+}
+
+#[test]
+fn changed_setup_discards_completed_tool_geometry_and_restores_original_bodies() {
+    let s = fixture();
+    let a = vec![("solid.extrude".into(), json!({"sketch":"Profile","distance":10,"operation":"join"}))];
+    let b = vec![("solid.extrude".into(), json!({"sketch":"Different","distance":20,"operation":"join"}))];
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut pv = PreviewState::default();
+    pv.running = Some((job_key(&a, 1, colors()), rx));
+    pv.running_tool = true;
+    pv.running_stream_key = stream_key(&a, 1, colors());
+    assert_ne!(pv.running_stream_key, stream_key(&b, 1, colors()));
+    tx.send(compute_tool(&s, &a, colors())).unwrap();
+    pv.poll(job_key(&b, 1, colors()), stream_key(&b, 1, colors()));
+    assert!(!pv.active && pv.replaced.is_empty() && pv.shown_key.is_none());
+    assert_eq!(pv.discarded_jobs, 1);
+}
+
+#[test]
+fn streaming_requires_exact_setup_for_move_revolve_fillet_and_extrude() {
+    for command in ["solid.move", "solid.revolve", "solid.fillet", "solid.extrude"] {
+        let base = vec![(command.into(), json!({
+            "body":"Part", "bodies":["Part"], "axis":[0,0,1], "angle":10,
+            "distance":10, "radius":1, "edges":[[5,0,10]], "operation":"new"
+        }))];
+        let mut changed = base.clone();
+        let field = match command {
+            "solid.move" => "angle",
+            "solid.revolve" => "angle",
+            "solid.fillet" => "radius",
+            _ => "distance",
+        };
+        changed[0].1[field] = json!(25);
+        assert_eq!(stream_key(&base, 5, colors()), stream_key(&changed, 5, colors()), "{command} value-only edit");
+        changed[0].1["axis"] = json!([1,0,0]);
+        assert_ne!(stream_key(&base, 5, colors()), stream_key(&changed, 5, colors()), "{command} changed axis");
+        assert_ne!(stream_key(&base, 5, colors()), stream_key(&base, 6, colors()), "{command} changed document");
+    }
+    for command in ["surface.loft", "surface.sweep", "solid.shell"] {
+        assert!(stream_key(&[(command.into(),json!({"rails":[1,2]}))], 1, colors()).is_none());
+    }
 }
