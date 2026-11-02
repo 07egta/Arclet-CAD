@@ -182,9 +182,15 @@ impl CommandLine {
 
 /// Draw the command line and report what the user asked for. `focus` is taken (cleared) when
 /// set, so the prompt takes the keyboard for the next key.
-pub(crate) fn show(ui: &mut Ui, line: &mut CommandLine, command: &mut String, focus: &mut bool, invalid: bool) -> Action {
+pub(crate) fn show(ui: &mut Ui, line: &mut CommandLine, command: &mut String, focus: &mut bool, invalid: bool, guided: bool) -> Action {
     let tokens = Tokens::get();
-    line.refresh(command);
+    if guided {
+        line.query.clear();
+        line.suggestions.clear();
+        line.cursor.reset();
+    } else {
+        line.refresh(command);
+    }
     let input_id = egui::Id::new(INPUT_ID);
     let mut action = Action::Nothing;
     if ui.ctx().memory(|m| m.has_focus(input_id)) {
@@ -202,10 +208,10 @@ pub(crate) fn show(ui: &mut Ui, line: &mut CommandLine, command: &mut String, fo
         if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Tab)) {
             line.cursor.next(len);
         }
-        if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown)) {
+        if !guided && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown)) {
             line.cursor.next(len);
         }
-        if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp)) {
+        if !guided && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp)) {
             line.cursor.prev(len);
         }
     }

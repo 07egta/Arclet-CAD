@@ -13,7 +13,7 @@ use solidcraft_ui_egui::toolbar::FileAction;
 use solidcraft_ui_egui::ui_kit::{self, Container, Edge, Surface};
 use solidcraft_ui_egui::{Services, SolveApp};
 
-use crate::{classic_look, cmdline, commands, panels, platform};
+use crate::{classic_look, cmdline, command_workflows, commands, panels, platform};
 
 const PREFS_KEY: &str = "arclet.workspace.v1";
 const CURVES: &[(&str, &str)] = &[
@@ -152,6 +152,7 @@ pub struct ArcletApp {
     command_error: Option<String>,
     command_focus: bool,
     cmdline: cmdline::CommandLine,
+    guided: Option<command_workflows::Guided>,
     help: bool,
     controls: Sender<ControlRequest>,
     screenshot_path: Option<String>,
@@ -239,6 +240,7 @@ impl ArcletApp {
             command_error: None,
             command_focus: false,
             cmdline: cmdline::CommandLine::default(),
+            guided: None,
             help: false,
             controls,
             screenshot_path: None,
@@ -311,6 +313,7 @@ impl ArcletApp {
 
     fn start(&mut self, id: &str) {
         self.command_error = None;
+        self.guided = None;
         if matches!(id, "sketch.spline.rebuild" | "inspect.curve_continuity") && self.cad.session.active_sketch.is_none() {
             self.command_error = Some(tr("curve_quality.edit_sketch").to_string());
             return;
@@ -519,29 +522,70 @@ impl ArcletApp {
     /// Run the command bar's text. An empty line repeats the last command, like pressing
     /// Enter at an empty command line, so a repeated operation is one keystroke.
     fn run_command_text(&mut self) {
-        if self.command.trim().is_empty() {
-            match self.cad.last_command.clone() {
-                Some((id, _)) => {
-                    self.cmdline.repeated(&id);
-                    self.start_logged(&id);
+        let text = self.command.trim().to_string();
+        self.command_error = None;
+        if let Some(guide) = self.guided.as_mut() {
+            match guide.advance(&text) {
+                Ok(command_workflows::Advance::Waiting) => {
+                    self.command.clear();
                 }
-                None => {
-                    let error = tr("arclet.command.empty").to_string();
-                    self.cmdline.failed("", &error);
+                Ok(command_workflows::Advance::Execute { id, params }) => {
+                    self.guided = None;
+                    self.command.clear();
+                    self.run_explicit(id, params);
+                }
+                Err(error) => {
+                    self.cmdline.failed(&text, &error);
                     self.command_error = Some(error);
                 }
             }
             return;
         }
-        self.cmdline.entered(&self.command);
-        match commands::resolve(&self.command) {
-            Ok(id) => {
+        if text.is_empty() {
+            if let Some((id, _)) = self.cad.last_command.clone() {
+                self.cmdline.repeated(&id);
+                self.start_logged(&id);
+            } else {
+                let error = tr("arclet.command.empty").to_string();
+                self.cmdline.failed("", &error);
+                self.command_error = Some(error);
+            }
+            return;
+        }
+        self.cmdline.entered(&text);
+        match command_workflows::parse(&text) {
+            Ok(command_workflows::Invocation::Start(id)) => {
                 self.start_logged(id);
                 self.command.clear();
             }
+            Ok(command_workflows::Invocation::Run { id, params }) => {
+                self.command.clear();
+                self.run_explicit(id, params);
+            }
+            Ok(command_workflows::Invocation::Guide(guide)) => {
+                self.command.clear();
+                self.command_focus = true;
+                self.guided = Some(guide);
+            }
             Err(error) => {
-                self.cmdline.failed(&self.command, &error);
+                self.cmdline.failed(&text, &error);
                 self.command_error = Some(error);
+            }
+        }
+    }
+
+    fn run_explicit(&mut self, id: &str, params: Value) {
+        if self.cad.tool.is_some() || self.cad.dialog.is_some() {
+            self.command_error = Some("Finish or cancel the active tool before running an explicit command.".into());
+            return;
+        }
+        if let Err(error) = self.cad.run(id, params) {
+            self.cmdline.failed(id, &error);
+            self.command_error = Some(error);
+        } else {
+            self.cmdline.started(id);
+            if let Some(spec) = find_command(id) {
+                self.cad.last_command = Some((spec.id.to_owned(), spec.label.to_owned()));
             }
         }
     }
@@ -567,8 +611,11 @@ impl ArcletApp {
                 if let Some(error) = &self.command_error {
                     ui.label(RichText::new(error).color(tokens.error));
                 }
+                if let Some(guide) = &self.guided {
+                    ui.label(RichText::new(guide.prompt()).color(tokens.text_dim));
+                }
                 let invalid = self.command_error.is_some();
-                match cmdline::show(ui, &mut self.cmdline, &mut self.command, &mut self.command_focus, invalid) {
+                match cmdline::show(ui, &mut self.cmdline, &mut self.command, &mut self.command_focus, invalid, self.guided.is_some()) {
                     cmdline::Action::Nothing => {}
                     cmdline::Action::Run => self.run_command_text(),
                     cmdline::Action::Suggested { id, label } => {
@@ -577,10 +624,18 @@ impl ArcletApp {
                         self.command.clear();
                     }
                     cmdline::Action::Cancel => {
+                        self.guided = None;
                         self.command_error = None;
                         cmdline::cancel_active(&mut self.cad);
                     }
-                    cmdline::Action::Finish => solidcraft_ui_egui::tools::confirm_current(&mut self.cad),
+                    cmdline::Action::Finish => {
+                        if self.guided.is_some() {
+                            self.command.clear();
+                            self.run_command_text();
+                        } else {
+                            solidcraft_ui_egui::tools::confirm_current(&mut self.cad);
+                        }
+                    },
                 }
             });
     }
@@ -1034,6 +1089,45 @@ mod tests {
             assert!(find_command(id).is_some(), "{id}");
         }
         assert_eq!(commands::resolve("Spline"), Ok("sketch.spline.control_point"));
+    }
+
+    #[test]
+    fn typed_geometry_is_committed_only_after_validation_and_can_be_undone() {
+        let mut app = ArcletApp::with_services(Default::default());
+        app.cad.run("sketch.create", json!({"plane":"XY","name":"Typed"})).unwrap();
+        let before = app.cad.session.doc.to_json();
+        app.command = "line 0,0".to_owned();
+        app.run_command_text();
+        assert!(app.guided.is_some());
+        assert_eq!(app.cad.session.doc.to_json(), before, "incomplete command must not edit the document");
+        app.command = "10mm,0".to_owned();
+        app.run_command_text();
+        assert!(app.command_error.is_none(), "{:?}", app.command_error);
+        assert!(app.guided.is_none());
+        let after = app.cad.session.doc.to_json();
+        assert_ne!(after, before);
+        app.cad.run("edit.undo", json!({})).unwrap();
+        assert_eq!(app.cad.session.doc.to_json(), before);
+        app.cad.run("edit.redo", json!({})).unwrap();
+        assert_eq!(app.cad.session.doc.to_json(), after);
+        let recovered = solidcraft_engine::doc::Document::from_json(&after).unwrap();
+        assert_eq!(recovered.to_json(), after);
+    }
+
+    #[test]
+    fn invalid_guided_coordinates_and_cancellation_keep_the_document() {
+        let mut app = ArcletApp::with_services(Default::default());
+        app.cad.run("sketch.create", json!({"plane":"XY"})).unwrap();
+        let before = app.cad.session.doc.to_json();
+        app.command = "line 0,0".to_owned();
+        app.run_command_text();
+        app.command = "NaN,1".to_owned();
+        app.run_command_text();
+        assert!(app.command_error.is_some());
+        assert_eq!(app.cad.session.doc.to_json(), before);
+        app.guided = None;
+        app.command.clear();
+        assert_eq!(app.cad.session.doc.to_json(), before);
     }
 
     #[test]
