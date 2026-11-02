@@ -647,10 +647,7 @@ fn fit_round(st: &[Station], spec: &FillSpec, start: usize) -> SplineResult<Roun
         let (net, located) = fit_grid(&grid, st, &dev, spec, &near, &fade)?;
         let got = measure(&net, st, &dev, spec, &located, &near, &fade)?;
         best = best.min(got.shortfall);
-        // A good position and G1 fit does not certify G2: explicitly check the
-        // measured normal curvature mismatch before accepting the surface.
-        let g2_ok = got.curvature <= g2_curvature_tolerance(st);
-        let within = got.shortfall.deviation <= spec.tol && got.shortfall.angle <= spec.angle_tol && got.shortfall.points <= spec.tol && g2_ok;
+        let within = meets_fill_tolerances(&got, st, spec);
         if within && holds {
             check_folds(&net, &dev.d, lo, hi)?;
             let ctrl: Vec<HPoint> = net.ctrl.iter().map(|p| HPoint::weighted(*p, 1.0)).collect();
@@ -674,6 +671,15 @@ fn fit_round(st: &[Station], spec: &FillSpec, start: usize) -> SplineResult<Roun
         level *= 2;
     }
     Ok(Round::Exhausted(best))
+}
+
+/// All four measured conditions must hold. In particular a G2 patch does not
+/// pass on position and normal alone while reporting a curvature mismatch.
+fn meets_fill_tolerances(got: &Measured, st: &[Station], spec: &FillSpec) -> bool {
+    got.shortfall.deviation <= spec.tol
+        && got.shortfall.angle <= spec.angle_tol
+        && got.shortfall.points <= spec.tol
+        && got.curvature <= g2_curvature_tolerance(st)
 }
 
 /// Scale-aware normal-curvature tolerance in 1/mm at the sampled G2 stations.
