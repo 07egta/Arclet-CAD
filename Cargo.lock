@@ -4441,6 +4441,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "solidcraft-polyclip-cpp"
+version = "0.26.0"
+dependencies = [
+ "cc",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "solidcraft-render"
 version = "0.26.0"
 dependencies = [
