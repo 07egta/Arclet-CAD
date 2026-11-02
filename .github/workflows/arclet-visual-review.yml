@@ -33,7 +33,7 @@ jobs:
       - name: Install native display libraries
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb libxkbcommon-dev libwayland-dev libx11-dev mesa-vulkan-drivers
+          sudo apt-get install -y xvfb imagemagick libxkbcommon-dev libwayland-dev libx11-dev mesa-vulkan-drivers
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Check locale catalog integrity
@@ -96,6 +96,12 @@ jobs:
                   raise SystemExit(f"Capture too small: {path} ({width}x{height})")
               print(f"{path.name}: {width}x{height}, sha256={hashlib.sha256(blob).hexdigest()}")
           PY
+          # Review sheet contains only genuine captured pixels and the original
+          # repository reference. Full-resolution PNGs remain alongside it.
+          montage "$output/reference-existing.png" "$output"/after-*.png \
+            -set label '%f' -label '%f' -geometry 560x380+12+24 \
+            -tile 3x2 -background '#e8eaed' "$output/review-contact-sheet.png"
+          test -s "$output/review-contact-sheet.png"
       - name: Preserve captures and logs even when capture fails
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
