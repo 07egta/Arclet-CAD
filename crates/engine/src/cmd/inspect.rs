@@ -24,7 +24,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         .icon("measure")
         .key("I")
         .noundo()
-        .params("bodies?: [names] (default all) → closed per body; volume_mm3, center_of_mass, density_g_cm3 and mass_g only for closed, consistently oriented bodies; area, bbox and counts for all; total.open_bodies_skipped counts bodies excluded from volume/mass totals; or items: [1-2 selections] (face/edge: type, body, point; index optional) → length/area/volume; diameter, radius, circumference or arc_length/angle_deg of circles, arcs and cylinders; slot sizes; min (distance_mm, from, to), max, center_distance (centre to centre, or from an axis) and angle"),
+        .params("bodies?: [names] (default all); quality?: bool to add per-body validity and edge diagnostics; min_edge_mm?: positive threshold (default 0.01) when quality is requested. Only valid closed bodies return volume_mm3/center_of_mass; area/bbox for other measurable bodies, method and unknown error bounds are marked. Totals are null when measurements fail. Or items: [1-2 selections] (face/edge/body/sketch) → length/area/volume, distance, angle, analytic-versus-sampled method and witness points"),
     CommandSpec::new("document.inspect", "Inspect Design", inspect).icon("inspect").noundo().params("measure?: bool (include body measurements)"),
     CommandSpec::new("document.revision", "Design Revision", revision).icon("inspect").noundo().params(
         "→ document_id (this open design's id: kept while it stays open, another for each design started or opened), \
@@ -84,10 +84,39 @@ pub(crate) fn encloses_volume(body: &solidcraft_kernel::Body) -> bool {
     if body.is_mesh() { body.is_closed_mesh() } else { !body.is_surface() }
 }
 
+/// Validate physical values before JSON serialization: serde_json would otherwise
+/// convert NaN and infinity into null while leaving apparently successful totals.
+fn measurement_error(m: &solidcraft_kernel::BodyMeasure, closed: bool) -> Option<&'static str> {
+    if !(m.area.is_finite() && m.area >= 0.0 && m.bbox.min.is_finite() && m.bbox.max.is_finite()) {
+        return Some("area or bounding box is not finite or is negative");
+    }
+    if !closed {
+        return None;
+    }
+    if !(m.volume.is_finite() && m.volume > 0.0 && m.centroid.is_finite()) {
+        return Some("a closed solid has non-positive or non-finite mass properties");
+    }
+    let lo = m.bbox.min;
+    let hi = m.bbox.max;
+    let slack = 1e-6 * m.bbox.diagonal().max(1.0);
+    if [(m.centroid.x, lo.x, hi.x), (m.centroid.y, lo.y, hi.y), (m.centroid.z, lo.z, hi.z)]
+        .iter()
+        .any(|&(v, min, max)| v < min - slack || v > max + slack)
+    {
+        return Some("the solid's centroid is outside its measured bounding box");
+    }
+    None
+}
+
+/// A triangulation-derived measurement: never labelled as an exact NURBS integral.
 pub fn measure_json(b: &solidcraft_doc::ModelBody) -> Value {
+    let closed = encloses_volume(&b.body);
     match b.measure() {
         Ok(m) => {
-            let closed = encloses_volume(&b.body);
+            if let Some(reason) = measurement_error(&m, closed) {
+                return json!({"name": b.name, "closed": closed, "error": reason,
+                    "measurement_method": "fine_tessellation", "error_bound": null});
+            }
             json!({
                 "name": b.name,
                 "closed": closed,
@@ -100,10 +129,94 @@ pub fn measure_json(b: &solidcraft_doc::ModelBody) -> Value {
                 "vertices": m.merged.vertices,
                 "face_types": m.merged.face_types,
                 "kernel": {"faces": m.faces, "edges": m.edges, "vertices": m.vertices, "shells": m.shells},
+                "measurement_method": "fine_tessellation",
+                "exact": false,
+                "error_bound": null,
             })
         }
-        Err(e) => json!({"name": b.name, "error": e.to_string()}),
+        Err(e) => json!({"name": b.name, "closed": closed, "error": e.to_string(),
+            "measurement_method": "fine_tessellation", "error_bound": null}),
     }
+}
+
+/// Expensive opt-in diagnostics, not a claim of certified manifoldness or watertightness.
+/// A bounding-box dimension is a *screening heuristic*, never a wall thickness.
+fn body_quality(b: &solidcraft_doc::ModelBody, measured: &Value, min_edge_mm: f64) -> Value {
+    let mut issues = b.body.validity();
+    if let Some(err) = measured["error"].as_str()
+        && !issues.iter().any(|s| s.contains(err))
+    {
+        issues.push(err.to_string());
+    }
+    let tol = (b.body.size() * 2e-3).max(1e-3);
+    let mut short_edges = Vec::new();
+    let mut smallest_edge_mm: Option<f64> = None;
+    let mut edge_error = None;
+    match b.body.edges(tol) {
+        Ok(edges) => {
+            for edge in edges {
+                if !edge.length.is_finite() || edge.length < 0.0 {
+                    issues.push(format!("edge {} has invalid length", edge.index));
+                    continue;
+                }
+                smallest_edge_mm = Some(smallest_edge_mm.map_or(edge.length, |v| v.min(edge.length)));
+                if edge.length < min_edge_mm {
+                    short_edges.push(json!({"index": edge.index, "length_mm": edge.length}));
+                }
+            }
+        }
+        Err(err) => {
+            edge_error = Some(err.to_string());
+            issues.push(format!("edge inspection failed: {err}"));
+        }
+    }
+    let minimum_bbox_dimension_mm = measured.get("bbox").and_then(|b| {
+        let lo: solidcraft_geom::Vec3 = serde_json::from_value(b.get("min")?.clone()).ok()?;
+        let hi: solidcraft_geom::Vec3 = serde_json::from_value(b.get("max")?.clone()).ok()?;
+        Some((hi.x - lo.x).min(hi.y - lo.y).min(hi.z - lo.z))
+    });
+    json!({
+        "body": b.name,
+        "passed_available_checks": issues.is_empty(),
+        "issues": issues,
+        "short_edges": short_edges,
+        "short_edge_threshold_mm": min_edge_mm,
+        "short_edges_method": "tessellated_kernel_edges",
+        "minimum_edge_mm": smallest_edge_mm,
+        "edge_inspection_error": edge_error,
+        "minimum_bbox_dimension_mm": minimum_bbox_dimension_mm,
+        "minimum_bbox_dimension_is_wall_thickness": false,
+        "checked": ["shell_closure", "face_tessellation", "positive_volume", "edge_lengths"],
+        "not_checked": [
+            "certified_wall_thickness", "self_intersection", "global_nonmanifold_classification",
+            "certified_nurbs_measure_error", "mass_inertia_tensor"
+        ],
+    })
+}
+
+/// Sum only complete, meaningful measurements. Null totals are deliberately distinct
+/// from measured zero; a skipped open body's volume is not a failed solid measurement.
+fn measurement_totals(bodies: &[Value]) -> Value {
+    let failed = bodies.iter().filter(|b| b["error"].as_str().is_some()).count();
+    let open = bodies.iter().filter(|b| b["closed"] == false).count();
+    let failed_closed = bodies.iter().filter(|b| b["closed"] != false && b["error"].as_str().is_some()).count();
+    let ta: f64 = bodies.iter().filter_map(|b| b["area_mm2"].as_f64()).sum();
+    let tv: f64 = bodies.iter().filter_map(|b| b["volume_mm3"].as_f64()).sum();
+    let tf: u64 = bodies.iter().filter_map(|b| b["faces"].as_u64()).sum();
+    let te: u64 = bodies.iter().filter_map(|b| b["edges"].as_u64()).sum();
+    let tvx: u64 = bodies.iter().filter_map(|b| b["vertices"].as_u64()).sum();
+    let tm: f64 = bodies.iter().filter_map(|b| b["mass_g"].as_f64()).sum();
+    json!({
+        "open_bodies_skipped": open,
+        "failed_bodies": failed,
+        "complete": failed == 0,
+        "volume_mm3": (failed_closed == 0).then_some(tv),
+        "area_mm2": (failed == 0).then_some(ta),
+        "mass_g": (failed_closed == 0).then_some(tm),
+        "faces": (failed == 0).then_some(tf),
+        "edges": (failed == 0).then_some(te),
+        "vertices": (failed == 0).then_some(tvx),
+    })
 }
 
 fn measure(s: &mut Session, p: &Value) -> Result<Value> {
@@ -112,6 +225,16 @@ fn measure(s: &mut Session, p: &Value) -> Result<Value> {
         return super::measure_sel::measure_items(s, items);
     }
     let want = string_list(cmd, p, "bodies")?;
+    let quality = match p.get("quality") {
+        None => false,
+        Some(Value::Bool(v)) => *v,
+        _ => return Err(bad(cmd, "`quality` must be a boolean")),
+    };
+    let min_edge_mm = match p.get("min_edge_mm") {
+        None => 0.01,
+        Some(Value::Number(n)) if n.as_f64().is_some_and(|v| v.is_finite() && v > 0.0 && v <= 1e6) => n.as_f64().unwrap_or(0.01),
+        _ => return Err(bad(cmd, "`min_edge_mm` must be a finite positive number up to 1000000 mm")),
+    };
     let st = s.world_state();
     let selected: Vec<_> = st.bodies.iter().filter(|b| want.is_empty() || want.contains(&b.name)).collect();
     // Each body is measured on its own: on all cores, in body order.
@@ -164,16 +287,30 @@ fn measure(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
     }
-    let skipped = bodies.iter().filter(|b| b["closed"] == false).count();
-    let tv: f64 = bodies.iter().filter_map(|b| b["volume_mm3"].as_f64()).sum();
-    let ta: f64 = bodies.iter().filter_map(|b| b["area_mm2"].as_f64()).sum();
-    let tf: u64 = bodies.iter().filter_map(|b| b["faces"].as_u64()).sum();
-    let te: u64 = bodies.iter().filter_map(|b| b["edges"].as_u64()).sum();
-    let tvx: u64 = bodies.iter().filter_map(|b| b["vertices"].as_u64()).sum();
-    let tm: f64 = bodies.iter().filter_map(|b| b["mass_g"].as_f64()).sum();
-    Ok(
-        json!({"body_count": bodies.len(), "bodies": bodies, "total": {"open_bodies_skipped": skipped, "volume_mm3": tv, "area_mm2": ta, "mass_g": tm, "faces": tf, "edges": te, "vertices": tvx}}),
-    )
+    // A failed closed body's contribution is *unknown*, not zero.
+    let mut quality_rows = Vec::new();
+    if quality {
+        // Preserve the names and ordering of the requested bodies.
+        for (b, v) in selected.iter().zip(&bodies) {
+            quality_rows.push(body_quality(b, v, min_edge_mm));
+        }
+    }
+    let total = measurement_totals(&bodies);
+    let mut result = json!({"body_count": bodies.len(), "bodies": bodies, "total": total});
+    if quality {
+        let failed = quality_rows.iter().filter(|q| q["passed_available_checks"] == false).count();
+        let warnings = quality_rows.iter().filter(|q| q["short_edges"].as_array().is_some_and(|a| !a.is_empty())).count();
+        result["quality"] = json!({
+            "bodies": quality_rows,
+            "summary": {
+                "checked_bodies": quality_rows.len(),
+                "failed": failed,
+                "short_edge_warnings": warnings,
+                "certified": false,
+            }
+        });
+    }
+    Ok(result)
 }
 
 fn sketch_json(s: &Session, id: u64) -> Option<Value> {
@@ -814,4 +951,106 @@ fn colored_components(s: &mut Session, p: &Value) -> Result<Value> {
         s.colored_components = None;
     }
     Ok(json!({"enabled": enabled}))
+}
+
+#[cfg(test)]
+mod geometry_inspection_tests {
+    use super::*;
+
+    fn run(s: &mut Session, command: &str, params: Value) -> Value {
+        match s.execute(command, &params) {
+            Ok(v) => v,
+            Err(e) => panic!("{command} {params}: {e}"),
+        }
+    }
+
+    fn close(got: &Value, expected: f64, tolerance: f64, units: &str) {
+        let value = got.as_f64().unwrap_or(f64::NAN);
+        assert!((value - expected).abs() <= tolerance, "{value} {units}, expected {expected} ± {tolerance} {units}");
+    }
+
+    #[test]
+    fn analytic_box_volume_area_centroid_and_quality() {
+        let mut s = Session::default();
+        run(&mut s, "solid.box", json!({
+            "length": 10, "width": 20, "height": 30, "corner": [0, 0, 0], "body_name": "Block"
+        }));
+        let result = run(&mut s, "inspect.measure", json!({"quality": true, "min_edge_mm": 0.1}));
+        let body = &result["bodies"][0];
+        assert_eq!(body["closed"], true);
+        assert_eq!(body["measurement_method"], "fine_tessellation");
+        assert_eq!(body["error_bound"], Value::Null);
+        close(&body["volume_mm3"], 6000.0, 1e-5, "mm^3");
+        close(&body["area_mm2"], 2200.0, 1e-5, "mm^2");
+        for (i, target) in [5.0, 10.0, 15.0].iter().enumerate() {
+            close(&body["center_of_mass"][i], *target, 1e-6, "mm");
+        }
+        assert_eq!(result["quality"]["summary"]["failed"], 0, "{result}");
+        assert_eq!(result["quality"]["bodies"][0]["short_edges"].as_array().map(Vec::len), Some(0), "{result}");
+        assert_eq!(result["total"]["complete"], true);
+    }
+
+    #[test]
+    fn sphere_and_cylinder_have_near_analytic_mass_properties() {
+        let mut s = Session::default();
+        run(&mut s, "solid.sphere", json!({"radius": 5, "center": [0, 0, 0], "body_name": "Sphere"}));
+        run(&mut s, "solid.cylinder", json!({
+            "radius": 3, "height": 10, "base": [20, 0, 0], "operation": "new", "body_name": "Cylinder"
+        }));
+        let result = run(&mut s, "inspect.measure", json!({}));
+        let bodies = result["bodies"].as_array().unwrap();
+        let find = |name: &str| bodies.iter().find(|b| b["name"] == name).unwrap();
+        let sphere = find("Sphere");
+        let cylinder = find("Cylinder");
+        let sphere_v = 4.0 / 3.0 * std::f64::consts::PI * 5.0_f64.powi(3);
+        let cylinder_v = std::f64::consts::PI * 3.0_f64.powi(2) * 10.0;
+        // Adaptive tessellation is approximate: allow 0.15% relative error.
+        close(&sphere["volume_mm3"], sphere_v, sphere_v * 0.0015, "mm^3");
+        close(&sphere["area_mm2"], 4.0 * std::f64::consts::PI * 25.0, 0.5, "mm^2");
+        close(&cylinder["volume_mm3"], cylinder_v, cylinder_v * 0.0015, "mm^3");
+        // Side area is 2*pi*r*h; the body's two planar end caps add 2*pi*r^2.
+        close(&cylinder["area_mm2"], 2.0 * std::f64::consts::PI * 3.0 * 13.0, 0.4, "mm^2");
+    }
+
+    #[test]
+    fn a_thin_legal_solid_is_measured_and_edges_are_flagged_by_threshold() {
+        let mut s = Session::default();
+        run(&mut s, "solid.box", json!({
+            "length": 10, "width": 10, "height": 0.02, "corner": [0, 0, 0], "body_name": "Sheet"
+        }));
+        let report = run(&mut s, "inspect.measure", json!({"quality": true, "min_edge_mm": 0.03}));
+        close(&report["bodies"][0]["volume_mm3"], 2.0, 1e-4, "mm^3");
+        close(&report["bodies"][0]["center_of_mass"][2], 0.01, 1e-6, "mm");
+        assert_eq!(report["quality"]["bodies"][0]["minimum_bbox_dimension_is_wall_thickness"], false);
+        assert!(report["quality"]["bodies"][0]["short_edges"].as_array().is_some_and(|x| !x.is_empty()), "{report}");
+    }
+
+    #[test]
+    fn unknown_solid_measurement_is_not_silently_summed_as_zero() {
+        let rows = vec![
+            json!({"name": "valid", "closed": true, "volume_mm3": 10.0, "area_mm2": 12.0, "mass_g": 2.0}),
+            json!({"name": "invalid", "closed": true, "error": "nonmanifold mesh"}),
+        ];
+        let total = measurement_totals(&rows);
+        assert_eq!(total["complete"], false);
+        assert_eq!(total["failed_bodies"], 1);
+        assert_eq!(total["volume_mm3"], Value::Null);
+        assert_eq!(total["area_mm2"], Value::Null);
+        assert_eq!(total["mass_g"], Value::Null);
+        let open = measurement_totals(&[json!({"name": "surface", "closed": false, "area_mm2": 4.0})]);
+        assert_eq!(open["open_bodies_skipped"], 1);
+        assert_eq!(open["volume_mm3"], 0.0);
+        assert_eq!(open["complete"], true);
+    }
+
+    #[test]
+    fn hostile_quality_thresholds_are_rejected() {
+        let mut s = Session::default();
+        for value in [json!(0.0), json!(-1.0), json!("tiny"), Value::Null, json!(1e20)] {
+            assert!(s.execute("inspect.measure", &json!({"quality": true, "min_edge_mm": value})).is_err(), "{value}");
+        }
+        for value in [Value::Null, json!("yes"), json!(1)] {
+            assert!(s.execute("inspect.measure", &json!({"quality": value})).is_err(), "{value}");
+        }
+    }
 }
