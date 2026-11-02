@@ -1,0 +1,10 @@
+{
+  "en": {
+    "arclet.command.explode_requires_qualified": "Explode for sketch curves is not available. Use surface.unstitch for surfaces; no curve geometry was changed.",
+    "arclet.command.join_requires_qualified": "Join for sketch curves is not available. Use surface.stitch for surfaces or solid.combine for solids; no curve geometry was changed."
+  },
+  "ja": {
+    "arclet.command.explode_requires_qualified": "スケッチ曲線のExplodeは未対応です。曲面にはsurface.unstitchを使用してください。曲線は変更していません。",
+    "arclet.command.join_requires_qualified": "スケッチ曲線のJoinは未対応です。曲面にはsurface.stitch、ソリッドにはsolid.combineを使用してください。曲線は変更していません。"
+  }
+}
