@@ -459,6 +459,87 @@ mod tests {
         let _ = std::fs::remove_dir_all(d);
     }
 
+
+    #[test]
+    fn scan_analysis_is_read_only_and_reports_units_and_residuals() {
+        let d = dir("analysis");
+        let pts: Vec<[f32; 3]> = (0..12).flat_map(|x| (0..12).map(move |y| {
+            [x as f32, y as f32, 2.0 * x as f32 - 0.5 * y as f32 + 1.0]
+        })).collect();
+        let path = ply(&d, "plane.ply", &pts, true);
+        let mut s = Session::default();
+        let id = s.execute("pointcloud.insert", &json!({"path": path, "units": "cm"}))
+            .unwrap()["cloud"].as_u64().unwrap();
+        let before = s.doc.clone();
+        let revision = s.revision;
+        let fit = s.execute("pointcloud.analyze", &json!({"cloud":id,"mode":"plane","max_points":200,"tolerance_mm":0.01})).unwrap();
+        assert_eq!(fit["mode"], "plane");
+        assert_eq!(fit["sampled"], 144);
+        assert!(fit["result"]["quality"]["rms_mm"].as_f64().unwrap() < 1e-5, "{fit}");
+        assert!(fit["result"]["quality"]["inlier_fraction"].as_f64().unwrap() > 0.99);
+        let nearest = s.execute("pointcloud.analyze", &json!({"cloud":id,"mode":"nearest","point":[10.0,10.0,25.0]})).unwrap();
+        assert!(nearest["result"]["distance_mm"].as_f64().unwrap() < 1e-5, "{nearest}");
+        let outliers = s.execute("pointcloud.analyze", &json!({"cloud":id,"mode":"outliers","max_points":50})).unwrap();
+        assert_eq!(outliers["sampled"], 48);
+        assert_eq!(outliers["source_points"], 144);
+        assert_eq!(s.doc, before);
+        assert_eq!(s.revision, revision, "analysis must not change history or design");
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn scan_alignment_returns_translation_but_never_applies_it() {
+        let d = dir("alignment");
+        let pts: Vec<[f32; 3]> = (0..8).flat_map(|x| (0..8).map(move |y| {
+            [x as f32, y as f32, (x * y) as f32 * 0.125]
+        })).collect();
+        let a = ply(&d, "fixed.ply", &pts, false);
+        let b = ply(&d, "moving.ply", &pts, false);
+        let mut s = Session::default();
+        let fixed = s.execute("pointcloud.insert", &json!({"path":a})).unwrap()["cloud"].as_u64().unwrap();
+        let moving = s.execute("pointcloud.insert", &json!({"path":b})).unwrap()["cloud"].as_u64().unwrap();
+        s.execute("pointcloud.edit", &json!({"cloud":moving,"matrix":[1,0,0,130,0,1,0,-70,0,0,1,25]})).unwrap();
+        let original = s.doc.clone();
+        let fit = s.execute("pointcloud.analyze", &json!({"cloud":moving,"target":fixed,"mode":"align","tolerance_mm":0.0001})).unwrap();
+        assert_eq!(fit["result"]["method"], "translation_only_trimmed_icp");
+        let delta = fit["result"]["translation_mm"].as_array().unwrap();
+        assert!((delta[0].as_f64().unwrap() + 130.0).abs() < 1e-5, "{fit}");
+        assert!((delta[1].as_f64().unwrap() - 70.0).abs() < 1e-5, "{fit}");
+        assert!((delta[2].as_f64().unwrap() + 25.0).abs() < 1e-5, "{fit}");
+        assert_eq!(s.doc, original);
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn hostile_analysis_parameters_and_degenerate_models_leave_document_intact() {
+        let d = dir("bad-analysis");
+        let path = ply(&d, "line.ply", &[[0.0,0.0,0.0],[1.0,0.0,0.0],[2.0,0.0,0.0],[3.0,0.0,0.0]],false);
+        let mut s = Session::default();
+        let id = s.execute("pointcloud.insert", &json!({"path":path})).unwrap()["cloud"].as_u64().unwrap();
+        let before = s.doc.clone();
+        for params in [
+            json!({"cloud":id,"mode":"plane"}),
+            json!({"cloud":id,"mode":"circle"}),
+            json!({"cloud":id,"mode":"cylinder"}),
+            json!({"cloud":id,"mode":"sphere"}),
+            json!({"cloud":id,"mode":"outliers"}),
+            json!({"cloud":id,"mode":"near"}),
+            json!({"cloud":id,"mode":"nearest"}),
+            json!({"cloud":id,"mode":"nearest","point":["NaN",0,0]}),
+            json!({"cloud":id,"mode":"align","target":id}),
+            json!({"cloud":id,"mode":"plane","max_points":0}),
+            json!({"cloud":id,"mode":"plane","max_points":1_000_000}),
+            json!({"cloud":id,"mode":"plane","tolerance_mm":-1}),
+        ] {
+            assert!(s.execute("pointcloud.analyze", &params).is_err(), "{params}");
+            assert_eq!(s.doc, before);
+        }
+        s.param_check = crate::schema::ParamCheck::Strict;
+        assert!(s.execute("pointcloud.analyze", &json!({"cloud":id,"mode":"plane","typo":4})).is_err());
+        assert_eq!(s.doc, before);
+        let _ = std::fs::remove_dir_all(d);
+    }
+
     #[test]
     fn hostile_point_cloud_params_never_panic() {
         let d = dir("hostile");
