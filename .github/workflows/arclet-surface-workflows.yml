@@ -1,0 +1,27 @@
+name: Arclet surface workflow checks
+on:
+  pull_request:
+    paths:
+      - "crates/engine/src/cmd/surface.rs"
+      - "crates/engine/src/cmd/surface_match.rs"
+      - "docs/arclet-class-a-workflows.md"
+      - ".github/workflows/arclet-surface-workflows.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  regression:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Surface command tests
+        run: cargo test --locked --profile ci -p solidcraft-engine --lib cmd::surface::tests
+      - name: Surface match tests
+        run: cargo test --locked --profile ci -p solidcraft-engine --lib cmd::surface_match::tests
