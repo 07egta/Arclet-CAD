@@ -116,7 +116,7 @@ impl CloudSample {
         let center = mean + Vec3::from(delta);
         let radius = (r2_mean / count + delta.iter().map(|x| x * x).sum::<f64>()).sqrt();
         if !radius.is_finite() || radius <= 1e-9 { return Err(bad("sphere radius is invalid")); }
-        let residuals: Vec<f64> = self.offsets.iter().map(|p| ((p - center).len() - radius).abs()).collect();
+        let residuals: Vec<f64> = self.offsets.iter().map(|p| ((*p - center).len() - radius).abs()).collect();
         Ok(SphereEstimate {
             center: self.frame + center, radius_mm: radius,
             quality: quality(&residuals, tolerance_mm, self.source_count),
