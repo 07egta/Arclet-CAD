@@ -1,0 +1,4456 @@
+{
+  "version": 1,
+  "mission": "Mission 40: Arclet CAD 100 real workflows",
+  "baseline_commit": "2ea11ed3f597ec4a5d4d93f9a1c7289057030551",
+  "result_policy": "NOT_RUN until observed; PASS requires executed commands and numeric assertions",
+  "scenarios": [
+    {
+      "id": "A01",
+      "category": "A",
+      "stage": 1,
+      "title": "空の新規設計を検査",
+      "purpose": "実設計フロー「空の新規設計を検査」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "solidcraft-cliをビルドし、独立した一時作業領域を用意する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "新規設計を作成",
+        "形状計測を実行"
+      ],
+      "execution": {
+        "kind": "eval",
+        "commands": [],
+        "expected": {
+          "body_count": 0,
+          "timeline_clean": true
+        }
+      },
+      "expected_behavior": "ボディ0件、エラー0件",
+      "quality_axes": [
+        "操作一貫性",
+        "履歴",
+        "保存"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "python3 qa/real_workflows/run.py --cli /path/to/solidcraft-cli --ids A01 --json-out /tmp/mission40-A01.json",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "A02",
+      "category": "A",
+      "stage": 1,
+      "title": "寸法指定の角柱を作成",
+      "purpose": "実設計フロー「寸法指定の角柱を作成」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "solidcraft-cliをビルドし、独立した一時作業領域を用意する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "空ドキュメント",
+        "直方体を作成",
+        "体積を計測"
+      ],
+      "execution": {
+        "kind": "eval",
+        "commands": [
+          {
+            "command": "solid.box",
+            "params": {
+              "length": 30,
+              "width": 20,
+              "height": 5
+            }
+          }
+        ],
+        "expected": {
+          "body_count": 1,
+          "volume_mm3": 3000,
+          "volume_rel_tol": 0.00001
+        }
+      },
+      "expected_behavior": "30×20×5 mmで体積3000 mm³",
+      "quality_axes": [
+        "操作一貫性",
+        "履歴",
+        "保存"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "python3 qa/real_workflows/run.py --cli /path/to/solidcraft-cli --ids A02 --json-out /tmp/mission40-A02.json",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "A03",
+      "category": "A",
+      "stage": 2,
+      "title": "Undo→Redoで角柱を復旧",
+      "purpose": "実設計フロー「Undo→Redoで角柱を復旧」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "solidcraft-cliをビルドし、独立した一時作業領域を用意する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "角柱を作成",
+        "Undo",
+        "Redo",
+        "結果を検査"
+      ],
+      "execution": {
+        "kind": "eval",
+        "commands": [
+          {
+            "command": "solid.box",
+            "params": {
+              "length": 30,
+              "width": 20,
+              "height": 5
+            }
+          },
+          {
+            "command": "edit.undo",
+            "params": {}
+          },
+          {
+            "command": "edit.redo",
+            "params": {}
+          }
+        ],
+        "expected": {
+          "body_count": 1,
+          "volume_mm3": 3000,
+          "volume_rel_tol": 0.00001
+        }
+      },
+      "expected_behavior": "元の体積とボディ数に戻る",
+      "quality_axes": [
+        "操作一貫性",
+        "履歴",
+        "保存"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "python3 qa/real_workflows/run.py --cli /path/to/solidcraft-cli --ids A03 --json-out /tmp/mission40-A03.json",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "A04",
+      "category": "A",
+      "stage": 2,
+      "title": "ネイティブ保存とコールド再読込",
+      "purpose": "実設計フロー「ネイティブ保存とコールド再読込」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "solidcraft-cliをビルドし、独立した一時作業領域を用意する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "角柱を作成",
+        "新規ファイルへ保存",
+        "別セッションで読み直す"
+      ],
+      "execution": {
+        "kind": "roundtrip",
+        "commands": [
+          {
+            "command": "solid.box",
+            "params": {
+              "length": 20,
+              "width": 20,
+              "height": 10
+            }
+          }
+        ],
+        "expected": {
+          "body_count": 1,
+          "volume_mm3": 4000,
+          "volume_rel_tol": 0.00001
+        }
+      },
+      "expected_behavior": "保存前後の体積とボディ数が一致",
+      "quality_axes": [
+        "操作一貫性",
+        "履歴",
+        "保存"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "python3 qa/real_workflows/run.py --cli /path/to/solidcraft-cli --ids A04 --json-out /tmp/mission40-A04.json",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "A05",
+      "category": "A",
+      "stage": 2,
+      "title": "JSON設計の保存と再読込",
+      "purpose": "実設計フロー「JSON設計の保存と再読込」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "solidcraft-cliをビルドし、独立した一時作業領域を用意する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "角柱を作成",
+        "JSON形式へ保存",
+        "再読込"
+      ],
+      "execution": {
+        "kind": "roundtrip",
+        "commands": [
+          {
+            "command": "solid.box",
+            "params": {
+              "length": 20,
+              "width": 20,
+              "height": 10
+            }
+          }
+        ],
+        "extension": ".json",
+        "expected": {
+          "body_count": 1,
+          "volume_mm3": 4000,
+          "volume_rel_tol": 0.00001
+        }
+      },
+      "expected_behavior": "JSON保存前後の形状が一致",
+      "quality_axes": [
+        "操作一貫性",
+        "履歴",
+        "保存"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "python3 qa/real_workflows/run.py --cli /path/to/solidcraft-cli --ids A05 --json-out /tmp/mission40-A05.json",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "A06",
+      "category": "A",
+      "stage": 2,
+      "title": "パラメータ不足コマンドの拒否",
+      "purpose": "実設計フロー「パラメータ不足コマンドの拒否」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "solidcraft-cliをビルドし、独立した一時作業領域を用意する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "幅を欠いた直方体コマンドを実行",
+        "終了コードと出力を確認"
+      ],
+      "execution": {
+        "kind": "negative",
+        "commands": [
+          {
+            "command": "solid.box",
+            "params": {
+              "length": 10
+            }
+          }
+        ],
+        "expected": {
+          "nonzero_exit": true
+        }
+      },
+      "expected_behavior": "エラーが返り成果物が出ない",
+      "quality_axes": [
+        "操作一貫性",
+        "履歴",
+        "保存"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "python3 qa/real_workflows/run.py --cli /path/to/solidcraft-cli --ids A06 --json-out /tmp/mission40-A06.json",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "A07",
+      "category": "A",
+      "stage": 3,
+      "title": "複数選択と選択解除",
+      "purpose": "実設計フロー「複数選択と選択解除」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "Arclet CADデスクトップ版を起動し、テスト専用の空ドキュメントまたは指定モデルを使用する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "2個のボディを作成",
+        "複数選択",
+        "1個解除",
+        "ツリーを確認"
+      ],
+      "execution": {
+        "kind": "manual"
+      },
+      "expected_behavior": "全選択と個別解除が一貫している",
+      "quality_axes": [
+        "操作一貫性",
+        "履歴",
+        "保存"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "2個のボディを作成;複数選択;1個解除;ツリーを確認",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "A08",
+      "category": "A",
+      "stage": 3,
+      "title": "削除後のUndo/Redo",
+      "purpose": "実設計フロー「削除後のUndo/Redo」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "Arclet CADデスクトップ版を起動し、テスト専用の空ドキュメントまたは指定モデルを使用する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "ボディを作成",
+        "削除",
+        "Undo",
+        "Redo",
+        "モデルを確認"
+      ],
+      "execution": {
+        "kind": "manual"
+      },
+      "expected_behavior": "削除→復元→再削除で一致",
+      "quality_axes": [
+        "操作一貫性",
+        "履歴",
+        "保存"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "ボディを作成;削除;Undo;Redo;モデルを確認",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "A09",
+      "category": "A",
+      "stage": 3,
+      "title": "モデル全体の画面フィット",
+      "purpose": "実設計フロー「モデル全体の画面フィット」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "solidcraft-cliをビルドし、独立した一時作業領域を用意する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "角柱を作成",
+        "等角表示でレンダリング",
+        "PNGを検査"
+      ],
+      "execution": {
+        "kind": "snapshot",
+        "commands": [
+          {
+            "command": "solid.box",
+            "params": {
+              "length": 20,
+              "width": 10,
+              "height": 5
+            }
+          }
+        ],
+        "expected": {
+          "png": true
+        }
+      },
+      "expected_behavior": "ビューの画像が空でない",
+      "quality_axes": [
+        "操作一貫性",
+        "履歴",
+        "保存"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "python3 qa/real_workflows/run.py --cli /path/to/solidcraft-cli --ids A09 --json-out /tmp/mission40-A09.json",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "A10",
+      "category": "A",
+      "stage": 4,
+      "title": "100回の連続モデリング",
+      "purpose": "実設計フロー「100回の連続モデリング」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "solidcraft-cliをビルドし、独立した一時作業領域を用意する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "新規設計",
+        "直方体を100回作成",
+        "個数と体積を計測"
+      ],
+      "execution": {
+        "kind": "eval",
+        "commands": [
+          {
+            "command": "solid.box",
+            "params": {
+              "length": 5,
+              "width": 4,
+              "height": 3
+            }
+          }
+        ],
+        "repeat": 100,
+        "stress": true,
+        "expected": {
+          "body_count": 100,
+          "min_volume_mm3": 100
+        }
+      },
+      "expected_behavior": "100体の作成と計測が停止せず完了",
+      "quality_axes": [
+        "操作一貫性",
+        "履歴",
+        "保存"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "python3 qa/real_workflows/run.py --cli /path/to/solidcraft-cli --ids A10 --json-out /tmp/mission40-A10.json",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "B01",
+      "category": "B",
+      "stage": 1,
+      "title": "矩形の閉じた輪郭",
+      "purpose": "実設計フロー「矩形の閉じた輪郭」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "solidcraft-cliをビルドし、独立した一時作業領域を用意する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "XYスケッチ",
+        "矩形を描く",
+        "スケッチを終了"
+      ],
+      "execution": {
+        "kind": "eval",
+        "commands": [
+          {
+            "command": "sketch.create",
+            "params": {
+              "plane": "XY"
+            }
+          },
+          {
+            "command": "sketch.rectangle.two_point",
+            "params": {
+              "p0": [
+                0,
+                0
+              ],
+              "p1": [
+                20,
+                10
+              ]
+            }
+          },
+          {
+            "command": "sketch.finish",
+            "params": {}
+          }
+        ],
+        "expected": {
+          "body_count": 0,
+          "sketch_count": 1,
+          "profiles_at_least": 1
+        }
+      },
+      "expected_behavior": "1つの閉領域が得られる",
+      "quality_axes": [
+        "スケッチ",
+        "拘束",
+        "再計算"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "python3 qa/real_workflows/run.py --cli /path/to/solidcraft-cli --ids B01 --json-out /tmp/mission40-B01.json",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "B02",
+      "category": "B",
+      "stage": 1,
+      "title": "中心円の閉じた輪郭",
+      "purpose": "実設計フロー「中心円の閉じた輪郭」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "solidcraft-cliをビルドし、独立した一時作業領域を用意する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "XYスケッチ",
+        "中心と直径で円を描く",
+        "終了"
+      ],
+      "execution": {
+        "kind": "eval",
+        "commands": [
+          {
+            "command": "sketch.create",
+            "params": {
+              "plane": "XY"
+            }
+          },
+          {
+            "command": "sketch.circle.center",
+            "params": {
+              "center": [
+                0,
+                0
+              ],
+              "radius": 5
+            }
+          },
+          {
+            "command": "sketch.finish",
+            "params": {}
+          }
+        ],
+        "expected": {
+          "body_count": 0,
+          "sketch_count": 1,
+          "profiles_at_least": 1
+        }
+      },
+      "expected_behavior": "1つの円領域が得られる",
+      "quality_axes": [
+        "スケッチ",
+        "拘束",
+        "再計算"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "python3 qa/real_workflows/run.py --cli /path/to/solidcraft-cli --ids B02 --json-out /tmp/mission40-B02.json",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "B03",
+      "category": "B",
+      "stage": 2,
+      "title": "開いた直線の輪郭判定",
+      "purpose": "実設計フロー「開いた直線の輪郭判定」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "solidcraft-cliをビルドし、独立した一時作業領域を用意する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "XYスケッチ",
+        "線分を描く",
+        "終了"
+      ],
+      "execution": {
+        "kind": "eval",
+        "commands": [
+          {
+            "command": "sketch.create",
+            "params": {
+              "plane": "XY"
+            }
+          },
+          {
+            "command": "sketch.line",
+            "params": {
+              "points": [
+                [
+                  0,
+                  0
+                ],
+                [
+                  20,
+                  0
+                ]
+              ]
+            }
+          },
+          {
+            "command": "sketch.finish",
+            "params": {}
+          }
+        ],
+        "expected": {
+          "body_count": 0,
+          "sketch_count": 1,
+          "profiles_exactly": 0
+        }
+      },
+      "expected_behavior": "開線分が閉領域にならない",
+      "quality_axes": [
+        "スケッチ",
+        "拘束",
+        "再計算"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "python3 qa/real_workflows/run.py --cli /path/to/solidcraft-cli --ids B03 --json-out /tmp/mission40-B03.json",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "B04",
+      "category": "B",
+      "stage": 2,
+      "title": "矩形から押出モデル",
+      "purpose": "実設計フロー「矩形から押出モデル」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "solidcraft-cliをビルドし、独立した一時作業領域を用意する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "矩形スケッチ",
+        "終了",
+        "押出",
+        "計測"
+      ],
+      "execution": {
+        "kind": "eval",
+        "commands": [
+          {
+            "command": "sketch.create",
+            "params": {
+              "plane": "XY"
+            }
+          },
+          {
+            "command": "sketch.rectangle.two_point",
+            "params": {
+              "p0": [
+                0,
+                0
+              ],
+              "p1": [
+                20,
+                10
+              ]
+            }
+          },
+          {
+            "command": "sketch.finish",
+            "params": {}
+          },
+          {
+            "command": "solid.extrude",
+            "params": {
+              "distance": 3
+            }
+          }
+        ],
+        "expected": {
+          "body_count": 1,
+          "volume_mm3": 600,
+          "volume_rel_tol": 0.001
+        }
+      },
+      "expected_behavior": "20×10×3 mmの体積600 mm³",
+      "quality_axes": [
+        "スケッチ",
+        "拘束",
+        "再計算"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "python3 qa/real_workflows/run.py --cli /path/to/solidcraft-cli --ids B04 --json-out /tmp/mission40-B04.json",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "B05",
+      "category": "B",
+      "stage": 2,
+      "title": "円断面から円柱押出",
+      "purpose": "実設計フロー「円断面から円柱押出」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "solidcraft-cliをビルドし、独立した一時作業領域を用意する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "円スケッチ",
+        "終了",
+        "押出",
+        "計測"
+      ],
+      "execution": {
+        "kind": "eval",
+        "commands": [
+          {
+            "command": "sketch.create",
+            "params": {
+              "plane": "XY"
+            }
+          },
+          {
+            "command": "sketch.circle.center",
+            "params": {
+              "center": [
+                0,
+                0
+              ],
+              "radius": 5
+            }
+          },
+          {
+            "command": "sketch.finish",
+            "params": {}
+          },
+          {
+            "command": "solid.extrude",
+            "params": {
+              "distance": 8
+            }
+          }
+        ],
+        "expected": {
+          "body_count": 1,
+          "volume_mm3": 628.3185307179587,
+          "volume_rel_tol": 0.03
+        }
+      },
+      "expected_behavior": "直径10、高さ8の正体積を得る",
+      "quality_axes": [
+        "スケッチ",
+        "拘束",
+        "再計算"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "python3 qa/real_workflows/run.py --cli /path/to/solidcraft-cli --ids B05 --json-out /tmp/mission40-B05.json",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "B06",
+      "category": "B",
+      "stage": 2,
+      "title": "3点円弧スケッチ",
+      "purpose": "実設計フロー「3点円弧スケッチ」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "solidcraft-cliをビルドし、独立した一時作業領域を用意する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "3点円弧作成",
+        "スケッチ終了",
+        "形状を検査"
+      ],
+      "execution": {
+        "kind": "eval",
+        "commands": [
+          {
+            "command": "sketch.create",
+            "params": {
+              "plane": "XY"
+            }
+          },
+          {
+            "command": "sketch.arc.three_point",
+            "params": {
+              "start": [
+                0,
+                0
+              ],
+              "through": [
+                5,
+                5
+              ],
+              "end": [
+                10,
+                0
+              ]
+            }
+          },
+          {
+            "command": "sketch.finish",
+            "params": {}
+          }
+        ],
+        "expected": {
+          "body_count": 0,
+          "sketch_count": 1,
+          "profiles_exactly": 0
+        }
+      },
+      "expected_behavior": "円弧は開いている状態で保持",
+      "quality_axes": [
+        "スケッチ",
+        "拘束",
+        "再計算"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "python3 qa/real_workflows/run.py --cli /path/to/solidcraft-cli --ids B06 --json-out /tmp/mission40-B06.json",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "B07",
+      "category": "B",
+      "stage": 3,
+      "title": "直線列の閉領域",
+      "purpose": "実設計フロー「直線列の閉領域」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "solidcraft-cliをビルドし、独立した一時作業領域を用意する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "連続線を閉じる",
+        "スケッチ終了",
+        "閉領域数を計測"
+      ],
+      "execution": {
+        "kind": "eval",
+        "commands": [
+          {
+            "command": "sketch.create",
+            "params": {
+              "plane": "XY"
+            }
+          },
+          {
+            "command": "sketch.line",
+            "params": {
+              "points": [
+                [
+                  0,
+                  0
+                ],
+                [
+                  20,
+                  0
+                ],
+                [
+                  20,
+                  10
+                ],
+                [
+                  0,
+                  10
+                ]
+              ],
+              "closed": true
+            }
+          },
+          {
+            "command": "sketch.finish",
+            "params": {}
+          }
+        ],
+        "expected": {
+          "body_count": 0,
+          "sketch_count": 1,
+          "profiles_at_least": 1
+        }
+      },
+      "expected_behavior": "多角形が1閉領域になる",
+      "quality_axes": [
+        "スケッチ",
+        "拘束",
+        "再計算"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "python3 qa/real_workflows/run.py --cli /path/to/solidcraft-cli --ids B07 --json-out /tmp/mission40-B07.json",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "B08",
+      "category": "B",
+      "stage": 3,
+      "title": "寸法拘束の再編集",
+      "purpose": "実設計フロー「寸法拘束の再編集」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "Arclet CADデスクトップ版を起動し、テスト専用の空ドキュメントまたは指定モデルを使用する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "矩形作成",
+        "寸法を与える",
+        "再編集",
+        "自由度と寸法を確認"
+      ],
+      "execution": {
+        "kind": "manual"
+      },
+      "expected_behavior": "拘束後も一意に形状が維持される",
+      "quality_axes": [
+        "スケッチ",
+        "拘束",
+        "再計算"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "矩形作成;寸法を与える;再編集;自由度と寸法を確認",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "B09",
+      "category": "B",
+      "stage": 3,
+      "title": "制御点スプライン編集",
+      "purpose": "実設計フロー「制御点スプライン編集」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "Arclet CADデスクトップ版を起動し、テスト専用の空ドキュメントまたは指定モデルを使用する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "制御点曲線作成",
+        "中間点移動",
+        "形状を確認"
+      ],
+      "execution": {
+        "kind": "manual"
+      },
+      "expected_behavior": "制御点移動が連続曲線に反映",
+      "quality_axes": [
+        "スケッチ",
+        "拘束",
+        "再計算"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "制御点曲線作成;中間点移動;形状を確認",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "B10",
+      "category": "B",
+      "stage": 4,
+      "title": "200セグメントのスケッチ",
+      "purpose": "実設計フロー「200セグメントのスケッチ」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "Arclet CADデスクトップ版を起動し、テスト専用の空ドキュメントまたは指定モデルを使用する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "200分割線を閉じる",
+        "拘束検査",
+        "保存と再読込"
+      ],
+      "execution": {
+        "kind": "manual"
+      },
+      "expected_behavior": "編集・保存・再計算が応答を保つ",
+      "quality_axes": [
+        "スケッチ",
+        "拘束",
+        "再計算"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "200分割線を閉じる;拘束検査;保存と再読込",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "C01",
+      "category": "C",
+      "stage": 1,
+      "title": "直方体の質量特性",
+      "purpose": "実設計フロー「直方体の質量特性」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "solidcraft-cliをビルドし、独立した一時作業領域を用意する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "直方体生成",
+        "体積を検査"
+      ],
+      "execution": {
+        "kind": "eval",
+        "commands": [
+          {
+            "command": "solid.box",
+            "params": {
+              "length": 20,
+              "width": 20,
+              "height": 10
+            }
+          }
+        ],
+        "expected": {
+          "body_count": 1,
+          "volume_mm3": 4000,
+          "volume_rel_tol": 0.00001
+        }
+      },
+      "expected_behavior": "20×20×10 mm、体積4000 mm³",
+      "quality_axes": [
+        "幾何精度",
+        "トポロジ",
+        "安定性"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "python3 qa/real_workflows/run.py --cli /path/to/solidcraft-cli --ids C01 --json-out /tmp/mission40-C01.json",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "C02",
+      "category": "C",
+      "stage": 1,
+      "title": "円断面押出ソリッド",
+      "purpose": "実設計フロー「円断面押出ソリッド」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "solidcraft-cliをビルドし、独立した一時作業領域を用意する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "円を作成",
+        "押出",
+        "体積を比較"
+      ],
+      "execution": {
+        "kind": "eval",
+        "commands": [
+          {
+            "command": "sketch.create",
+            "params": {
+              "plane": "XY"
+            }
+          },
+          {
+            "command": "sketch.circle.center",
+            "params": {
+              "center": [
+                0,
+                0
+              ],
+              "radius": 5
+            }
+          },
+          {
+            "command": "sketch.finish",
+            "params": {}
+          },
+          {
+            "command": "solid.extrude",
+            "params": {
+              "distance": 8
+            }
+          }
+        ],
+        "expected": {
+          "body_count": 1,
+          "min_volume_mm3": 600
+        }
+      },
+      "expected_behavior": "閉ソリッドと正体積を得る",
+      "quality_axes": [
+        "幾何精度",
+        "トポロジ",
+        "安定性"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "python3 qa/real_workflows/run.py --cli /path/to/solidcraft-cli --ids C02 --json-out /tmp/mission40-C02.json",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "C03",
+      "category": "C",
+      "stage": 2,
+      "title": "L字金具の作成と穴加工",
+      "purpose": "実設計フロー「L字金具の作成と穴加工」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "solidcraft-cliをビルドし、独立した一時作業領域を用意する。",
+      "input_model": "examples/bracket.json",
+      "steps": [
+        "L字スケッチ",
+        "押出",
+        "フィレット",
+        "二つの穴で切断"
+      ],
+      "execution": {
+        "kind": "eval",
+        "source": "examples/bracket.json",
+        "expected": {
+          "min_body_count": 1,
+          "min_volume_mm3": 1
+        }
+      },
+      "expected_behavior": "金具が1体の正体積となる",
+      "quality_axes": [
+        "幾何精度",
+        "トポロジ",
+        "安定性"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "python3 qa/real_workflows/run.py --cli /path/to/solidcraft-cli --ids C03 --json-out /tmp/mission40-C03.json",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "C04",
+      "category": "C",
+      "stage": 2,
+      "title": "フィレットと貫通穴",
+      "purpose": "実設計フロー「フィレットと貫通穴」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "solidcraft-cliをビルドし、独立した一時作業領域を用意する。",
+      "input_model": "apps/solidcraft-cli/tests/corpus/m0-box-fillet-hole.solidcraft",
+      "steps": [
+        "矩形押出",
+        "フィレット",
+        "穴を切る",
+        "再計測"
+      ],
+      "execution": {
+        "kind": "eval",
+        "source": "apps/solidcraft-cli/tests/corpus/m0-box-fillet-hole.solidcraft",
+        "expected": {
+          "body_count": 1,
+          "min_volume_mm3": 1
+        }
+      },
+      "expected_behavior": "フィレット後も穴が貫通した1体",
+      "quality_axes": [
+        "幾何精度",
+        "トポロジ",
+        "安定性"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "python3 qa/real_workflows/run.py --cli /path/to/solidcraft-cli --ids C04 --json-out /tmp/mission40-C04.json",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "C05",
+      "category": "C",
+      "stage": 2,
+      "title": "過大フィレットで失敗した履歴",
+      "purpose": "実設計フロー「過大フィレットで失敗した履歴」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "solidcraft-cliをビルドし、独立した一時作業領域を用意する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "箱作成",
+        "角Rを巨大化",
+        "保存処理が拒否するか検査"
+      ],
+      "execution": {
+        "kind": "negative_run",
+        "commands": [
+          {
+            "command": "parameters.add",
+            "params": {
+              "name": "r",
+              "expression": "2 mm"
+            }
+          },
+          {
+            "command": "solid.box",
+            "params": {
+              "length": 20,
+              "width": 20,
+              "height": 10
+            }
+          },
+          {
+            "command": "solid.fillet",
+            "params": {
+              "edges": [
+                [
+                  10,
+                  0,
+                  10
+                ]
+              ],
+              "radius": "r"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "r",
+              "expression": "50 mm"
+            }
+          }
+        ],
+        "expected": {
+          "nonzero_exit": true,
+          "error_contains": "Fillet1"
+        }
+      },
+      "expected_behavior": "失敗した履歴が正常モデルと混同されない",
+      "quality_axes": [
+        "幾何精度",
+        "トポロジ",
+        "安定性"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "python3 qa/real_workflows/run.py --cli /path/to/solidcraft-cli --ids C05 --json-out /tmp/mission40-C05.json",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "C06",
+      "category": "C",
+      "stage": 2,
+      "title": "回転体を含む旧版設計読込",
+      "purpose": "実設計フロー「回転体を含む旧版設計読込」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "solidcraft-cliをビルドし、独立した一時作業領域を用意する。",
+      "input_model": "apps/solidcraft-cli/tests/corpus/m0-revolve-primitives.solidcraft",
+      "steps": [
+        "既存の回転体設計を開く",
+        "体積とエラーを検査"
+      ],
+      "execution": {
+        "kind": "eval",
+        "source": "apps/solidcraft-cli/tests/corpus/m0-revolve-primitives.solidcraft",
+        "expected": {
+          "min_body_count": 1,
+          "min_volume_mm3": 1
+        }
+      },
+      "expected_behavior": "旧版データを形状付きで読める",
+      "quality_axes": [
+        "幾何精度",
+        "トポロジ",
+        "安定性"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "python3 qa/real_workflows/run.py --cli /path/to/solidcraft-cli --ids C06 --json-out /tmp/mission40-C06.json",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "C07",
+      "category": "C",
+      "stage": 3,
+      "title": "シェル化した樹脂ケース",
+      "purpose": "実設計フロー「シェル化した樹脂ケース」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "Arclet CADデスクトップ版を起動し、テスト専用の空ドキュメントまたは指定モデルを使用する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "外形押出",
+        "上面開口指定",
+        "肉厚設定",
+        "体積検査"
+      ],
+      "execution": {
+        "kind": "manual"
+      },
+      "expected_behavior": "開口と肉厚を保ちボディを保持",
+      "quality_axes": [
+        "幾何精度",
+        "トポロジ",
+        "安定性"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "外形押出;上面開口指定;肉厚設定;体積検査",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "C08",
+      "category": "C",
+      "stage": 3,
+      "title": "切削後の領域維持",
+      "purpose": "実設計フロー「切削後の領域維持」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "solidcraft-cliをビルドし、独立した一時作業領域を用意する。",
+      "input_model": "examples/bracket.json",
+      "steps": [
+        "L字金具で穴を切り抜く",
+        "輪郭と体積を確認"
+      ],
+      "execution": {
+        "kind": "roundtrip",
+        "source": "examples/bracket.json",
+        "expected": {
+          "min_body_count": 1,
+          "min_volume_mm3": 1
+        }
+      },
+      "expected_behavior": "切削後の体積が正である",
+      "quality_axes": [
+        "幾何精度",
+        "トポロジ",
+        "安定性"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "python3 qa/real_workflows/run.py --cli /path/to/solidcraft-cli --ids C08 --json-out /tmp/mission40-C08.json",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "C09",
+      "category": "C",
+      "stage": 3,
+      "title": "面取りのコーナー",
+      "purpose": "実設計フロー「面取りのコーナー」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "Arclet CADデスクトップ版を起動し、テスト専用の空ドキュメントまたは指定モデルを使用する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "ボックス作成",
+        "角を選択",
+        "面取り",
+        "品質検査"
+      ],
+      "execution": {
+        "kind": "manual"
+      },
+      "expected_behavior": "面取りが元ソリッドの外部へ飛び出さない",
+      "quality_axes": [
+        "幾何精度",
+        "トポロジ",
+        "安定性"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "ボックス作成;角を選択;面取り;品質検査",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "C10",
+      "category": "C",
+      "stage": 4,
+      "title": "40体の複合プリミティブ",
+      "purpose": "実設計フロー「40体の複合プリミティブ」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "solidcraft-cliをビルドし、独立した一時作業領域を用意する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "40個の寸法違いボックス生成",
+        "計測",
+        "保存"
+      ],
+      "execution": {
+        "kind": "eval",
+        "commands": [
+          {
+            "command": "solid.box",
+            "params": {
+              "length": 10,
+              "width": 10,
+              "height": 10
+            }
+          }
+        ],
+        "repeat": 40,
+        "stress": true,
+        "expected": {
+          "body_count": 40,
+          "min_volume_mm3": 1000
+        }
+      },
+      "expected_behavior": "大規模ボディの計測が安定",
+      "quality_axes": [
+        "幾何精度",
+        "トポロジ",
+        "安定性"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "python3 qa/real_workflows/run.py --cli /path/to/solidcraft-cli --ids C10 --json-out /tmp/mission40-C10.json",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "D01",
+      "category": "D",
+      "stage": 1,
+      "title": "2断面Loft",
+      "purpose": "実設計フロー「2断面Loft」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "Arclet CADデスクトップ版を起動し、テスト専用の空ドキュメントまたは指定モデルを使用する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "異なる高さの曲線を2つ描く",
+        "Loft",
+        "境界と向きを確認"
+      ],
+      "execution": {
+        "kind": "manual"
+      },
+      "expected_behavior": "断面間に自己交差のない曲面",
+      "quality_axes": [
+        "曲率連続性",
+        "幾何精度",
+        "曲面品質"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "異なる高さの曲線を2つ描く;Loft;境界と向きを確認",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "D02",
+      "category": "D",
+      "stage": 1,
+      "title": "Rail Sweep",
+      "purpose": "実設計フロー「Rail Sweep」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "Arclet CADデスクトップ版を起動し、テスト専用の空ドキュメントまたは指定モデルを使用する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "断面とレール作成",
+        "Sweep",
+        "端部とねじれを確認"
+      ],
+      "execution": {
+        "kind": "manual"
+      },
+      "expected_behavior": "レールに沿って断面が連続",
+      "quality_axes": [
+        "曲率連続性",
+        "幾何精度",
+        "曲面品質"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "断面とレール作成;Sweep;端部とねじれを確認",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "D03",
+      "category": "D",
+      "stage": 2,
+      "title": "閉境界Patch",
+      "purpose": "実設計フロー「閉境界Patch」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "Arclet CADデスクトップ版を起動し、テスト専用の空ドキュメントまたは指定モデルを使用する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "閉曲線を作成",
+        "Patch",
+        "境界偏差を測定"
+      ],
+      "execution": {
+        "kind": "manual"
+      },
+      "expected_behavior": "指定境界に追従した曲面",
+      "quality_axes": [
+        "曲率連続性",
+        "幾何精度",
+        "曲面品質"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "閉曲線を作成;Patch;境界偏差を測定",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "D04",
+      "category": "D",
+      "stage": 2,
+      "title": "4辺Boundary Surface",
+      "purpose": "実設計フロー「4辺Boundary Surface」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "Arclet CADデスクトップ版を起動し、テスト専用の空ドキュメントまたは指定モデルを使用する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "4本の境界曲線作成",
+        "Boundary",
+        "端点接続を確認"
+      ],
+      "execution": {
+        "kind": "manual"
+      },
+      "expected_behavior": "境界四辺でギャップが発生しない",
+      "quality_axes": [
+        "曲率連続性",
+        "幾何精度",
+        "曲面品質"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "4本の境界曲線作成;Boundary;端点接続を確認",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "D05",
+      "category": "D",
+      "stage": 2,
+      "title": "2曲面のG1 Match",
+      "purpose": "実設計フロー「2曲面のG1 Match」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "Arclet CADデスクトップ版を起動し、テスト専用の空ドキュメントまたは指定モデルを使用する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "2面を接近配置",
+        "Match G1",
+        "接線角を分析"
+      ],
+      "execution": {
+        "kind": "manual"
+      },
+      "expected_behavior": "接合部の接線連続性が改善",
+      "quality_axes": [
+        "曲率連続性",
+        "幾何精度",
+        "曲面品質"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "2面を接近配置;Match G1;接線角を分析",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "D06",
+      "category": "D",
+      "stage": 2,
+      "title": "2曲面のG2 Match",
+      "purpose": "実設計フロー「2曲面のG2 Match」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "Arclet CADデスクトップ版を起動し、テスト専用の空ドキュメントまたは指定モデルを使用する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "隣接2曲面を用意",
+        "Match G2",
+        "曲率偏差を測定"
+      ],
+      "execution": {
+        "kind": "manual"
+      },
+      "expected_behavior": "接合部の曲率連続性を計測",
+      "quality_axes": [
+        "曲率連続性",
+        "幾何精度",
+        "曲面品質"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "隣接2曲面を用意;Match G2;曲率偏差を測定",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "D07",
+      "category": "D",
+      "stage": 3,
+      "title": "Offset Surface",
+      "purpose": "実設計フロー「Offset Surface」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "Arclet CADデスクトップ版を起動し、テスト専用の空ドキュメントまたは指定モデルを使用する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "曲面作成",
+        "オフセット指定",
+        "距離と自己交差を診断"
+      ],
+      "execution": {
+        "kind": "manual"
+      },
+      "expected_behavior": "指定距離のオフセットと法線を維持",
+      "quality_axes": [
+        "曲率連続性",
+        "幾何精度",
+        "曲面品質"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "曲面作成;オフセット指定;距離と自己交差を診断",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "D08",
+      "category": "D",
+      "stage": 3,
+      "title": "曲面のTrim/Untrim",
+      "purpose": "実設計フロー「曲面のTrim/Untrim」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "Arclet CADデスクトップ版を起動し、テスト専用の空ドキュメントまたは指定モデルを使用する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "曲面とトリム線を作成",
+        "Trim",
+        "Untrim",
+        "境界検証"
+      ],
+      "execution": {
+        "kind": "manual"
+      },
+      "expected_behavior": "切り取り後も元曲面情報が復元できる",
+      "quality_axes": [
+        "曲率連続性",
+        "幾何精度",
+        "曲面品質"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "曲面とトリム線を作成;Trim;Untrim;境界検証",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "D09",
+      "category": "D",
+      "stage": 3,
+      "title": "曲面Rebuild",
+      "purpose": "実設計フロー「曲面Rebuild」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "Arclet CADデスクトップ版を起動し、テスト専用の空ドキュメントまたは指定モデルを使用する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "自由曲面を作成",
+        "Rebuild",
+        "元曲面との差を評価"
+      ],
+      "execution": {
+        "kind": "manual"
+      },
+      "expected_behavior": "次数・制御点変更で許容偏差内",
+      "quality_axes": [
+        "曲率連続性",
+        "幾何精度",
+        "曲面品質"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "自由曲面を作成;Rebuild;元曲面との差を評価",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "D10",
+      "category": "D",
+      "stage": 4,
+      "title": "100断面Loftの耐久性",
+      "purpose": "実設計フロー「100断面Loftの耐久性」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "Arclet CADデスクトップ版を起動し、テスト専用の空ドキュメントまたは指定モデルを使用する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "多数の断面を生成",
+        "Loft",
+        "中断",
+        "再実行",
+        "メモリ計測"
+      ],
+      "execution": {
+        "kind": "manual"
+      },
+      "expected_behavior": "長時間の生成と中断後復旧が安定",
+      "quality_axes": [
+        "曲率連続性",
+        "幾何精度",
+        "曲面品質"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "多数の断面を生成;Loft;中断;再実行;メモリ計測",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "E01",
+      "category": "E",
+      "stage": 1,
+      "title": "寸法パラメータで押出変更",
+      "purpose": "実設計フロー「寸法パラメータで押出変更」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "solidcraft-cliをビルドし、独立した一時作業領域を用意する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "幅パラメータ設定",
+        "矩形スケッチ",
+        "幅を参照して押出"
+      ],
+      "execution": {
+        "kind": "eval",
+        "commands": [
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "32 mm"
+            }
+          },
+          {
+            "command": "sketch.create",
+            "params": {
+              "plane": "XY"
+            }
+          },
+          {
+            "command": "sketch.rectangle.two_point",
+            "params": {
+              "p0": [
+                0,
+                0
+              ],
+              "p1": [
+                10,
+                5
+              ]
+            }
+          },
+          {
+            "command": "sketch.finish",
+            "params": {}
+          },
+          {
+            "command": "solid.extrude",
+            "params": {
+              "distance": "width"
+            }
+          }
+        ],
+        "expected": {
+          "body_count": 1,
+          "volume_mm3": 1600,
+          "volume_rel_tol": 0.001
+        }
+      },
+      "expected_behavior": "パラメータで押出長を決められる",
+      "quality_axes": [
+        "参照保持",
+        "再計算",
+        "履歴"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "python3 qa/real_workflows/run.py --cli /path/to/solidcraft-cli --ids E01 --json-out /tmp/mission40-E01.json",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "E02",
+      "category": "E",
+      "stage": 1,
+      "title": "保存済みパラメータの変更",
+      "purpose": "実設計フロー「保存済みパラメータの変更」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "solidcraft-cliをビルドし、独立した一時作業領域を用意する。",
+      "input_model": "apps/solidcraft-cli/tests/corpus/m0-box-fillet-hole.solidcraft",
+      "steps": [
+        "旧版モデルを開く",
+        "幅を40→50 mmに変更",
+        "再計測"
+      ],
+      "execution": {
+        "kind": "eval",
+        "source": "apps/solidcraft-cli/tests/corpus/m0-box-fillet-hole.solidcraft",
+        "commands": [
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "50 mm"
+            }
+          }
+        ],
+        "expected": {
+          "min_body_count": 1,
+          "min_volume_mm3": 1
+        }
+      },
+      "expected_behavior": "再計算後の体積が正である",
+      "quality_axes": [
+        "参照保持",
+        "再計算",
+        "履歴"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "python3 qa/real_workflows/run.py --cli /path/to/solidcraft-cli --ids E02 --json-out /tmp/mission40-E02.json",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "E03",
+      "category": "E",
+      "stage": 2,
+      "title": "Undo/Redo時のモデル再計算",
+      "purpose": "実設計フロー「Undo/Redo時のモデル再計算」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "solidcraft-cliをビルドし、独立した一時作業領域を用意する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "箱作成",
+        "Undo",
+        "Redo",
+        "結果を検査"
+      ],
+      "execution": {
+        "kind": "eval",
+        "commands": [
+          {
+            "command": "solid.box",
+            "params": {
+              "length": 10,
+              "width": 10,
+              "height": 10
+            }
+          },
+          {
+            "command": "edit.undo",
+            "params": {}
+          },
+          {
+            "command": "edit.redo",
+            "params": {}
+          }
+        ],
+        "expected": {
+          "body_count": 1,
+          "volume_mm3": 1000,
+          "volume_rel_tol": 0.00001
+        }
+      },
+      "expected_behavior": "Undo→Redo後は初期体積に戻る",
+      "quality_axes": [
+        "参照保持",
+        "再計算",
+        "履歴"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "python3 qa/real_workflows/run.py --cli /path/to/solidcraft-cli --ids E03 --json-out /tmp/mission40-E03.json",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "E04",
+      "category": "E",
+      "stage": 2,
+      "title": "変更履歴の保存と復元",
+      "purpose": "実設計フロー「変更履歴の保存と復元」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "solidcraft-cliをビルドし、独立した一時作業領域を用意する。",
+      "input_model": "apps/solidcraft-cli/tests/corpus/m0-box-fillet-hole.solidcraft",
+      "steps": [
+        "モデルを読込",
+        "パラメータ変更",
+        "保存",
+        "コールド再読込"
+      ],
+      "execution": {
+        "kind": "roundtrip",
+        "source": "apps/solidcraft-cli/tests/corpus/m0-box-fillet-hole.solidcraft",
+        "commands": [
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "50 mm"
+            }
+          }
+        ],
+        "expected": {
+          "min_body_count": 1,
+          "min_volume_mm3": 1
+        }
+      },
+      "expected_behavior": "パラメータ変更が保存後も残る",
+      "quality_axes": [
+        "参照保持",
+        "再計算",
+        "履歴"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "python3 qa/real_workflows/run.py --cli /path/to/solidcraft-cli --ids E04 --json-out /tmp/mission40-E04.json",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "E05",
+      "category": "E",
+      "stage": 2,
+      "title": "パラメータを連続変更",
+      "purpose": "実設計フロー「パラメータを連続変更」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "solidcraft-cliをビルドし、独立した一時作業領域を用意する。",
+      "input_model": "apps/solidcraft-cli/tests/corpus/m0-box-fillet-hole.solidcraft",
+      "steps": [
+        "5つの値を順番に適用",
+        "形状再計算",
+        "計測"
+      ],
+      "execution": {
+        "kind": "eval",
+        "source": "apps/solidcraft-cli/tests/corpus/m0-box-fillet-hole.solidcraft",
+        "commands": [
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "30 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "32 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "34 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "36 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "40 mm"
+            }
+          }
+        ],
+        "expected": {
+          "body_count": 1,
+          "min_volume_mm3": 1
+        }
+      },
+      "expected_behavior": "複数回の変更後も正の体積",
+      "quality_axes": [
+        "参照保持",
+        "再計算",
+        "履歴"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "python3 qa/real_workflows/run.py --cli /path/to/solidcraft-cli --ids E05 --json-out /tmp/mission40-E05.json",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "E06",
+      "category": "E",
+      "stage": 2,
+      "title": "フィーチャ抑制と解除",
+      "purpose": "実設計フロー「フィーチャ抑制と解除」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "Arclet CADデスクトップ版を起動し、テスト専用の空ドキュメントまたは指定モデルを使用する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "押出+フィレット作成",
+        "フィレット抑制",
+        "再有効化"
+      ],
+      "execution": {
+        "kind": "manual"
+      },
+      "expected_behavior": "抑制解除後の形状が初期と一致",
+      "quality_axes": [
+        "参照保持",
+        "再計算",
+        "履歴"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "押出+フィレット作成;フィレット抑制;再有効化",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "E07",
+      "category": "E",
+      "stage": 3,
+      "title": "依存スケッチの再編集",
+      "purpose": "実設計フロー「依存スケッチの再編集」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "Arclet CADデスクトップ版を起動し、テスト専用の空ドキュメントまたは指定モデルを使用する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "スケッチと押出作成",
+        "寸法編集",
+        "押出結果を検証"
+      ],
+      "execution": {
+        "kind": "manual"
+      },
+      "expected_behavior": "押出の参照が残り再計算される",
+      "quality_axes": [
+        "参照保持",
+        "再計算",
+        "履歴"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "スケッチと押出作成;寸法編集;押出結果を検証",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "E08",
+      "category": "E",
+      "stage": 3,
+      "title": "複数フィーチャの順序変更",
+      "purpose": "実設計フロー「複数フィーチャの順序変更」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "Arclet CADデスクトップ版を起動し、テスト専用の空ドキュメントまたは指定モデルを使用する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "順序依存のフィーチャ2個作成",
+        "移動",
+        "結果を確認"
+      ],
+      "execution": {
+        "kind": "manual"
+      },
+      "expected_behavior": "結果の妥当性と参照が維持される",
+      "quality_axes": [
+        "参照保持",
+        "再計算",
+        "履歴"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "順序依存のフィーチャ2個作成;移動;結果を確認",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "E09",
+      "category": "E",
+      "stage": 3,
+      "title": "意図的な不正寸法",
+      "purpose": "実設計フロー「意図的な不正寸法」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "Arclet CADデスクトップ版を起動し、テスト専用の空ドキュメントまたは指定モデルを使用する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "パラメータを不正値に変更",
+        "エラーとUndoを確認"
+      ],
+      "execution": {
+        "kind": "manual"
+      },
+      "expected_behavior": "失敗は原状態を破壊しない",
+      "quality_axes": [
+        "参照保持",
+        "再計算",
+        "履歴"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "パラメータを不正値に変更;エラーとUndoを確認",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "E10",
+      "category": "E",
+      "stage": 4,
+      "title": "100回のパラメータ掃引",
+      "purpose": "実設計フロー「100回のパラメータ掃引」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "solidcraft-cliをビルドし、独立した一時作業領域を用意する。",
+      "input_model": "apps/solidcraft-cli/tests/corpus/m0-box-fillet-hole.solidcraft",
+      "steps": [
+        "100個の合法値を順に変更",
+        "毎回計測",
+        "元に戻す"
+      ],
+      "execution": {
+        "kind": "eval",
+        "source": "apps/solidcraft-cli/tests/corpus/m0-box-fillet-hole.solidcraft",
+        "commands": [
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "40 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "41 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "42 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "43 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "44 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "45 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "46 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "47 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "48 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "49 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "50 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "51 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "52 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "53 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "54 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "55 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "56 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "57 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "58 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "59 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "40 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "41 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "42 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "43 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "44 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "45 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "46 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "47 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "48 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "49 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "50 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "51 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "52 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "53 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "54 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "55 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "56 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "57 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "58 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "59 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "40 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "41 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "42 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "43 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "44 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "45 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "46 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "47 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "48 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "49 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "50 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "51 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "52 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "53 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "54 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "55 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "56 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "57 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "58 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "59 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "40 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "41 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "42 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "43 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "44 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "45 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "46 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "47 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "48 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "49 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "50 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "51 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "52 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "53 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "54 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "55 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "56 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "57 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "58 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "59 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "40 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "41 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "42 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "43 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "44 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "45 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "46 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "47 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "48 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "49 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "50 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "51 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "52 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "53 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "54 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "55 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "56 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "57 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "58 mm"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "width",
+              "expression": "59 mm"
+            }
+          }
+        ],
+        "stress": true,
+        "expected": {
+          "body_count": 1,
+          "min_volume_mm3": 1
+        }
+      },
+      "expected_behavior": "数値再計算にメモリリークや古い結果なし",
+      "quality_axes": [
+        "参照保持",
+        "再計算",
+        "履歴"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "python3 qa/real_workflows/run.py --cli /path/to/solidcraft-cli --ids E10 --json-out /tmp/mission40-E10.json",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "F01",
+      "category": "F",
+      "stage": 1,
+      "title": "複数コンポーネントの旧版読込",
+      "purpose": "実設計フロー「複数コンポーネントの旧版読込」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "solidcraft-cliをビルドし、独立した一時作業領域を用意する。",
+      "input_model": "apps/solidcraft-cli/tests/corpus/components-arm.solidcraft",
+      "steps": [
+        "既存アーム設計を開く",
+        "ボディと階層を検査"
+      ],
+      "execution": {
+        "kind": "eval",
+        "source": "apps/solidcraft-cli/tests/corpus/components-arm.solidcraft",
+        "expected": {
+          "min_body_count": 1
+        }
+      },
+      "expected_behavior": "部品が欠損せず構成を保持",
+      "quality_axes": [
+        "配置",
+        "アセンブリ",
+        "安定性"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "python3 qa/real_workflows/run.py --cli /path/to/solidcraft-cli --ids F01 --json-out /tmp/mission40-F01.json",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "F02",
+      "category": "F",
+      "stage": 1,
+      "title": "ヒンジアセンブリの旧版読込",
+      "purpose": "実設計フロー「ヒンジアセンブリの旧版読込」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "solidcraft-cliをビルドし、独立した一時作業領域を用意する。",
+      "input_model": "apps/solidcraft-cli/tests/corpus/joints-hinge.solidcraft",
+      "steps": [
+        "既存ヒンジ設計を開く",
+        "形状エラーを確認"
+      ],
+      "execution": {
+        "kind": "eval",
+        "source": "apps/solidcraft-cli/tests/corpus/joints-hinge.solidcraft",
+        "expected": {
+          "min_body_count": 1
+        }
+      },
+      "expected_behavior": "ヒンジ設計を形状付きで読める",
+      "quality_axes": [
+        "配置",
+        "アセンブリ",
+        "安定性"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "python3 qa/real_workflows/run.py --cli /path/to/solidcraft-cli --ids F02 --json-out /tmp/mission40-F02.json",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "F03",
+      "category": "F",
+      "stage": 2,
+      "title": "アセンブリを保存して再読込",
+      "purpose": "実設計フロー「アセンブリを保存して再読込」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "solidcraft-cliをビルドし、独立した一時作業領域を用意する。",
+      "input_model": "apps/solidcraft-cli/tests/corpus/components-arm.solidcraft",
+      "steps": [
+        "アーム設計を開く",
+        "保存",
+        "再読込",
+        "比較"
+      ],
+      "execution": {
+        "kind": "roundtrip",
+        "source": "apps/solidcraft-cli/tests/corpus/components-arm.solidcraft",
+        "expected": {
+          "min_body_count": 1
+        }
+      },
+      "expected_behavior": "部品の体積・数を保存前後で保持",
+      "quality_axes": [
+        "配置",
+        "アセンブリ",
+        "安定性"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "python3 qa/real_workflows/run.py --cli /path/to/solidcraft-cli --ids F03 --json-out /tmp/mission40-F03.json",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "F04",
+      "category": "F",
+      "stage": 2,
+      "title": "部品の新規挿入",
+      "purpose": "実設計フロー「部品の新規挿入」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "Arclet CADデスクトップ版を起動し、テスト専用の空ドキュメントまたは指定モデルを使用する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "親アセンブリ作成",
+        "部品追加",
+        "配置確認"
+      ],
+      "execution": {
+        "kind": "manual"
+      },
+      "expected_behavior": "新規部品が親座標系に配置される",
+      "quality_axes": [
+        "配置",
+        "アセンブリ",
+        "安定性"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "親アセンブリ作成;部品追加;配置確認",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "F05",
+      "category": "F",
+      "stage": 2,
+      "title": "同一部品の複数Occurrence",
+      "purpose": "実設計フロー「同一部品の複数Occurrence」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "Arclet CADデスクトップ版を起動し、テスト専用の空ドキュメントまたは指定モデルを使用する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "部品定義1件",
+        "3箇所に配置",
+        "移動し形状を検査"
+      ],
+      "execution": {
+        "kind": "manual"
+      },
+      "expected_behavior": "共有形状と独立配置を保持",
+      "quality_axes": [
+        "配置",
+        "アセンブリ",
+        "安定性"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "部品定義1件;3箇所に配置;移動し形状を検査",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "F06",
+      "category": "F",
+      "stage": 2,
+      "title": "固定ジョイント作成",
+      "purpose": "実設計フロー「固定ジョイント作成」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "Arclet CADデスクトップ版を起動し、テスト専用の空ドキュメントまたは指定モデルを使用する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "2部品配置",
+        "固定ジョイント追加",
+        "移動テスト"
+      ],
+      "execution": {
+        "kind": "manual"
+      },
+      "expected_behavior": "固定部品間の相対位置が変わらない",
+      "quality_axes": [
+        "配置",
+        "アセンブリ",
+        "安定性"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "2部品配置;固定ジョイント追加;移動テスト",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "F07",
+      "category": "F",
+      "stage": 3,
+      "title": "回転ジョイント駆動",
+      "purpose": "実設計フロー「回転ジョイント駆動」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "Arclet CADデスクトップ版を起動し、テスト専用の空ドキュメントまたは指定モデルを使用する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "ヒンジ作成",
+        "複数角度で駆動",
+        "干渉確認"
+      ],
+      "execution": {
+        "kind": "manual"
+      },
+      "expected_behavior": "角度を変更しても相対接続が維持",
+      "quality_axes": [
+        "配置",
+        "アセンブリ",
+        "安定性"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "ヒンジ作成;複数角度で駆動;干渉確認",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "F08",
+      "category": "F",
+      "stage": 3,
+      "title": "移動機構の干渉",
+      "purpose": "実設計フロー「移動機構の干渉」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "Arclet CADデスクトップ版を起動し、テスト専用の空ドキュメントまたは指定モデルを使用する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "可動2部品作成",
+        "衝突する軌道を指定",
+        "検出確認"
+      ],
+      "execution": {
+        "kind": "manual"
+      },
+      "expected_behavior": "接触と実際の衝突を区別できる",
+      "quality_axes": [
+        "配置",
+        "アセンブリ",
+        "安定性"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "可動2部品作成;衝突する軌道を指定;検出確認",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "F09",
+      "category": "F",
+      "stage": 3,
+      "title": "共有部品の編集伝播",
+      "purpose": "実設計フロー「共有部品の編集伝播」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "Arclet CADデスクトップ版を起動し、テスト専用の空ドキュメントまたは指定モデルを使用する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "共有部品を2箇所に配置",
+        "寸法変更",
+        "両方を計測"
+      ],
+      "execution": {
+        "kind": "manual"
+      },
+      "expected_behavior": "配置された全Occurrenceが更新",
+      "quality_axes": [
+        "配置",
+        "アセンブリ",
+        "安定性"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "共有部品を2箇所に配置;寸法変更;両方を計測",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "F10",
+      "category": "F",
+      "stage": 4,
+      "title": "100部品アセンブリの操作",
+      "purpose": "実設計フロー「100部品アセンブリの操作」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "Arclet CADデスクトップ版を起動し、テスト専用の空ドキュメントまたは指定モデルを使用する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "100部品配置",
+        "階層展開",
+        "移動",
+        "保存",
+        "再読込"
+      ],
+      "execution": {
+        "kind": "manual"
+      },
+      "expected_behavior": "操作・保存・再開が破綻しない",
+      "quality_axes": [
+        "配置",
+        "アセンブリ",
+        "安定性"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "100部品配置;階層展開;移動;保存;再読込",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "G01",
+      "category": "G",
+      "stage": 1,
+      "title": "直方体体積の解析",
+      "purpose": "実設計フロー「直方体体積の解析」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "solidcraft-cliをビルドし、独立した一時作業領域を用意する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "直方体生成",
+        "体積を計測"
+      ],
+      "execution": {
+        "kind": "eval",
+        "commands": [
+          {
+            "command": "solid.box",
+            "params": {
+              "length": 20,
+              "width": 10,
+              "height": 5
+            }
+          }
+        ],
+        "expected": {
+          "body_count": 1,
+          "volume_mm3": 1000,
+          "volume_rel_tol": 0.00001
+        }
+      },
+      "expected_behavior": "20×10×5 mmで1000 mm³",
+      "quality_axes": [
+        "寸法精度",
+        "解析",
+        "性能"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "python3 qa/real_workflows/run.py --cli /path/to/solidcraft-cli --ids G01 --json-out /tmp/mission40-G01.json",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "G02",
+      "category": "G",
+      "stage": 1,
+      "title": "直方体表面積の解析",
+      "purpose": "実設計フロー「直方体表面積の解析」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "solidcraft-cliをビルドし、独立した一時作業領域を用意する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "直方体生成",
+        "面積を計測"
+      ],
+      "execution": {
+        "kind": "eval",
+        "commands": [
+          {
+            "command": "solid.box",
+            "params": {
+              "length": 20,
+              "width": 10,
+              "height": 5
+            }
+          }
+        ],
+        "expected": {
+          "body_count": 1,
+          "area_mm2": 700,
+          "area_rel_tol": 0.0001
+        }
+      },
+      "expected_behavior": "20×10×5 mmで700 mm²",
+      "quality_axes": [
+        "寸法精度",
+        "解析",
+        "性能"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "python3 qa/real_workflows/run.py --cli /path/to/solidcraft-cli --ids G02 --json-out /tmp/mission40-G02.json",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "G03",
+      "category": "G",
+      "stage": 2,
+      "title": "バウンディングボックス寸法",
+      "purpose": "実設計フロー「バウンディングボックス寸法」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "solidcraft-cliをビルドし、独立した一時作業領域を用意する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "直方体生成",
+        "外接箱の辺長を計測"
+      ],
+      "execution": {
+        "kind": "eval",
+        "commands": [
+          {
+            "command": "solid.box",
+            "params": {
+              "length": 20,
+              "width": 10,
+              "height": 5
+            }
+          }
+        ],
+        "expected": {
+          "body_count": 1,
+          "bbox_size_mm": [
+            20,
+            10,
+            5
+          ],
+          "bbox_abs_tol_mm": 0.001
+        }
+      },
+      "expected_behavior": "20×10×5 mmに一致",
+      "quality_axes": [
+        "寸法精度",
+        "解析",
+        "性能"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "python3 qa/real_workflows/run.py --cli /path/to/solidcraft-cli --ids G03 --json-out /tmp/mission40-G03.json",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "G04",
+      "category": "G",
+      "stage": 2,
+      "title": "重心と形状中心",
+      "purpose": "実設計フロー「重心と形状中心」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "solidcraft-cliをビルドし、独立した一時作業領域を用意する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "直方体生成",
+        "重心と外接箱中央を比較"
+      ],
+      "execution": {
+        "kind": "eval",
+        "commands": [
+          {
+            "command": "solid.box",
+            "params": {
+              "length": 20,
+              "width": 10,
+              "height": 5
+            }
+          }
+        ],
+        "expected": {
+          "body_count": 1,
+          "com_at_bbox_center": true,
+          "bbox_abs_tol_mm": 0.001
+        }
+      },
+      "expected_behavior": "均一な直方体の重心がBBox中央",
+      "quality_axes": [
+        "寸法精度",
+        "解析",
+        "性能"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "python3 qa/real_workflows/run.py --cli /path/to/solidcraft-cli --ids G04 --json-out /tmp/mission40-G04.json",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "G05",
+      "category": "G",
+      "stage": 2,
+      "title": "再読込後の計測一致",
+      "purpose": "実設計フロー「再読込後の計測一致」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "solidcraft-cliをビルドし、独立した一時作業領域を用意する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "立体生成",
+        "保存",
+        "読込",
+        "計測差を比較"
+      ],
+      "execution": {
+        "kind": "roundtrip",
+        "commands": [
+          {
+            "command": "solid.box",
+            "params": {
+              "length": 20,
+              "width": 10,
+              "height": 5
+            }
+          }
+        ],
+        "expected": {
+          "body_count": 1,
+          "volume_mm3": 1000,
+          "volume_rel_tol": 0.00001
+        }
+      },
+      "expected_behavior": "保存前後の体積・外接箱が一致",
+      "quality_axes": [
+        "寸法精度",
+        "解析",
+        "性能"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "python3 qa/real_workflows/run.py --cli /path/to/solidcraft-cli --ids G05 --json-out /tmp/mission40-G05.json",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "G06",
+      "category": "G",
+      "stage": 2,
+      "title": "穴加工後の体積計測",
+      "purpose": "実設計フロー「穴加工後の体積計測」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "solidcraft-cliをビルドし、独立した一時作業領域を用意する。",
+      "input_model": "examples/bracket.json",
+      "steps": [
+        "L字金具作成",
+        "穴を加工",
+        "体積を検査"
+      ],
+      "execution": {
+        "kind": "eval",
+        "source": "examples/bracket.json",
+        "expected": {
+          "min_body_count": 1,
+          "min_volume_mm3": 1
+        }
+      },
+      "expected_behavior": "加工前より小さく正の体積",
+      "quality_axes": [
+        "寸法精度",
+        "解析",
+        "性能"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "python3 qa/real_workflows/run.py --cli /path/to/solidcraft-cli --ids G06 --json-out /tmp/mission40-G06.json",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "G07",
+      "category": "G",
+      "stage": 3,
+      "title": "2点間距離の計測",
+      "purpose": "実設計フロー「2点間距離の計測」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "Arclet CADデスクトップ版を起動し、テスト専用の空ドキュメントまたは指定モデルを使用する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "2点を配置",
+        "距離解析",
+        "期待値を比較"
+      ],
+      "execution": {
+        "kind": "manual"
+      },
+      "expected_behavior": "既知寸法に対して許容差内",
+      "quality_axes": [
+        "寸法精度",
+        "解析",
+        "性能"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "2点を配置;距離解析;期待値を比較",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "G08",
+      "category": "G",
+      "stage": 3,
+      "title": "曲率と曲率半径の表示",
+      "purpose": "実設計フロー「曲率と曲率半径の表示」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "Arclet CADデスクトップ版を起動し、テスト専用の空ドキュメントまたは指定モデルを使用する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "球面/自由曲面作成",
+        "曲率マップ",
+        "数値を検査"
+      ],
+      "execution": {
+        "kind": "manual"
+      },
+      "expected_behavior": "数値と曲率可視化が一致",
+      "quality_axes": [
+        "寸法精度",
+        "解析",
+        "性能"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "球面/自由曲面作成;曲率マップ;数値を検査",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "G09",
+      "category": "G",
+      "stage": 3,
+      "title": "アセンブリの干渉検出",
+      "purpose": "実設計フロー「アセンブリの干渉検出」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "Arclet CADデスクトップ版を起動し、テスト専用の空ドキュメントまたは指定モデルを使用する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "2立体を配置",
+        "重なり前後で干渉解析"
+      ],
+      "execution": {
+        "kind": "manual"
+      },
+      "expected_behavior": "干渉あり・なしを正しく区別",
+      "quality_axes": [
+        "寸法精度",
+        "解析",
+        "性能"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "2立体を配置;重なり前後で干渉解析",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "G10",
+      "category": "G",
+      "stage": 4,
+      "title": "50体の解析性能",
+      "purpose": "実設計フロー「50体の解析性能」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "solidcraft-cliをビルドし、独立した一時作業領域を用意する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "多ボディ作成",
+        "計測",
+        "処理時間を記録"
+      ],
+      "execution": {
+        "kind": "eval",
+        "commands": [
+          {
+            "command": "solid.box",
+            "params": {
+              "length": 20,
+              "width": 10,
+              "height": 5
+            }
+          }
+        ],
+        "repeat": 50,
+        "stress": true,
+        "expected": {
+          "body_count": 50,
+          "min_volume_mm3": 1000
+        }
+      },
+      "expected_behavior": "50体の体積・面積が正で応答",
+      "quality_axes": [
+        "寸法精度",
+        "解析",
+        "性能"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "python3 qa/real_workflows/run.py --cli /path/to/solidcraft-cli --ids G10 --json-out /tmp/mission40-G10.json",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "H01",
+      "category": "H",
+      "stage": 1,
+      "title": "STL書出し",
+      "purpose": "実設計フロー「STL書出し」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "solidcraft-cliをビルドし、独立した一時作業領域を用意する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "箱作成",
+        "STLエクスポート",
+        "ファイルサイズを検証"
+      ],
+      "execution": {
+        "kind": "export",
+        "commands": [
+          {
+            "command": "solid.box",
+            "params": {
+              "length": 20,
+              "width": 10,
+              "height": 5
+            }
+          }
+        ],
+        "format": "stl",
+        "expected": {
+          "body_count": 1,
+          "export_min_bytes": 100
+        }
+      },
+      "expected_behavior": "出力が存在し空でない",
+      "quality_axes": [
+        "入出力整合",
+        "保存",
+        "互換性"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "python3 qa/real_workflows/run.py --cli /path/to/solidcraft-cli --ids H01 --json-out /tmp/mission40-H01.json",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "H02",
+      "category": "H",
+      "stage": 1,
+      "title": "3MF書出し",
+      "purpose": "実設計フロー「3MF書出し」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "solidcraft-cliをビルドし、独立した一時作業領域を用意する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "箱作成",
+        "3MFエクスポート",
+        "ファイルサイズを検証"
+      ],
+      "execution": {
+        "kind": "export",
+        "commands": [
+          {
+            "command": "solid.box",
+            "params": {
+              "length": 20,
+              "width": 10,
+              "height": 5
+            }
+          }
+        ],
+        "format": "3mf",
+        "expected": {
+          "body_count": 1,
+          "export_min_bytes": 100
+        }
+      },
+      "expected_behavior": "出力が存在し空でない",
+      "quality_axes": [
+        "入出力整合",
+        "保存",
+        "互換性"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "python3 qa/real_workflows/run.py --cli /path/to/solidcraft-cli --ids H02 --json-out /tmp/mission40-H02.json",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "H03",
+      "category": "H",
+      "stage": 2,
+      "title": "STEP書出し",
+      "purpose": "実設計フロー「STEP書出し」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "solidcraft-cliをビルドし、独立した一時作業領域を用意する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "箱作成",
+        "STEPエクスポート",
+        "ファイルサイズを検証"
+      ],
+      "execution": {
+        "kind": "export",
+        "commands": [
+          {
+            "command": "solid.box",
+            "params": {
+              "length": 20,
+              "width": 10,
+              "height": 5
+            }
+          }
+        ],
+        "format": "step",
+        "expected": {
+          "body_count": 1,
+          "export_min_bytes": 100
+        }
+      },
+      "expected_behavior": "出力が存在し空でない",
+      "quality_axes": [
+        "入出力整合",
+        "保存",
+        "互換性"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "python3 qa/real_workflows/run.py --cli /path/to/solidcraft-cli --ids H03 --json-out /tmp/mission40-H03.json",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "H04",
+      "category": "H",
+      "stage": 2,
+      "title": "JSON形式保存",
+      "purpose": "実設計フロー「JSON形式保存」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "solidcraft-cliをビルドし、独立した一時作業領域を用意する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "箱作成",
+        "JSON保存",
+        "再読込",
+        "体積比較"
+      ],
+      "execution": {
+        "kind": "roundtrip",
+        "commands": [
+          {
+            "command": "solid.box",
+            "params": {
+              "length": 20,
+              "width": 10,
+              "height": 5
+            }
+          }
+        ],
+        "extension": ".json",
+        "expected": {
+          "body_count": 1,
+          "volume_mm3": 1000,
+          "volume_rel_tol": 0.00001
+        }
+      },
+      "expected_behavior": "設計形状をコールド再読込できる",
+      "quality_axes": [
+        "入出力整合",
+        "保存",
+        "互換性"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "python3 qa/real_workflows/run.py --cli /path/to/solidcraft-cli --ids H04 --json-out /tmp/mission40-H04.json",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "H05",
+      "category": "H",
+      "stage": 2,
+      "title": "ネイティブ形式保存",
+      "purpose": "実設計フロー「ネイティブ形式保存」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "solidcraft-cliをビルドし、独立した一時作業領域を用意する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "箱作成",
+        "solidcraft保存",
+        "再読込",
+        "体積比較"
+      ],
+      "execution": {
+        "kind": "roundtrip",
+        "commands": [
+          {
+            "command": "solid.box",
+            "params": {
+              "length": 20,
+              "width": 10,
+              "height": 5
+            }
+          }
+        ],
+        "expected": {
+          "body_count": 1,
+          "volume_mm3": 1000,
+          "volume_rel_tol": 0.00001
+        }
+      },
+      "expected_behavior": "設計形状をコールド再読込できる",
+      "quality_axes": [
+        "入出力整合",
+        "保存",
+        "互換性"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "python3 qa/real_workflows/run.py --cli /path/to/solidcraft-cli --ids H05 --json-out /tmp/mission40-H05.json",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "H06",
+      "category": "H",
+      "stage": 2,
+      "title": "OBJ書出し",
+      "purpose": "実設計フロー「OBJ書出し」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "solidcraft-cliをビルドし、独立した一時作業領域を用意する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "箱作成",
+        "OBJエクスポート",
+        "ファイルサイズを検証"
+      ],
+      "execution": {
+        "kind": "export",
+        "commands": [
+          {
+            "command": "solid.box",
+            "params": {
+              "length": 20,
+              "width": 10,
+              "height": 5
+            }
+          }
+        ],
+        "format": "obj",
+        "expected": {
+          "body_count": 1,
+          "export_min_bytes": 100
+        }
+      },
+      "expected_behavior": "出力が存在し空でない",
+      "quality_axes": [
+        "入出力整合",
+        "保存",
+        "互換性"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "python3 qa/real_workflows/run.py --cli /path/to/solidcraft-cli --ids H06 --json-out /tmp/mission40-H06.json",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "H07",
+      "category": "H",
+      "stage": 3,
+      "title": "旧版設計との互換読込",
+      "purpose": "実設計フロー「旧版設計との互換読込」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "solidcraft-cliをビルドし、独立した一時作業領域を用意する。",
+      "input_model": "apps/solidcraft-cli/tests/corpus/m0-box-fillet-hole.solidcraft",
+      "steps": [
+        "旧版モデルを開く",
+        "評価エラーを検査"
+      ],
+      "execution": {
+        "kind": "eval",
+        "source": "apps/solidcraft-cli/tests/corpus/m0-box-fillet-hole.solidcraft",
+        "expected": {
+          "body_count": 1,
+          "min_volume_mm3": 1
+        }
+      },
+      "expected_behavior": "旧版形式の1モデルを読み込める",
+      "quality_axes": [
+        "入出力整合",
+        "保存",
+        "互換性"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "python3 qa/real_workflows/run.py --cli /path/to/solidcraft-cli --ids H07 --json-out /tmp/mission40-H07.json",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "H08",
+      "category": "H",
+      "stage": 3,
+      "title": "未知コマンドを含む入力拒否",
+      "purpose": "実設計フロー「未知コマンドを含む入力拒否」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "solidcraft-cliをビルドし、独立した一時作業領域を用意する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "未知のコマンドスクリプトを与える",
+        "非ゼロ終了確認"
+      ],
+      "execution": {
+        "kind": "negative",
+        "commands": [
+          {
+            "command": "mission40.nonexistent_command",
+            "params": {}
+          }
+        ],
+        "expected": {
+          "nonzero_exit": true
+        }
+      },
+      "expected_behavior": "不明な命令が成功扱いされない",
+      "quality_axes": [
+        "入出力整合",
+        "保存",
+        "互換性"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "python3 qa/real_workflows/run.py --cli /path/to/solidcraft-cli --ids H08 --json-out /tmp/mission40-H08.json",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "H09",
+      "category": "H",
+      "stage": 3,
+      "title": "3DM往復互換性",
+      "purpose": "実設計フロー「3DM往復互換性」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "Arclet CADデスクトップ版を起動し、テスト専用の空ドキュメントまたは指定モデルを使用する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "3DMインポート",
+        "編集",
+        "書出し",
+        "別CADとの比較"
+      ],
+      "execution": {
+        "kind": "manual"
+      },
+      "expected_behavior": "3DMの未実装部分を成功と偽らない",
+      "quality_axes": [
+        "入出力整合",
+        "保存",
+        "互換性"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "3DMインポート;編集;書出し;別CADとの比較",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "H10",
+      "category": "H",
+      "stage": 4,
+      "title": "同一モデル20回連続エクスポート",
+      "purpose": "実設計フロー「同一モデル20回連続エクスポート」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "solidcraft-cliをビルドし、独立した一時作業領域を用意する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "同じ設計を20回別名でSTEP書出し",
+        "サイズと計測を比較"
+      ],
+      "execution": {
+        "kind": "export",
+        "commands": [
+          {
+            "command": "solid.box",
+            "params": {
+              "length": 20,
+              "width": 10,
+              "height": 5
+            }
+          }
+        ],
+        "format": "step",
+        "repeat_exports": 20,
+        "stress": true,
+        "expected": {
+          "body_count": 1,
+          "export_min_bytes": 100
+        }
+      },
+      "expected_behavior": "出力が全回存在し破損しない",
+      "quality_axes": [
+        "入出力整合",
+        "保存",
+        "互換性"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "python3 qa/real_workflows/run.py --cli /path/to/solidcraft-cli --ids H10 --json-out /tmp/mission40-H10.json",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "I01",
+      "category": "I",
+      "stage": 1,
+      "title": "等角図PNGのヘッドレス取得",
+      "purpose": "実設計フロー「等角図PNGのヘッドレス取得」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "solidcraft-cliをビルドし、独立した一時作業領域を用意する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "箱作成",
+        "等角図スナップショット",
+        "PNGを検査"
+      ],
+      "execution": {
+        "kind": "snapshot",
+        "commands": [
+          {
+            "command": "solid.box",
+            "params": {
+              "length": 20,
+              "width": 10,
+              "height": 5
+            }
+          }
+        ],
+        "expected": {
+          "png": true
+        }
+      },
+      "expected_behavior": "PNGシグネチャと画像サイズを検証",
+      "quality_axes": [
+        "UX",
+        "応答性",
+        "視認性"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "python3 qa/real_workflows/run.py --cli /path/to/solidcraft-cli --ids I01 --json-out /tmp/mission40-I01.json",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "I02",
+      "category": "I",
+      "stage": 1,
+      "title": "コマンド行エイリアス",
+      "purpose": "実設計フロー「コマンド行エイリアス」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "Arclet CADデスクトップ版を起動し、テスト専用の空ドキュメントまたは指定モデルを使用する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "コマンド欄で短縮名実行",
+        "正式コマンドと形状比較"
+      ],
+      "execution": {
+        "kind": "manual"
+      },
+      "expected_behavior": "短い名前と正式名が同じ動作",
+      "quality_axes": [
+        "UX",
+        "応答性",
+        "視認性"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "コマンド欄で短縮名実行;正式コマンドと形状比較",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "I03",
+      "category": "I",
+      "stage": 2,
+      "title": "レイヤーの作成と切替",
+      "purpose": "実設計フロー「レイヤーの作成と切替」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "Arclet CADデスクトップ版を起動し、テスト専用の空ドキュメントまたは指定モデルを使用する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "新規レイヤー作成",
+        "現レイヤー変更",
+        "ボディ作成"
+      ],
+      "execution": {
+        "kind": "manual"
+      },
+      "expected_behavior": "作成先レイヤーが正しい",
+      "quality_axes": [
+        "UX",
+        "応答性",
+        "視認性"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "新規レイヤー作成;現レイヤー変更;ボディ作成",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "I04",
+      "category": "I",
+      "stage": 2,
+      "title": "モデルツリーからの選択",
+      "purpose": "実設計フロー「モデルツリーからの選択」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "Arclet CADデスクトップ版を起動し、テスト専用の空ドキュメントまたは指定モデルを使用する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "モデルツリーでボディを選択",
+        "ハイライト確認"
+      ],
+      "execution": {
+        "kind": "manual"
+      },
+      "expected_behavior": "UI選択とビューポート選択が一致",
+      "quality_axes": [
+        "UX",
+        "応答性",
+        "視認性"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "モデルツリーでボディを選択;ハイライト確認",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "I05",
+      "category": "I",
+      "stage": 2,
+      "title": "ギズモの数値移動",
+      "purpose": "実設計フロー「ギズモの数値移動」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "Arclet CADデスクトップ版を起動し、テスト専用の空ドキュメントまたは指定モデルを使用する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "ボディ選択",
+        "ギズモ移動",
+        "入力値と座標比較"
+      ],
+      "execution": {
+        "kind": "manual"
+      },
+      "expected_behavior": "数値指定した変位に一致",
+      "quality_axes": [
+        "UX",
+        "応答性",
+        "視認性"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "ボディ選択;ギズモ移動;入力値と座標比較",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "I06",
+      "category": "I",
+      "stage": 2,
+      "title": "Top/Front/Iso切替",
+      "purpose": "実設計フロー「Top/Front/Iso切替」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "Arclet CADデスクトップ版を起動し、テスト専用の空ドキュメントまたは指定モデルを使用する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "3ビューを切替",
+        "座標軸と選択状態を検査"
+      ],
+      "execution": {
+        "kind": "manual"
+      },
+      "expected_behavior": "各視点で投影方向が正しい",
+      "quality_axes": [
+        "UX",
+        "応答性",
+        "視認性"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "3ビューを切替;座標軸と選択状態を検査",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "I07",
+      "category": "I",
+      "stage": 3,
+      "title": "プロパティの即時反映",
+      "purpose": "実設計フロー「プロパティの即時反映」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "Arclet CADデスクトップ版を起動し、テスト専用の空ドキュメントまたは指定モデルを使用する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "プロパティを開く",
+        "寸法編集",
+        "モデル再計算"
+      ],
+      "execution": {
+        "kind": "manual"
+      },
+      "expected_behavior": "寸法変更でモデルが更新される",
+      "quality_axes": [
+        "UX",
+        "応答性",
+        "視認性"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "プロパティを開く;寸法編集;モデル再計算",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "I08",
+      "category": "I",
+      "stage": 3,
+      "title": "4分割ビューポート",
+      "purpose": "実設計フロー「4分割ビューポート」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "Arclet CADデスクトップ版を起動し、テスト専用の空ドキュメントまたは指定モデルを使用する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "4分割表示",
+        "各ビュー操作",
+        "選択の整合を確認"
+      ],
+      "execution": {
+        "kind": "manual"
+      },
+      "expected_behavior": "独立カメラとビュー選択が整合",
+      "quality_axes": [
+        "UX",
+        "応答性",
+        "視認性"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "4分割表示;各ビュー操作;選択の整合を確認",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "I09",
+      "category": "I",
+      "stage": 3,
+      "title": "キーボードと日本語UI",
+      "purpose": "実設計フロー「キーボードと日本語UI」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "Arclet CADデスクトップ版を起動し、テスト専用の空ドキュメントまたは指定モデルを使用する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "日本語化",
+        "Tab移動",
+        "ショートカット実行"
+      ],
+      "execution": {
+        "kind": "manual"
+      },
+      "expected_behavior": "フォーカスと多言語表示が破綻しない",
+      "quality_axes": [
+        "UX",
+        "応答性",
+        "視認性"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "日本語化;Tab移動;ショートカット実行",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "I10",
+      "category": "I",
+      "stage": 4,
+      "title": "1000操作の連続GUI編集",
+      "purpose": "実設計フロー「1000操作の連続GUI編集」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "Arclet CADデスクトップ版を起動し、テスト専用の空ドキュメントまたは指定モデルを使用する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "1000回の選択と移動",
+        "周期計測",
+        "最終保存と再読込"
+      ],
+      "execution": {
+        "kind": "manual"
+      },
+      "expected_behavior": "応答時間・Undo・保存が維持される",
+      "quality_axes": [
+        "UX",
+        "応答性",
+        "視認性"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "1000回の選択と移動;周期計測;最終保存と再読込",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "J01",
+      "category": "J",
+      "stage": 1,
+      "title": "未知エンジン命令で停止",
+      "purpose": "実設計フロー「未知エンジン命令で停止」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "solidcraft-cliをビルドし、独立した一時作業領域を用意する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "存在しないコマンド入力",
+        "エラー検証"
+      ],
+      "execution": {
+        "kind": "negative",
+        "commands": [
+          {
+            "command": "mission40.unknown",
+            "params": {}
+          }
+        ],
+        "expected": {
+          "nonzero_exit": true
+        }
+      },
+      "expected_behavior": "未知コマンドを拒否して終了する",
+      "quality_axes": [
+        "耐久性",
+        "障害回復",
+        "性能"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "python3 qa/real_workflows/run.py --cli /path/to/solidcraft-cli --ids J01 --json-out /tmp/mission40-J01.json",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "J02",
+      "category": "J",
+      "stage": 1,
+      "title": "保存/読込を挟むモデル復元",
+      "purpose": "実設計フロー「保存/読込を挟むモデル復元」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "solidcraft-cliをビルドし、独立した一時作業領域を用意する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "角柱作成",
+        "保存",
+        "再読込",
+        "体積検証"
+      ],
+      "execution": {
+        "kind": "roundtrip",
+        "commands": [
+          {
+            "command": "solid.box",
+            "params": {
+              "length": 20,
+              "width": 10,
+              "height": 5
+            }
+          }
+        ],
+        "expected": {
+          "body_count": 1,
+          "volume_mm3": 1000,
+          "volume_rel_tol": 0.00001
+        }
+      },
+      "expected_behavior": "コールド再読込で体積保存",
+      "quality_axes": [
+        "耐久性",
+        "障害回復",
+        "性能"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "python3 qa/real_workflows/run.py --cli /path/to/solidcraft-cli --ids J02 --json-out /tmp/mission40-J02.json",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "J03",
+      "category": "J",
+      "stage": 2,
+      "title": "長時間演算のキャンセル",
+      "purpose": "実設計フロー「長時間演算のキャンセル」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "Arclet CADデスクトップ版を起動し、テスト専用の空ドキュメントまたは指定モデルを使用する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "重い演算開始",
+        "キャンセル",
+        "形状とUndoを確認"
+      ],
+      "execution": {
+        "kind": "manual"
+      },
+      "expected_behavior": "中止後に元の設計が残る",
+      "quality_axes": [
+        "耐久性",
+        "障害回復",
+        "性能"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "重い演算開始;キャンセル;形状とUndoを確認",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "J04",
+      "category": "J",
+      "stage": 2,
+      "title": "失敗フィレットの安全拒否",
+      "purpose": "実設計フロー「失敗フィレットの安全拒否」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "solidcraft-cliをビルドし、独立した一時作業領域を用意する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "箱作成",
+        "大き過ぎるR指定",
+        "CLI保存を試みる"
+      ],
+      "execution": {
+        "kind": "negative_run",
+        "commands": [
+          {
+            "command": "parameters.add",
+            "params": {
+              "name": "r",
+              "expression": "2 mm"
+            }
+          },
+          {
+            "command": "solid.box",
+            "params": {
+              "length": 20,
+              "width": 20,
+              "height": 10
+            }
+          },
+          {
+            "command": "solid.fillet",
+            "params": {
+              "edges": [
+                [
+                  10,
+                  0,
+                  10
+                ]
+              ],
+              "radius": "r"
+            }
+          },
+          {
+            "command": "parameters.change",
+            "params": {
+              "name": "r",
+              "expression": "50 mm"
+            }
+          }
+        ],
+        "expected": {
+          "nonzero_exit": true,
+          "error_contains": "Fillet1"
+        }
+      },
+      "expected_behavior": "失敗履歴から成果物を書かない",
+      "quality_axes": [
+        "耐久性",
+        "障害回復",
+        "性能"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "python3 qa/real_workflows/run.py --cli /path/to/solidcraft-cli --ids J04 --json-out /tmp/mission40-J04.json",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "J05",
+      "category": "J",
+      "stage": 2,
+      "title": "旧版金具の回帰検査",
+      "purpose": "実設計フロー「旧版金具の回帰検査」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "solidcraft-cliをビルドし、独立した一時作業領域を用意する。",
+      "input_model": "examples/bracket.json",
+      "steps": [
+        "L字金具スクリプトを評価",
+        "エラー確認"
+      ],
+      "execution": {
+        "kind": "eval",
+        "source": "examples/bracket.json",
+        "expected": {
+          "min_body_count": 1,
+          "min_volume_mm3": 1
+        }
+      },
+      "expected_behavior": "既存金具が履歴エラーなしで読める",
+      "quality_axes": [
+        "耐久性",
+        "障害回復",
+        "性能"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "python3 qa/real_workflows/run.py --cli /path/to/solidcraft-cli --ids J05 --json-out /tmp/mission40-J05.json",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "J06",
+      "category": "J",
+      "stage": 2,
+      "title": "編集中の異常終了と復元",
+      "purpose": "実設計フロー「編集中の異常終了と復元」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "Arclet CADデスクトップ版を起動し、テスト専用の空ドキュメントまたは指定モデルを使用する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "編集中に強制終了",
+        "再起動",
+        "復元履歴確認"
+      ],
+      "execution": {
+        "kind": "manual"
+      },
+      "expected_behavior": "最後の正常保存が利用できる",
+      "quality_axes": [
+        "耐久性",
+        "障害回復",
+        "性能"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "編集中に強制終了;再起動;復元履歴確認",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "J07",
+      "category": "J",
+      "stage": 3,
+      "title": "別プロセス同一ファイル編集",
+      "purpose": "実設計フロー「別プロセス同一ファイル編集」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "Arclet CADデスクトップ版を起動し、テスト専用の空ドキュメントまたは指定モデルを使用する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "同一設計を2プロセスで開く",
+        "保存競合を確認"
+      ],
+      "execution": {
+        "kind": "manual"
+      },
+      "expected_behavior": "競合上書きが検知される",
+      "quality_axes": [
+        "耐久性",
+        "障害回復",
+        "性能"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "同一設計を2プロセスで開く;保存競合を確認",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "J08",
+      "category": "J",
+      "stage": 3,
+      "title": "ソフトウェアGPU代替描画",
+      "purpose": "実設計フロー「ソフトウェアGPU代替描画」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "Arclet CADデスクトップ版を起動し、テスト専用の空ドキュメントまたは指定モデルを使用する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "ソフトウェア描画へ切替",
+        "PNG取得",
+        "結果判定"
+      ],
+      "execution": {
+        "kind": "manual"
+      },
+      "expected_behavior": "GPUなしでも安全に絵が生成される",
+      "quality_axes": [
+        "耐久性",
+        "障害回復",
+        "性能"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "ソフトウェア描画へ切替;PNG取得;結果判定",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "J09",
+      "category": "J",
+      "stage": 3,
+      "title": "大量データの読込異常系",
+      "purpose": "実設計フロー「大量データの読込異常系」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "Arclet CADデスクトップ版を起動し、テスト専用の空ドキュメントまたは指定モデルを使用する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "破損データと巨大データを段階入力",
+        "回復確認"
+      ],
+      "execution": {
+        "kind": "manual"
+      },
+      "expected_behavior": "不正入力でクラッシュしない",
+      "quality_axes": [
+        "耐久性",
+        "障害回復",
+        "性能"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "破損データと巨大データを段階入力;回復確認",
+      "issues": [],
+      "pull_requests": []
+    },
+    {
+      "id": "J10",
+      "category": "J",
+      "stage": 4,
+      "title": "200体の長時間編集・計測",
+      "purpose": "実設計フロー「200体の長時間編集・計測」を通し、単独コマンドの呼出成功だけでなく最終モデルの品質を確認する。",
+      "preconditions": "solidcraft-cliをビルドし、独立した一時作業領域を用意する。",
+      "input_model": "空の新規設計",
+      "steps": [
+        "200個の角柱を生成",
+        "体積と処理時間を記録"
+      ],
+      "execution": {
+        "kind": "eval",
+        "commands": [
+          {
+            "command": "solid.box",
+            "params": {
+              "length": 8,
+              "width": 7,
+              "height": 6
+            }
+          }
+        ],
+        "repeat": 200,
+        "stress": true,
+        "expected": {
+          "body_count": 200,
+          "min_volume_mm3": 336
+        }
+      },
+      "expected_behavior": "200体を作成し最終ボディ数が一致",
+      "quality_axes": [
+        "耐久性",
+        "障害回復",
+        "性能"
+      ],
+      "actual_result": null,
+      "status": "NOT_RUN",
+      "reproduction": "python3 qa/real_workflows/run.py --cli /path/to/solidcraft-cli --ids J10 --json-out /tmp/mission40-J10.json",
+      "issues": [],
+      "pull_requests": []
+    }
+  ]
+}
