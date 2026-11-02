@@ -18,6 +18,7 @@ This PR **does not build another assembly system**, change the saved document sc
 | `Document::placements_checked()` | Indexed full occurrence-path traversal that explicitly rejects excessive nesting or instance expansion instead of returning silently truncated results. |
 | `Document::body_frames_checked(&model_state)` | Fully validated world-space body frames with stable definition names and exact occurrence paths for downstream interference/clearance consumers. This does not perform collision detection. |
 | `Document::validate_mechanism()` | Validates joint endpoints, numbers, bounds, link ports, duplicate drivers, link cycles and motion study references before a host drives the mechanism. Existing default solving remains unchanged; callers opt in. |
+| `Document::solve_mechanism_checked(&model_state)` | Runs integrity checks and the existing solver; returns an error instead of offering an incomplete/conflicting pose for application. The caller still owns the undoable document transaction. |
 | `MotionStudy::validate(&assembly)` | Validates keyed joint ports, monotonic finite steps, bounded ranges and duplicate keys before playback/export. |
 | `JointKind::parse("Fixed Joint")` | Maps to the existing serialized `Rigid` kind, without changing its stored name or behavior. |
 
@@ -33,7 +34,7 @@ The existing `apply_joint_solution` still resolves placements relative to their 
 - **Sliding drawer:** Slider along world X and clamping to a 10 mm limit.
 - **Rigid/Fixed, Planar, Ball:** frame transforms and their reported DOF; note that Ball uses the **pre-existing Z-Y-Z angle convention**.
 - **Two-link arm:** two connected revolute joints, elbow position, endpoint rotation and remaining 2 DOF for the distal part.
-- **Closed constraints:** mutually incompatible rigid mates yield a conflict, not silent success.
+- **Closed constraints:** mutually incompatible rigid mates yield a conflict, not silent success; the checked solve refuses a candidate while leaving the document untouched.
 - **Repeated instances:** the same wheel definition under 600 axle instances, hierarchy, exact instance paths and checked expansion.
 - **Roundtrip:** saved component occurrences, joints and studies reload with the same IDs/values.
 - **Hostile input:** unknown parents, cyclic hierarchies, duplicate IDs, invalid rigid matrices, stale joint IDs, non-finite limits, duplicate motion drivers, cyclic links, invalid study keys and excessive nesting.
