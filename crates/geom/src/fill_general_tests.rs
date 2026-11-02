@@ -71,6 +71,9 @@ fn a_tube_end_capped_g1_meets_the_wall_and_rises_over_it() {
             f.curvature_mismatch
         );
         assert!(f.deviation <= TOL && f.normal_deviation <= ANGLE);
+        if g2 {
+            assert!(f.curvature_mismatch <= G2_CURVATURE_REL_TOL / 20.0, "G2 mismatch: {}", f.curvature_mismatch);
+        }
         // The middle rises over the rim (the cap leaves the wall upwards).
         let mid = at(&f.surface, 0.5, 0.5);
         eprintln!("the cap's middle: {mid:?}");
@@ -137,6 +140,39 @@ fn a_planar_polygon_is_its_plane_and_a_point_lifts_it() {
     let f = fill_general(6, &mut g0, &spec(&point)).unwrap();
     eprintln!("L through a point: {:?} spans, off the loop {:e}, off the point {:e}", f.spans, f.deviation, f.point_deviation);
     assert!(f.deviation <= TOL && f.point_deviation <= TOL);
+}
+
+/// Curvature has its own geometric tolerance (1/mm). An excellent G0/G1
+/// fit with the wrong normal curvature must not be published as G2.
+#[test]
+fn g2_mismatch_is_a_failure_even_when_positions_and_normals_fit() {
+    let stations: Vec<Station> = [0.0, PI / 2.0, PI, 3.0 * PI / 2.0]
+        .into_iter()
+        .map(|a| Station {
+            p: radial(a) * 10.0,
+            up: Vec3::Z,
+            across: Some(Across { leave: Vec3::Z, normal: radial(a), bend: Some(radial(a) * -0.1) }),
+            corner: false,
+            clash: false,
+        })
+        .collect();
+    let limit = g2_curvature_tolerance(&stations);
+    assert!((limit - 0.002).abs() < 1e-12, "{limit}");
+    let with_mismatch = |curvature| Measured {
+        shortfall: Shortfall { deviation: 0.0, angle: 0.0, points: 0.0, curvature },
+        angle_all: 0.0,
+        curvature,
+    };
+    assert!(meets_fill_tolerances(&with_mismatch(0.001), &stations, &spec(&[])));
+    assert!(!meets_fill_tolerances(&with_mismatch(0.01), &stations, &spec(&[])));
+    let mut g1_only = stations;
+    for s in &mut g1_only {
+        if let Some(across) = s.across.as_mut() {
+            across.bend = None;
+        }
+    }
+    assert_eq!(g2_curvature_tolerance(&g1_only), f64::INFINITY);
+    assert!(meets_fill_tolerances(&with_mismatch(0.01), &g1_only, &spec(&[])));
 }
 
 #[test]
