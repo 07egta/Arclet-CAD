@@ -3360,6 +3360,38 @@ mod typed_dimension_tests {
     }
 
     #[test]
+    fn consistent_radius_and_diameter_are_redundant_but_a_disagreement_fails() {
+        let mut sk = Sketch::new();
+        let circle = sk.add_circle(Vec2::ZERO, 10.0, Some(0), None).unwrap();
+        sk.add_constraint(ConstraintKind::Radius { c: circle, value: 10.0 }, None).unwrap();
+        let diameter = sk.add_constraint(ConstraintKind::Diameter { c: circle, value: 20.0 }, None).unwrap();
+        let consistent = solve(&mut sk);
+        assert!(consistent.ok(), "{consistent:?}");
+        assert_eq!(consistent.dof, 0);
+        assert!(consistent.redundant.contains(&diameter), "{consistent:?}");
+
+        sk.constraints.last_mut().unwrap().kind.set_value(18.0);
+        let before = sk.clone();
+        let conflicting = solve(&mut sk);
+        assert_eq!(conflicting.status, SolveStatus::Failed, "{conflicting:?}");
+        assert!(!conflicting.failing.is_empty());
+        assert_eq!(sk, before, "inconsistent dimensions cannot change the stored sketch");
+    }
+
+    #[test]
+    fn positive_microscopic_parallel_lines_are_not_rejected_as_collapsed() {
+        let mut sk = Sketch::new();
+        let a = sk.add_line(Vec2::ZERO, Vec2::new(1e-10, 0.0), None, None, None).unwrap();
+        let b = sk.add_line(Vec2::new(0.0, 1e-10), Vec2::new(2e-10, 1e-10), None, None, None).unwrap();
+        sk.curves[a].fixed = true;
+        sk.curves[b].fixed = true;
+        sk.add_constraint(ConstraintKind::Parallel { a, b }, None).unwrap();
+        let report = solve(&mut sk);
+        assert!(report.ok(), "{report:?}");
+        assert_eq!(report.dof, 0);
+    }
+
+    #[test]
     fn failed_solve_does_not_update_a_driven_dimension() {
         let mut sk = Sketch::new();
         let line = sk.add_line(Vec2::ZERO, Vec2::new(10.0, 0.0), Some(0), None, None).unwrap();
