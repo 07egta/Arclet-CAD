@@ -96,7 +96,7 @@ fn draw(
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: depth_view,
                     depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
+                        load: wgpu::LoadOp::Clear(solidcraft_gpu::view::far_depth(solidcraft_gpu::view::reversed_depth(Some(wgpu::TextureFormat::Depth32Float)))),
                         store: wgpu::StoreOp::Store,
                     }),
                     stencil_ops: None,
