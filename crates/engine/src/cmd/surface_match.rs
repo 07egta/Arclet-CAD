@@ -120,6 +120,22 @@ mod tests {
     /// and redo move it back and forth, a cold reopen gives the same seam, and what cannot be
     /// matched is refused.
     #[test]
+    fn malformed_match_selection_is_rejected_atomically() {
+        let mut s = Session::default();
+        boss_and_skirt(&mut s);
+        let before = s.doc.to_json();
+        for patch in [
+            json!({"body":"Skirt","target":"Boss","edges":[[10,0,15],null,[10,0,20]]}),
+            json!({"body":"Skirt","target":"Boss","edges":[[10,0,15],"bad"]}),
+            json!({"body":"Skirt","target":"Boss","edges":[[10,0,15]],"faces":[[0,0,0],null]}),
+            json!({"body":"Skirt","target":"Boss","edges":[[10,0,15]],"faces":"invalid"}),
+        ] {
+            assert!(s.execute("surface.match", &patch).is_err(), "accepted invalid selection: {patch}");
+            assert_eq!(s.doc.to_json(), before, "invalid Match changed the design");
+        }
+    }
+
+    #[test]
     fn surface_match_rebuilds_a_skirt_onto_a_cylinder() {
         let mut s = Session::default();
         boss_and_skirt(&mut s);
