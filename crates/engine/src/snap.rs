@@ -6,14 +6,14 @@
 //! kernel where it knows the curve or surface, fitted to the mesh otherwise. World coordinates,
 //! as the viewport shows the model.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use solidcraft_geom::{UnitVec3, Vec3};
 
 use crate::cmd::Shape;
 use crate::{Sel, Session};
 
 /// What a snap point is on its item.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SnapKind {
     /// The centre of a circle, an arc, a sphere or a torus, or of one end of a cylinder or cone.
@@ -26,6 +26,26 @@ pub enum SnapKind {
     FaceCentre,
     /// A vertex.
     Vertex,
+    /// An intersection of exact analytic primitives, or an explicitly classified evaluated curve.
+    Intersection,
+    /// A closest visible point on a curve or segment.
+    Nearest,
+    /// The perpendicular foot from the reference point.
+    Perpendicular,
+    /// A tangent contact point from the reference point.
+    Tangent,
+    /// One of the four cardinal locations on a circular arc.
+    Quadrant,
+    /// A point projected orthogonally onto a construction plane.
+    Projected,
+    /// The x-axis alignment on a supplied construction plane.
+    Horizontal,
+    /// The y-axis alignment on a supplied construction plane.
+    Vertical,
+    /// A direction quantized to the configured angular increment.
+    Angle,
+    /// A temporary horizontal/vertical tracking line from an acquired point.
+    Tracking,
 }
 
 /// A point an item offers as a pick.
@@ -195,3 +215,13 @@ fn area_centre(tris: &[[Vec3; 3]]) -> Option<Vec3> {
     }
     (area > 0.0).then(|| sum * (1.0 / area))
 }
+
+// UI-independent candidate search and accurate analytic geometry. Keeping the original
+// snap_points contract intact preserves older command callers and mesh fallbacks.
+#[path = "snap/smart.rs"]
+mod smart;
+pub use smart::{
+    SnapAccuracy, SnapCandidate, SnapClipDepth, SnapError, SnapGeometry, SnapInference,
+    SnapObject, SnapPlane, SnapQuery, SnapResult, SnapScreenPoint, SnapSettings,
+    SnapTransform, SnapView, legacy_snap_objects, query_snaps,
+};
