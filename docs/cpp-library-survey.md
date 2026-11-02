@@ -15,7 +15,7 @@ Verdict key:
 
 | # | Library | Licence (SPDX) | Copyleft | Static / dynamic link into MIT/Apache binary | Language / build | Rust binding | What it gives Arclet | Verdict |
 |---|---|---|---|---|---|---|---|---|
-| 1 | openNURBS | MIT (Rhino developer licence page; copyright 1993-2026 McNeel) | None | Both fine, keep the notice | C++, CMake and VS/Xcode | None found in this survey (rhino3dm exists for JS and Python, not Rust) | 3DM read/write, NURBS evaluation | USE |
+| 1 | openNURBS | UNVERIFIED: the repository LICENSE has no explicit permission grant; the Rhino developer page says MIT | None | Both fine, keep the notice | C++, CMake and VS/Xcode | None found in this survey (rhino3dm exists for JS and Python, not Rust) | 3DM read/write, NURBS evaluation | USE |
 | 2 | OpenCASCADE (OCCT) | LGPL-2.1 with OCCT exception | Weak copyleft | Project rule: not allowed | C++, CMake | `cadrum` and `chijin` wrap OCCT but bundle it (LGPL) | B-rep kernel, STEP/IGES | AVOID |
 | 3 | CGAL | GPL / LGPL / commercial (per-package; not resolved here) | Strong (GPL parts) | Project rule: not allowed | C++, CMake | None checked | Geometry algorithms | AVOID |
 | 4 | Manifold | Apache-2.0 | None | Both fine | C++, CMake | `manifold3d` 0.4.0 (Apache-2.0 OR MIT), `manifold-csg` 0.4.1 | Guaranteed-manifold mesh booleans | USE |
@@ -136,3 +136,7 @@ For orientation only. Nothing here is to be copied.
 - Blocked or not retrieved: CGAL licence page, MeshLab site, CPython licence page, Gmsh GitLab page, Onshape page, FreeCAD and Fusion pages, TinyNURBS repo, openNURBS repo LICENSE file, earcut at nothings/, OpenSubdiv LICENSE.txt, libtess2 licence text.
 - Not searched: Rust bindings for Assimp, Embree, OpenSubdiv, Bullet (rapier is the native alternative), and licence text of the Rust crates listed.
 - None of the candidates is marked USE-DYNAMIC-ONLY.
+
+## Update: openNURBS licence is unresolved
+
+The repository `LICENSE` (read directly) is a copyright line, a warranty disclaimer and the bundled zlib licence. It contains no explicit grant of permission. The MIT claim rests only on a web page. Until McNeel confirms in writing, treat openNURBS as **not cleared**: do not vendor, link or port it, and do not use it as a source of code. A clean-room 3DM reader based on the public file-format description is the safe alternative.
