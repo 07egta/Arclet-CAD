@@ -246,9 +246,18 @@ pub(super) fn check(s: &mut Session, p: &Value) -> Result<Value> {
     // Diagnose the original before welding. Otherwise a malformed facet that
     // the exporter silently drops could appear as a successfully repaired mesh.
     let source_topology = super::analyze(positions, triangles, 0.0);
+    // Even a valid source triangle may disappear at the exporter's weld
+    // tolerance. Detect that loss BEFORE the permissive weld drops it.
+    let pre_weld_topology = if weld > 0.0 {
+        super::analyze(positions, triangles, weld)
+    } else {
+        source_topology.clone()
+    };
+    let collapsed_by_weld = pre_weld_topology["collapsed_after_weld"].as_u64().unwrap_or(0) > 0;
     let malformed_input = ["invalid_index_triangles", "nonfinite_vertices",
         "degenerate_triangles", "duplicate_faces"]
-        .iter().any(|key| source_topology[*key].as_u64().unwrap_or(0) > 0);
+        .iter().any(|key| source_topology[*key].as_u64().unwrap_or(0) > 0)
+        || collapsed_by_weld;
     let (print_positions, print_triangles) = if malformed_input {
         (Vec::new(), Vec::new())
     } else {
@@ -296,8 +305,11 @@ pub(super) fn check(s: &mut Session, p: &Value) -> Result<Value> {
         else { "passed_limited_screening" };
     let mut blockers = Vec::new();
     let mut warnings = Vec::new();
-    if malformed_input {
+    if malformed_input && !collapsed_by_weld {
         blockers.push("source mesh has invalid/duplicate triangles");
+    }
+    if collapsed_by_weld {
+        blockers.push("the selected export weld tolerance collapses one or more nondegenerate triangles");
     }
     if !topology_ok {
         blockers.push("export candidate is not a closed, outward, two-manifold solid");
@@ -332,6 +344,8 @@ pub(super) fn check(s: &mut Session, p: &Value) -> Result<Value> {
         "bounds": {"min": bounds.min, "max": bounds.max},
         "size_mm": [dimensions.x, dimensions.y, dimensions.z],
         "source_topology": source_topology,
+        "pre_weld_topology": pre_weld_topology,
+        "triangles_collapsed_by_weld": collapsed_by_weld,
         "topology": topology,
         "candidate_mesh_method": "standard_STL_3MF_tessellation_and_weld_when_defaults_used",
         "candidate_mesh_vertices": print_positions.len(),
