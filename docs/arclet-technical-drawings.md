@@ -9,12 +9,12 @@ manufacturing section drawing.
 ## Supported today
 
 - Orthographic principal views (front/top/right) and user-defined orthographic
-  view bases via existing \`NamedView\` / \`basis_looking\`. First- and third-angle
+  view bases via existing `NamedView` / `basis_looking`. First- and third-angle
   triplets can be fitted to A4/A3/other supported sheets with one ISO 5455
   **preset scale**, independent of rendering DPI.
 - Orthographic B-rep edge and silhouette projection using the **existing** HLR
-  engine in \`crates/geom/src/hlr\`. The returned sheet-mm geometry keeps
-  \`visible\`, \`hidden\`, \`uncertain\`, underlying source identity, and curve
+  engine in `crates/geom/src/hlr`. The returned sheet-mm geometry keeps
+  `visible`, `hidden`, `uncertain`, underlying source identity, and curve
   approximation accuracy. Options can include or suppress hidden lines;
   unsupported faces are returned separately, not claimed accurate.
 - Scaled section geometry (including wires, material region references, sample
@@ -31,14 +31,14 @@ manufacturing section drawing.
   Text placement and rendering are left to the user interface. No collision
   avoidance, GD&T tolerancing or standard-compliant layout is claimed.
 - Unit formatting for all length units accepted in drawing records. Stored
-  \`FollowModel\` requires the caller's actual model unit; \`Fixed\` overrides it.
-- \`Drawing::three_view_frames\`, \`Drawing::render_orthographic_view\` and
-  \`Drawing::dimension_style_for\` link runtime views to an existing
+  `FollowModel` requires the caller's actual model unit; `Fixed` overrides it.
+- `Drawing::three_view_frames`, `Drawing::render_orthographic_view` and
+  `Drawing::dimension_style_for` link runtime views to an existing
   drawing sheet and source identifier.
 
 ## API sketch
 
-\`\`\`rust
+```rust
 use solidcraft_doc::drawing::runtime::LinkedView;
 use solidcraft_geom::drawing_view::technical::{
     LineDisplay, ProjectionConvention,
@@ -71,17 +71,17 @@ let style = drawing.dimension_style_for(
 let annotation = linear_dimension(
     &views.front, first_model_point, second_model_point, 12.0, style
 )?;
-\`\`\`
+```
 
 After an edit, **evaluate the model again**, re-prepare changed B-reps, and call
-\`render_orthographic_view\` again with the latest definitions/placements.
+`render_orthographic_view` again with the latest definitions/placements.
 The API does not cache geometry or subscribe to model-change events; the
 caller owns the correctness of the model ↔ source ID association.
 
-The original \`Drawing\` JSON schema is unchanged; generated lines, view frames
+The original `Drawing` JSON schema is unchanged; generated lines, view frames
 and dimensions are **not saved** in a drawing file. Persisting these requires
 a separate change in
-\`crates/doc/src/drawing/format/pending/\` with the documented migration
+`crates/doc/src/drawing/format/pending/` with the documented migration
 procedure. This PR intentionally does not touch the format.
 
 ## Validation and limits
@@ -102,13 +102,13 @@ Tests added to existing area test files cover:
 
 Run after installing Rust:
 
-\`\`\`bash
+```bash
 cargo fmt --check
 cargo test -p solidcraft-geom drawing_view::tests
 cargo test -p solidcraft-geom hlr::tests::technical_
 cargo test -p solidcraft-doc drawing::tests
 cargo xtask ci
-\`\`\`
+```
 
 **Not verified here:** a local Rust toolchain was not available. CI must
 compile and run the tests before merging. Existing global CI failures should
@@ -119,4 +119,4 @@ section hatch, robust end-to-end views for curved trimmed NURBS, annotation
 layout/text collision detection, datum/tolerance symbols, persistence and
 migration of editable views/dimensions, UI workflow, print/export and
 associative invalidation/rebuild scheduling. See the HLR engine's declared
-\`unsupported\` / \`uncertain\` outputs for the exact-shape limits.
+`unsupported` / `uncertain` outputs for the exact-shape limits.
