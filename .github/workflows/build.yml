@@ -99,8 +99,11 @@ jobs:
           name: solidcraft-web
           path: dist/web
 
-  tests:
-    name: Tests
+  # Three jobs instead of one. The workspace test build is large, and a single job that runs
+  # every area hides which area failed and can be killed before it reports a result. Each job
+  # keeps its own log, and the checks list names the area that broke.
+  tests-geom-ui:
+    name: Tests (geometry, document, UI)
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -108,32 +111,80 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev mesa-vulkan-drivers
-      - name: Tests
+      - name: Tests (geometry, document, UI)
         shell: bash
         run: |
           set +e
           # The shared-state UI tests in this group (theme and GPU/CPU image comparisons) run one
           # at a time; their assertions and image tolerances stay unchanged.
-          RUST_TEST_THREADS=1 cargo test --profile ci --locked -p solidcraft-geom -p solidcraft-doc -p solidcraft-ui-egui --lib 2>&1 | tee test1.log
-          s1=${PIPESTATUS[0]}
-          cargo test --profile ci --locked -p solidcraft-engine --lib -- --skip robustness --skip hostile_params 2>&1 | tee test2.log
-          s2=${PIPESTATUS[0]}
-          cargo test --profile ci --locked -p meltcad 2>&1 | tee test3.log
-          s3=${PIPESTATUS[0]}
+          RUST_TEST_THREADS=1 cargo test --profile ci --locked -p solidcraft-geom -p solidcraft-doc -p solidcraft-ui-egui --lib 2>&1 | tee test.log
+          status=${PIPESTATUS[0]}
           # Show what failed as annotations, so the result can be read without the full log.
-          grep -hE "^test .* FAILED|panicked at|^error(\[|:)" test1.log test2.log test3.log | head -30 | while read -r line; do echo "::error::$line"; done
-          grep -hE "test result" test1.log test2.log test3.log | while read -r line; do echo "::notice::$line"; done
-          # Combine failures as a boolean: exit codes are eight-bit values, so adding several
-          # failures can wrap around to a successful zero.
-          if ((s1 != 0 || s2 != 0 || s3 != 0)); then
-            exit 1
-          fi
-      - name: Retain test logs
+          grep -hE "^test .* FAILED|panicked at|^error(\[|:)" test.log | head -30 | while read -r line; do echo "::error::$line"; done
+          grep -hE "test result" test.log | while read -r line; do echo "::notice::$line"; done
+          exit $status
+      - name: Retain the test log
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
-          name: regression-test-logs
-          path: test*.log
+          name: test-log-geom-ui
+          path: test.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+  tests-engine:
+    name: Tests (engine)
+    runs-on: ubuntu-latest
+    # The engine suite is the largest single area. Give a slow runner room instead of letting
+    # the job timeout kill a run that has not reported anything yet.
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev mesa-vulkan-drivers
+      - name: Tests (engine)
+        shell: bash
+        run: |
+          set +e
+          cargo test --profile ci --locked -p solidcraft-engine --lib -- --skip robustness --skip hostile_params 2>&1 | tee test.log
+          status=${PIPESTATUS[0]}
+          grep -hE "^test .* FAILED|panicked at|^error(\[|:)" test.log | head -30 | while read -r line; do echo "::error::$line"; done
+          grep -hE "test result" test.log | while read -r line; do echo "::notice::$line"; done
+          exit $status
+      - name: Retain the test log
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-log-engine
+          path: test.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+  tests-meltcad:
+    name: Tests (MeltCAD)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev mesa-vulkan-drivers
+      - name: Tests (MeltCAD)
+        shell: bash
+        run: |
+          set +e
+          cargo test --profile ci --locked -p meltcad 2>&1 | tee test.log
+          status=${PIPESTATUS[0]}
+          grep -hE "^test .* FAILED|panicked at|^error(\[|:)" test.log | head -30 | while read -r line; do echo "::error::$line"; done
+          grep -hE "test result" test.log | while read -r line; do echo "::notice::$line"; done
+          exit $status
+      - name: Retain the test log
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-log-meltcad
+          path: test.log
           if-no-files-found: ignore
           retention-days: 7
 
@@ -171,7 +222,7 @@ jobs:
   publish:
     name: Publish tested YURACAD Windows release
     if: github.event_name == 'push' && github.ref == 'refs/heads/integration/yuracad-20261017'
-    needs: [windows, tests]
+    needs: [windows, tests-geom-ui, tests-engine, tests-meltcad]
     runs-on: ubuntu-latest
     # Serialize updates from successful workflows, rather than clobbering concurrently.
     concurrency:
