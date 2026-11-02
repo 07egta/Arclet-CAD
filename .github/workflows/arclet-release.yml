@@ -28,7 +28,8 @@ permissions:
 
 concurrency:
   group: arclet-release-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # Cancel superseded branch/PR builds; never cancel a manually approved draft.
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 
 env:
   CARGO_TERM_COLOR: always
