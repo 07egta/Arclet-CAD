@@ -1115,7 +1115,7 @@ pub fn sampled_surface_quality(surface: &NurbsSurface, samples: usize) -> Spline
     if !(median > 0.0 && median.is_finite() && max_stretch.is_finite()) {
         return invalid("the surface Jacobian is not finite");
     }
-    let relative = areas[0..].iter().copied().fold(f64::INFINITY, f64::min) / median;
+    let relative = areas.iter().copied().fold(f64::INFINITY, f64::min) / median;
     let mut angle = 0.0_f64;
     let mut folds = 0;
     for j in 0..samples {
@@ -1804,7 +1804,10 @@ mod tests {
         let mut first = Track::new(line("first", Vec3::ZERO, Vec3::X * 10.0)).unwrap();
         let mut second = Track::new(line("second", Vec3::X * 2.0, Vec3::X * 8.0)).unwrap();
         let error = closest(&mut first, &mut second, 1e-4).unwrap_err();
-        assert!(error.to_string().contains("tangentially") || error.to_string().contains("overlap"), "{error}");
+        assert!(
+            ["tangentially", "overlap", "more than once"].iter().any(|word| error.to_string().contains(word)),
+            "overlapping inputs must be rejected, not treated as one crossing: {error}"
+        );
     }
 
     /// A shallow sinusoid crosses twice while its *whole length* remains near the
