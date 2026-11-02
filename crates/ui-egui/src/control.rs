@@ -1699,6 +1699,51 @@ mod tests {
         assert_eq!(inspect(&mut h)["sketches"].as_array().map(Vec::len), Some(40));
     }
 
+    /// Two agents editing the same desktop document must use a fresh revision
+    /// token. The guard is checked inside the queued batch, before any mutation.
+    #[test]
+    fn engine_batch_rejects_stale_ai_revision_atomically() {
+        let mut h = crate::scenario::Harness::new();
+        let caps = h.call("control.capabilities", json!({}));
+        assert_eq!(caps["result"]["atomic_batch_guards"], true, "{caps}");
+        let token = h.call("document.revision", json!({}))["result"].clone();
+        assert!(token["document_id"].is_string(), "{token}");
+        assert!(token["revision"].is_u64(), "{token}");
+
+        let args = json!({
+            "commands": [{"command": "solid.box", "params": {"length": 10, "width": 10, "height": 10}}],
+            "if_document_id": token["document_id"],
+            "if_revision": token["revision"],
+        });
+        let accepted = batch(&mut h, args.clone());
+        assert_eq!(accepted["ok"], true, "{accepted}");
+        assert_eq!(accepted["result"]["completed"], 1, "{accepted}");
+
+        let stale = batch(&mut h, args);
+        assert_eq!(stale["ok"], true, "{stale}");
+        assert_eq!(stale["result"]["completed"], 0, "{stale}");
+        assert_eq!(stale["result"]["failed"]["code"], "stale_state", "{stale}");
+        assert_eq!(stale["result"]["not_run"], json!([0]), "{stale}");
+        assert_eq!(inspect(&mut h)["bodies"].as_array().map(Vec::len), Some(1));
+
+        let missing = batch(&mut h, json!({
+            "commands": [{"command": "solid.box", "params": {"length": 5, "width": 5, "height": 5}}],
+            "if_document_id": token["document_id"],
+        }));
+        assert_eq!(missing["result"]["failed"]["code"], "invalid_precondition", "{missing}");
+        assert_eq!(inspect(&mut h)["bodies"].as_array().map(Vec::len), Some(1));
+
+        // Fresh token after a geometry edit permits another atomic batch.
+        let current = h.call("document.revision", json!({}))["result"].clone();
+        let fresh = batch(&mut h, json!({
+            "commands": [{"command": "solid.box", "params": {"length": 5, "width": 5, "height": 5, "corner": [20, 0, 0]}}],
+            "if_document_id": current["document_id"],
+            "if_revision": current["revision"],
+        }));
+        assert_eq!(fresh["result"]["completed"], 1, "{fresh}");
+        assert_eq!(inspect(&mut h)["bodies"].as_array().map(Vec::len), Some(2));
+    }
+
     /// #5822: `engine.batch {coalesce_parameters}` sets a run of parameter edits together, one
     /// rebuild, and answers each step; a refused edit is named by its own step and the batch goes
     /// back. Unasked, each edit runs on its own as before.
