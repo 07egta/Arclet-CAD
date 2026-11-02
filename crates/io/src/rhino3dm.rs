@@ -146,7 +146,7 @@ fn list_chunks_limited(bytes: &[u8], limit: usize) -> Result<Listing, Error> {
 
 fn check_header(bytes: &[u8]) -> Result<u32, Error> {
     if !is_3dm(bytes) {
-        if bytes.len() < SIGNATURE.len() && SIGNATURE.starts_with(bytes) {
+        if !bytes.is_empty() && bytes.len() < SIGNATURE.len() && SIGNATURE.starts_with(bytes) {
             return Err(Error::Truncated { at: bytes.len() });
         }
         return Err(Error::NotRhino);
@@ -251,7 +251,7 @@ mod tests {
 
     #[test]
     fn bad_version_field_is_invalid() {
-        for v in ["       x", "        ", "99999999999"] {
+        for v in ["       x", "        ", "12ab5678"] {
             let bytes = header(v);
             assert!(matches!(list_chunks(&bytes), Err(Error::Invalid(_))), "version field {v:?}");
         }
@@ -289,7 +289,7 @@ mod tests {
     fn length_one_past_the_end_is_invalid() {
         let mut bytes = file("8", &[]);
         bytes.extend_from_slice(&2u32.to_le_bytes());
-        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.extend_from_slice(&2u32.to_le_bytes());
         bytes.push(0xAA);
         assert!(matches!(list_chunks(&bytes), Err(Error::Invalid(_))));
     }
