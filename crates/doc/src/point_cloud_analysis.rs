@@ -281,7 +281,7 @@ impl<'a> KdIndex<'a> {
         let p = self.points[node.index];
         if Some(node.index) != exclude {
             let d2 = (q - p).len2();
-            if best.is_none_or(|(id, d)| d2 < d || (d2 == d && node.index < id)) {
+            if best.is_none_or(|(_, d)| d2 < d) {
                 *best = Some((node.index, d2));
             }
         }
@@ -289,7 +289,7 @@ impl<'a> KdIndex<'a> {
         let (near, far) = if delta <= 0.0 { (node.low, node.high) } else { (node.high, node.low) };
         if let Some(child) = near { self.visit(child, q, exclude, best); }
         if let Some(child) = far
-            && best.is_none_or(|(_, distance)| delta * delta <= distance)
+            && best.is_none_or(|(_, distance)| delta * delta < distance)
         {
             self.visit(child, q, exclude, best);
         }
@@ -432,8 +432,8 @@ mod tests {
             let actual = index.nearest(q, None).unwrap();
             let expected = sample.offsets.iter().enumerate().map(|(i, p)| (i, (q - *p).len()))
                 .min_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0))).unwrap();
-            assert_eq!(actual.0, expected.0);
             assert!((actual.1 - expected.1).abs() < 1e-10);
+            assert!((q - sample.offsets[actual.0]).len() - expected.1 < 1e-10);
         }
         let report = sample.outliers().unwrap();
         assert!(report.outlier_count >= 1, "{report:?}");
@@ -455,6 +455,18 @@ mod tests {
         assert!((alignment.translation_mm - Vec3::new(-130.0, 70.0, -25.0)).len() < 1e-5, "{alignment:?}");
         assert!(alignment.quality.rms_mm < 1e-6, "{alignment:?}");
         assert_eq!(b.origin, Vec3::new(9e8 + 130.0, -70.0, 25.0));
+    }
+
+    #[test]
+    fn dense_duplicate_points_do_not_force_full_kd_tree_scans() {
+        let raw = vec![[10.0, 10.0, 10.0]; 20_000];
+        let scan = cloud(raw, Vec3::ZERO);
+        let sample = CloudSample::new(&scan, 20_000).unwrap();
+        let near = sample.nearest_world(Vec3::new(10.0, 10.0, 10.0)).unwrap();
+        assert_eq!(near.distance_mm, 0.0);
+        let outliers = sample.outliers().unwrap();
+        assert_eq!(outliers.outlier_count, 0);
+        assert_eq!(outliers.median_neighbor_mm, 0.0);
     }
 
     #[test]
