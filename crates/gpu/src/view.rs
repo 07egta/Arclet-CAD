@@ -908,6 +908,32 @@ pub struct GpuImage {
 /// Image vertex: position (3 × f32), uv (2 × f32), opacity (f32).
 const IMG_SIZE: usize = 24;
 
+/// Exact bits of a reference-image quad. Pixel changes never invalidate its vertex buffer;
+/// only a corner or opacity edit does. The ID is the cache map key, not part of this key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ImageQuadKey {
+    corners: [[u32; 3]; 4],
+    opacity: u32,
+}
+
+fn image_quad_key(image: &GpuImage) -> ImageQuadKey {
+    ImageQuadKey {
+        corners: image.corners.map(|corner| corner.map(f32::to_bits)),
+        opacity: image.opacity.to_bits(),
+    }
+}
+
+/// Consume the previous frame's quad only when this image has identical vertex contents.
+/// Retained buffers keep their memory on the device across camera-only redraws; image order
+/// is rebuilt separately in the Frame's order (so alpha blending order is not disturbed).
+fn take_cached_image_quad<T>(
+    previous: &mut std::collections::HashMap<u64, (ImageQuadKey, T)>,
+    id: u64,
+    key: ImageQuadKey,
+) -> Option<T> {
+    previous.remove(&id).and_then(|(old_key, buffer)| (old_key == key).then_some(buffer))
+}
+
 /// A point cloud: round dots of a size on screen, depth-tested and written like the model's
 /// faces.
 #[derive(Clone)]
@@ -1218,7 +1244,14 @@ pub fn placement_scale(rows: &[[f32; 4]; 3], bounds: &[[f32; 3]; 2], vp: &[[f32;
 /// The coarsest level whose error (mm; level 0, the full triangles, has none) stays under
 /// [`LOD_PX`] at `scale` pixels per millimetre.
 pub fn level_for(errors: &[f32], scale: f32) -> usize {
-    errors.iter().rposition(|e| *e * scale <= LOD_PX).unwrap_or(0)
+    level_for_iter(errors.iter().copied(), scale)
+}
+
+/// Pick a level directly from the renderer's resident level metadata. Camera interaction
+/// takes the errors from an iterator instead of collecting a temporary Vec for every instanced
+/// object on every frame.
+fn level_for_iter(errors: impl DoubleEndedIterator<Item = f32> + ExactSizeIterator, scale: f32) -> usize {
+    errors.enumerate().rfind(|(_, error)| *error * scale <= LOD_PX).map_or(0, |(index, _)| index)
 }
 
 /// Whether a box (`bounds`, min and max) moved by a placement (`rows`, see [`INSTANCE_SIZE`])
@@ -1831,7 +1864,6 @@ impl Batches {
         self.cull_blocks(vp);
         let f = |b: &[u8], i: usize| b.get(i..i + 4).and_then(|x| x.try_into().ok()).map_or(0.0, f32::from_le_bytes);
         for d in &mut self.instanced {
-            let errors: Vec<f32> = d.levels.iter().map(|l| l.error).collect();
             let mut shown: Vec<(u32, u8)> = d
                 .placements
                 .as_chunks::<INSTANCE_SIZE>()
@@ -1841,7 +1873,12 @@ impl Batches {
                 .filter_map(|(i, p)| {
                     let rows = [0, 1, 2].map(|r| [f(&p[..], 16 * r), f(&p[..], 16 * r + 4), f(&p[..], 16 * r + 8), f(&p[..], 16 * r + 12)]);
                     placed_box_in_view(&rows, &d.bounds, vp).then(|| {
-                        let level = if errors.len() > 1 { level_for(&errors, placement_scale(&rows, &d.bounds, vp, size)) } else { 0 };
+                        let level = if d.levels.len() > 1 {
+                            let scale = placement_scale(&rows, &d.bounds, vp, size);
+                            level_for_iter(d.levels.iter().map(|l| l.error), scale)
+                        } else {
+                            0
+                        };
                         (i as u32, u8::try_from(level).unwrap_or(0))
                     })
                 })
@@ -2044,8 +2081,8 @@ pub struct Renderer {
     sampler: wgpu::Sampler,
     /// Textures by image id: (version, bind group).
     textures: std::collections::HashMap<u64, (u64, wgpu::BindGroup)>,
-    /// This frame's quads: (image id, vertices).
-    quads: Vec<(u64, Batch)>,
+    /// Reference-image quads in compositing order, reused until corners or opacity change.
+    quads: Vec<(u64, ImageQuadKey, Batch)>,
     /// Point clouds' dots.
     point: wgpu::RenderPipeline,
     /// Point clouds by id: (version, points).
@@ -3334,9 +3371,14 @@ impl Renderer {
         }
         let ao_binds = [scene_bind(&res.model, &res.bind), scene_bind(&res.preview, &res.bind)];
         res.ao.prepare(device, encoder, ao_binds, cb.ao_radius, cb.size_px, res.target.reversed_depth(), [&res.model, &res.preview]);
-        // Images: upload new or changed textures, drop removed ones, rebuild the quads.
+        // Image pixels and geometry have independent lifetimes. Retain the last frame's
+        // vertex buffers across camera movement, even when the full view must be redrawn.
+        // A changed pixel version uploads only its texture, not the six quad vertices.
         res.textures.retain(|id, _| cb.images.iter().any(|i| i.id == *id));
-        res.quads.clear();
+        let mut old_quads: std::collections::HashMap<u64, (ImageQuadKey, Batch)> = std::mem::take(&mut res.quads)
+            .into_iter()
+            .map(|(id, key, batch)| (id, (key, batch)))
+            .collect();
         for img in &cb.images {
             let [w, h] = img.size;
             if w == 0 || h == 0 || img.rgba.len() != (w as usize) * (h as usize) * 4 {
@@ -3371,6 +3413,11 @@ impl Renderer {
                 });
                 res.textures.insert(img.id, (img.version, bind));
             }
+            let key = image_quad_key(img);
+            if let Some(batch) = take_cached_image_quad(&mut old_quads, img.id, key) {
+                res.quads.push((img.id, key, batch));
+                continue;
+            }
             let c = img.corners;
             let uv = [[0.0_f32, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]];
             let mut bytes = Vec::with_capacity(6 * IMG_SIZE);
@@ -3380,7 +3427,7 @@ impl Renderer {
                 }
             }
             if let Some(b) = upload(device, "sc_image_quad", &bytes, IMG_SIZE) {
-                res.quads.push((img.id, b));
+                res.quads.push((img.id, key, b));
             }
         }
         // Point clouds: upload new or changed ones, drop removed ones.
@@ -3678,7 +3725,7 @@ impl Renderer {
         pass.set_bind_group(0, scene_bind(pv, &res.bind), &[]);
         lines(pass, &res.line, &pv.lines);
         pass.set_bind_group(0, scene_bind(m, &res.bind), &[]);
-        for (id, q) in res.quads.iter().filter(|_| !cb.product) {
+        for (id, _, q) in res.quads.iter().filter(|_| !cb.product) {
             if let Some((_, bind)) = res.textures.get(id) {
                 pass.set_pipeline(&res.image);
                 pass.set_bind_group(1, bind, &[]);
@@ -4264,6 +4311,20 @@ mod tests {
         assert_eq!(samples_sent(1000), 32.0, "at most the shader's 32");
     }
 
+    /// The streaming LOD chooser (iterator, no collected Vec) gives the same answers as the
+    /// original slice-based search, including offscreen/infinite projection scales.
+    /// It checks equal output only; it does not count heap allocations.
+    #[test]
+    fn streaming_lod_uses_identical_levels_to_slice_search() {
+        let levels = [0.0, 0.04, 0.2, 2.0];
+        for scale in [0.0, 0.5, 3.0, 12.0, 1e10, f32::INFINITY, f32::NAN] {
+            let old = levels.iter().rposition(|error| *error * scale <= super::LOD_PX).unwrap_or(0);
+            let new = super::level_for_iter(levels.iter().copied(), scale);
+            assert_eq!(new, old, "camera scale {scale} must keep the same LOD");
+            assert_eq!(super::level_for(&levels, scale), old);
+        }
+    }
+
     /// A frame with a fixed picture, and a key that names everything it shows.
     fn cached_frame() -> super::Frame {
         use std::sync::{Arc, Mutex};
@@ -4301,6 +4362,35 @@ mod tests {
 
     fn image(version: u64) -> super::GpuImage {
         super::GpuImage { id: 1, version, size: [2, 2], rgba: std::sync::Arc::new(vec![0; 16]), corners: [[0.0; 3]; 4], opacity: 1.0 }
+    }
+
+    /// Geometry stays resident across pixel edits or camera moves; opacity/corner edits
+    /// invalidate only that image's quad (not every image's cached buffers).
+    #[test]
+    fn reference_image_quad_buffers_have_exact_geometry_keys() {
+        use std::collections::HashMap;
+        let mut img = image(1);
+        let key = super::image_quad_key(&img);
+        let mut old = HashMap::from([(img.id, (key, 100u32))]);
+        assert_eq!(super::take_cached_image_quad(&mut old, img.id, key), Some(100));
+        assert!(old.is_empty(), "the same buffer cannot be consumed twice");
+
+        img.version = 2; // pixel data changed, but six vertices are unchanged
+        let mut old = HashMap::from([(img.id, (key, 101u32))]);
+        assert_eq!(super::take_cached_image_quad(&mut old, img.id, super::image_quad_key(&img)), Some(101));
+
+        img.corners[0][1] = 2.0;
+        let changed = super::image_quad_key(&img);
+        assert_ne!(changed, key);
+        let mut old = HashMap::from([(img.id, (key, 102u32))]);
+        assert_eq!(super::take_cached_image_quad(&mut old, img.id, changed), None);
+
+        img.corners[0][1] = 0.0;
+        img.opacity = 0.3;
+        let changed = super::image_quad_key(&img);
+        assert_ne!(changed, key);
+        let mut old = HashMap::from([(img.id, (key, 103u32))]);
+        assert_eq!(super::take_cached_image_quad(&mut old, img.id, changed), None);
     }
 
     fn access(version: u64) -> super::AccessMap {
