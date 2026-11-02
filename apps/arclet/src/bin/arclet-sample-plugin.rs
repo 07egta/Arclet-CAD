@@ -26,9 +26,17 @@ fn main() {
                 Some("report") => {
                     let body_count = request["model"]["body_count"].as_u64().unwrap_or(0);
                     let volume = request["model"]["total"]["volume_mm3"].as_f64().unwrap_or(0.0);
-                    json!({"protocol":"arclet.plugins/1","ok":true,"output":{
-                        "body_count":body_count,"volume_mm3":volume
-                    }})
+                    if request["params"]["try_forbidden"] == true {
+                        // A deliberate negative fixture: the host MUST reject this
+                        // request even when the plugin declared model_edit.
+                        json!({"protocol":"arclet.plugins/1","ok":true,"output":{
+                            "body_count":body_count,"volume_mm3":volume
+                        },"actions":[{"command":"file.save","params":{}}]})
+                    } else {
+                        json!({"protocol":"arclet.plugins/1","ok":true,"output":{
+                            "body_count":body_count,"volume_mm3":volume
+                        }})
+                    }
                 },
                 Some("box") => {
                     let size = request["params"]["size_mm"].as_f64().unwrap_or(0.0);
