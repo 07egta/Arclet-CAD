@@ -569,8 +569,8 @@ fn runtime_three_views_use_saved_paper_and_source_ids_without_schema_changes() {
     let frames = d.three_view_frames(sheet_id, bounds, ProjectionConvention::ThirdAngle, 12.0).unwrap();
     assert_eq!(frames.front.scale().to_string(), "2:1");
     assert_eq!(frames.front.scale(), frames.right.scale());
-    assert!((frames.front.to_paper(Vec3::new(100.0, 0.0, 0.0))
-        - frames.front.to_paper(Vec3::ZERO)).len() - 200.0 < 1e-10);
+    assert!(((frames.front.to_paper(Vec3::new(100.0, 0.0, 0.0))
+        - frames.front.to_paper(Vec3::ZERO)).len() - 200.0).abs() < 1e-10);
     let request = LinkedView { sheet_id, source_id: d.sources[0].id, frame: frames.front, display: LineDisplay::Visible };
     let opts = hlr::Options::default();
     let cancelled = || false;
