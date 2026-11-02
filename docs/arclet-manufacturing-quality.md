@@ -26,9 +26,11 @@ Its result contains:
 "nozzle_diameter_mm":0.4,"overhang_deg":45}` accepts an imported mesh **or a B-rep**.
 It uses the original mesh for diagnostics and a welded candidate mesh using the STL/3MF
 exporter's weld-radius convention, including T-junction splitting. A B-rep is tessellated
-before welding; the chord target is stated in `chord_target_mm`. Its default tessellation
-is finer than the ordinary STL export, so it is a **candidate** and not a byte-for-byte
-prediction of every exporter output. Set `weld_tolerance_mm` and `chord_mm` explicitly
+before welding; the chord target is stated in `chord_target_mm`. Its **default**
+chord and meshing path match the standard STL/3MF exporter; overriding `chord_mm`
+changes this analysis only. The exporter may additionally quantize coordinates to
+f32 (STL and untagged 3MF), so this remains a candidate rather than a byte-for-byte
+file validation. Set `weld_tolerance_mm` and `chord_mm` explicitly
 for a repeatable analysis.
 
 The report separates:
