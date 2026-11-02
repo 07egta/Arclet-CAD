@@ -76,6 +76,12 @@ impl ConfigTable {
         if self.columns.len() > MAX_COLUMNS || self.rows.len() > MAX_ROWS {
             return Err(DocError::Invalid("configuration table exceeds limits".into()));
         }
+        if self.rows.is_empty() && !self.rules.is_empty() {
+            return Err(DocError::Invalid("configuration rules require at least one row".into()));
+        }
+        if self.rules.len() > MAX_RULES {
+            return Err(DocError::Invalid("too many configuration rules".into()));
+        }
         for (i, column) in self.columns.iter().enumerate() {
             if self.columns[..i].iter().any(|previous| {
                 previous == column
@@ -413,6 +419,17 @@ mod tests {
         table.rows[0].cells.push("40 cm".into());
         table.active = Some("Missing".into());
         assert!(table.validate_layout().unwrap_err().to_string().contains("active configuration"));
+        table.active = None;
+        table.rows.clear();
+        table.rules.push(ConfigRule {
+            id: "rule".into(),
+            name: "Rule".into(),
+            enabled: true,
+            length_unit: None,
+            condition: RuleCondition::Always,
+            effect: RuleEffect::DriveSuppression { feature: 1, value: true },
+        });
+        assert!(table.validate_layout().unwrap_err().to_string().contains("require at least one row"));
     }
 
     #[test]
