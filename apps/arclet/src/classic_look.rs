@@ -1,21 +1,19 @@
-//! Arclet's classic look: a neutral light-grey interface with a mid-grey viewport gradient, thin
-//! dark-grey grid lines, blue selection edges and a yellow selected-body colour.
+//! Arclet's Industrial look: quiet neutral surfaces, high-contrast annotations, a restrained
+//! blue interaction accent, and the original CAD convention of yellow selected bodies.
 //!
-//! The palette is the built-in `classic` theme (`assets/styles/ui/themes/classic.json`), an
-//! ordinary option in the Theme list for every app. Only Arclet makes it the default, and only
-//! for a fresh profile: `apply_default` runs before the saved preferences are loaded, so a theme
-//! the user already chose (or the saved `theme` value) still wins. Other apps keep `dark`.
+//! New Arclet profiles default to the built-in `arclet-industrial` palette; existing users
+//! keep their saved theme. The original `classic` theme is left unchanged and selectable.
+//! Other applications retain their independent defaults.
 
 use solidcraft_ui_egui::prefs::Prefs;
 
 /// The built-in theme id Arclet starts with.
-pub(crate) const THEME_ID: &str = "classic";
+pub(crate) const THEME_ID: &str = "arclet-industrial";
 
-/// Make the classic theme Arclet's starting theme. Call before loading saved preferences.
+/// Apply Arclet's new-user theme before loading saved preferences; saved choices win.
 pub(crate) fn apply_default(prefs: &mut Prefs) {
     prefs.theme = THEME_ID.into();
 }
-
 
 /// Desktop chrome measurements in egui **logical points**. The operating system's
 /// pixels-per-point scaling is applied by egui, so multiplying these by DPI again
@@ -79,10 +77,11 @@ mod tests {
     use solidcraft_ui_egui::theme_files;
 
     #[test]
-    fn classic_theme_ships_as_a_builtin_option() {
+    fn arclet_theme_ships_as_a_builtin_option_without_removing_classic() {
         let file = theme_files::find(THEME_ID, &[]).expect("the classic theme is built in");
-        assert_eq!(file.name, "Classic");
+        assert_eq!(file.name, "Arclet Industrial");
         assert!(theme_files::builtin().iter().any(|t| t.id == THEME_ID));
+        assert!(theme_files::find("classic", &[]).is_some(), "existing Classic theme stays selectable");
     }
 
     #[test]
@@ -93,14 +92,14 @@ mod tests {
         for (width, height) in [(1280.0, 720.0), (1366.0, 768.0), (1920.0, 1080.0), (2560.0, 1600.0)] {
             for scale in [1.0, 1.25, 1.5, 2.0] {
                 let bounds = Rect::from_min_size(pos2(0.0, 0.0), vec2(width / scale, height / scale));
-            let size = vec2(248.0, 208.0);
-            for anchor in [
-                Rect::from_min_size(bounds.left_top() + vec2(8.0, 80.0), vec2(36.0, 36.0)),
-                Rect::from_min_size(bounds.right_bottom() - vec2(44.0, 44.0), vec2(36.0, 36.0)),
-            ] {
-                let at = chrome::flyout_origin(bounds, anchor, size);
-                let popup = Rect::from_min_size(at, size);
-                assert!(bounds.contains(popup.min) && bounds.contains(popup.max), "{width}x{height} at {scale}x: {popup:?}");
+                let size = vec2(chrome::FLYOUT_WIDTH, 208.0);
+                for anchor in [
+                    Rect::from_min_size(bounds.left_top() + vec2(8.0, 80.0), vec2(36.0, 36.0)),
+                    Rect::from_min_size(bounds.right_bottom() - vec2(44.0, 44.0), vec2(36.0, 36.0)),
+                ] {
+                    let at = chrome::flyout_origin(bounds, anchor, size);
+                    let popup = Rect::from_min_size(at, size);
+                    assert!(bounds.contains(popup.min) && bounds.contains(popup.max), "{width}x{height} at {scale}x: {popup:?}");
                 }
             }
         }
@@ -110,7 +109,7 @@ mod tests {
     }
 
     #[test]
-    fn classic_chrome_text_passes_normal_text_contrast() {
+    fn arclet_chrome_text_passes_normal_text_contrast() {
         fn linear(channel: u8) -> f64 {
             let value = f64::from(channel) / 255.0;
             if value <= 0.04045 { value / 12.92 } else { ((value + 0.055) / 1.055).powf(2.4) }
@@ -137,7 +136,7 @@ mod tests {
     }
 
     #[test]
-    fn classic_theme_has_grey_viewport_and_yellow_selected_body() {
+    fn arclet_theme_has_grey_viewport_and_yellow_selected_body() {
         let file = theme_files::find(THEME_ID, &[]).expect("the classic theme is built in");
         let t = theme_files::resolve(file);
         let grey = |c: Color32| c.r().abs_diff(c.g()) <= 8 && c.g().abs_diff(c.b()) <= 12;
