@@ -988,6 +988,29 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_k_focuses_command_entry_and_escape_clears_it() {
+        let mut frames = AppFrames::new();
+        let shortcut = egui::Modifiers { ctrl: true, command: true, ..Default::default() };
+        frames.frame(vec![egui::Event::Key {
+            key: egui::Key::K,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: shortcut,
+        }]);
+        frames.idle(1);
+        assert!(
+            frames.ctx.memory(|memory| memory.has_focus(egui::Id::new("arclet_command_input"))),
+            "Ctrl+K must focus the actual command editor"
+        );
+        frames.app.command = "top".to_owned();
+        frames.idle(1);
+        frames.press_escape();
+        assert!(frames.app.command.is_empty(), "Escape clears a partially entered command");
+        assert!(frames.app.command_error.is_none());
+    }
+
+    #[test]
     fn compact_header_exposes_real_commands_at_laptop_width() {
         let mut frames = AppFrames::with_size(960.0, 600.0);
         let top = frames.accesskit_buttons();

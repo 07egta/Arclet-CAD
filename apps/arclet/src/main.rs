@@ -10,12 +10,29 @@ mod statusbar;
 mod toolbars;
 
 #[cfg(not(target_arch = "wasm32"))]
+fn screenshot_window_size(value: &str) -> Option<[f32; 2]> {
+    // Developer-only capture aid. Reject malformed, non-finite and tiny windows;
+    // the usual Arclet default and its minimum size are unchanged.
+    let (width, height) = value.split_once('x')?;
+    let width = width.parse::<f32>().ok()?;
+    let height = height.parse::<f32>().ok()?;
+    if !(960.0..=3840.0).contains(&width) || !(600.0..=2160.0).contains(&height) {
+        return None;
+    }
+    Some([width, height])
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn main() -> eframe::Result {
+    let initial_size = std::env::var("ARCLET_WINDOW_SIZE")
+        .ok()
+        .and_then(|value| screenshot_window_size(&value))
+        .unwrap_or([1440.0, 900.0]);
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Arclet CAD")
             .with_app_id("arclet-cad")
-            .with_inner_size([1440.0, 900.0])
+            .with_inner_size(initial_size)
             .with_min_inner_size([960.0, 600.0])
             .with_decorations(true),
         renderer: eframe::Renderer::Wgpu,
@@ -72,4 +89,18 @@ async fn start_web() -> Result<(), String> {
         element.remove();
     }
     Ok(())
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod screenshot_size_tests {
+    use super::screenshot_window_size;
+
+    #[test]
+    fn capture_size_accepts_supported_resolutions_only() {
+        assert_eq!(screenshot_window_size("960x600"), Some([960.0, 600.0]));
+        assert_eq!(screenshot_window_size("1440x900"), Some([1440.0, 900.0]));
+        for invalid in ["0x0", "959x600", "960x599", "NaNx900", "960x600x24", "-1x600", "abc"] {
+            assert_eq!(screenshot_window_size(invalid), None, "{invalid}");
+        }
+    }
 }

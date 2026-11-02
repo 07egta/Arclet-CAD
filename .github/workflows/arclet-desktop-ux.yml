@@ -1,0 +1,55 @@
+name: Arclet desktop UX
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "apps/arclet/**"
+      - "assets/locales/pending/arclet-desktop-ux.json"
+      - "docs/arclet-four-viewport-boundary.md"
+      - ".github/workflows/arclet-desktop-ux.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  arclet-ui:
+    name: Arclet UI tests and screenshots
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install native display dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb libxkbcommon-dev libwayland-dev libx11-dev mesa-vulkan-drivers
+      - name: Test actual Arclet egui interaction frames and command shortcuts
+        run: cargo test --profile ci --locked -p arclet
+      - name: Lint Arclet
+        run: cargo clippy --profile ci --locked -p arclet --all-targets -- -D warnings
+      - name: Build Arclet application
+        run: cargo build --profile ci --locked -p arclet
+      - name: Capture real Arclet windows at two sizes
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/arclet-screenshots"
+          for size in 1440x900 960x600; do
+            echo "Capturing Arclet at $size"
+            ARCLET_WINDOW_SIZE="$size" LIBGL_ALWAYS_SOFTWARE=1 WGPU_BACKEND=vulkan \
+              xvfb-run -a -s "-screen 0 1920x1200x24" \
+              timeout 180s target/ci/arclet --sample --screenshot "$RUNNER_TEMP/arclet-screenshots/after-$size.png"
+            test -s "$RUNNER_TEMP/arclet-screenshots/after-$size.png"
+            file "$RUNNER_TEMP/arclet-screenshots/after-$size.png"
+          done
+      - name: Retain real-window screenshots for human review
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: arclet-desktop-ux-screenshots
+          retention-days: 7
+          if-no-files-found: warn
+          path: ${{ runner.temp }}/arclet-screenshots/*.png

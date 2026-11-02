@@ -49,3 +49,15 @@ never suggest that four independent live cameras are available before they are.
 
 This branch only changes `apps/arclet`, its pending UI strings and this
 contract. It does not modify `apps/meltcad` or shared renderer behavior.
+
+## Visual evidence capture
+
+An Arclet screenshot already present on the base branch is
+[`docs/screenshots/arclet-ui-2026-11-02.png`](screenshots/arclet-ui-2026-11-02.png).
+The dedicated `arclet-desktop-ux.yml` PR workflow builds and runs the **changed
+Arclet app**, taking 1440x900 and 960x600 PNGs using the real `ui.screenshot`
+path and the explicit `ARCLET_WINDOW_SIZE` capture override. Download the
+`arclet-desktop-ux-screenshots` workflow artifact and compare the wide capture
+to the committed baseline. The baseline does not show a narrow-window run.
+Capture availability by itself is not visual verification; check the images
+manually for legibility, clipping and focus states before marking PR ready.
