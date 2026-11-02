@@ -559,6 +559,8 @@ mod tests {
         assert_eq!(topology["closed"], true, "{topology}");
         assert_eq!(topology["naked_edges"], 0);
         assert_eq!(topology["non_manifold_vertices"], 0);
+        assert_eq!(topology["connected_shells"], 2);
+        assert_eq!(topology["shell_nesting_checked"], false);
         let volume_mm3 = topology["signed_volume_mm3"].as_f64().unwrap();
         assert!((volume_mm3 - (20.0_f64.powi(3) - 16.0_f64.powi(3))).abs() < 1e-8);
         let intersections = intersection_screen(&vertices, &faces, 1e-9);
