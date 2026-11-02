@@ -1,0 +1,80 @@
+{
+  "commands": [
+    {
+      "command": "file.new",
+      "params": {
+        "name": "AI Tube"
+      }
+    },
+    {
+      "command": "parameters.add",
+      "params": {
+        "name": "H",
+        "expression": "12 mm"
+      }
+    },
+    {
+      "command": "sketch.create",
+      "params": {
+        "plane": "XY",
+        "name": "Outer profile"
+      }
+    },
+    {
+      "command": "sketch.circle.center",
+      "params": {
+        "center": [
+          0,
+          0
+        ],
+        "radius": 12
+      }
+    },
+    {
+      "command": "sketch.finish",
+      "params": {}
+    },
+    {
+      "command": "solid.extrude",
+      "params": {
+        "distance": "H",
+        "body_name": "Tube"
+      }
+    },
+    {
+      "command": "parameters.change",
+      "params": {
+        "name": "H",
+        "expression": "20 mm"
+      }
+    },
+    {
+      "command": "sketch.create",
+      "params": {
+        "plane": "XY",
+        "name": "Bore"
+      }
+    },
+    {
+      "command": "sketch.circle.center",
+      "params": {
+        "center": [
+          0,
+          0
+        ],
+        "radius": 3
+      }
+    },
+    {
+      "command": "sketch.finish",
+      "params": {}
+    },
+    {
+      "command": "solid.extrude",
+      "params": {
+        "distance": "H",
+        "operation": "cut"
+      }
+    }
+  ]
+}
