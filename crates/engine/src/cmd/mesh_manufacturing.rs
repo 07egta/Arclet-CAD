@@ -536,6 +536,35 @@ mod tests {
     }
 
     #[test]
+    fn sealed_hollow_case_has_outer_and_inner_shells_and_correct_net_volume() {
+        let (mut vertices, mut faces) = box_mesh(20.0, 20.0, 20.0);
+        let (inner, mut inner_faces) = box_mesh(16.0, 16.0, 16.0);
+        let base = vertices.len() as u32;
+        vertices.extend(inner.into_iter().map(|p| p + Vec3::new(2.0, 2.0, 2.0)));
+        for face in &mut inner_faces {
+            for index in face.iter_mut() {
+                *index += base;
+            }
+            // The void's faces must point out of the material and into
+            // the trapped cavity; their signed volume is negative.
+            face.swap(1, 2);
+        }
+        faces.extend(inner_faces);
+        let topology = super::super::analyze(&vertices, &faces, 0.0);
+        assert_eq!(topology["closed"], true, "{topology}");
+        assert_eq!(topology["naked_edges"], 0);
+        assert_eq!(topology["non_manifold_vertices"], 0);
+        let volume_mm3 = topology["signed_volume_mm3"].as_f64().unwrap();
+        assert!((volume_mm3 - (20.0_f64.powi(3) - 16.0_f64.powi(3))).abs() < 1e-8);
+        let intersections = intersection_screen(&vertices, &faces, 1e-9);
+        assert_eq!(intersections["complete"], true, "{intersections}");
+        assert_eq!(intersections["potential_pairs"], 0, "{intersections}");
+        let sampled = wall_screen(&vertices, &faces, 0.4, 20.0);
+        assert_eq!(sampled["certified_minimum_wall_thickness"], false);
+        assert_eq!(sampled["below_nozzle_diameter"], false, "{sampled}");
+    }
+
+    #[test]
     fn a_0_2mm_wall_is_only_a_warning_not_a_printability_certificate() {
         let (vertices, faces) = thin_vase(10.0, 0.2, 0.2, 20.0);
         let topology = super::super::analyze(&vertices, &faces, 0.0);
