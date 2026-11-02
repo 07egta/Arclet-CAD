@@ -8,6 +8,7 @@ use solidcraft_engine::geom::{Vec3, tspline::{TSpline, TMesh, Cut}};
 const KEY: &str = "arclet.organic.workshop.state";
 const SIZE: f32 = 360.0;
 
+#[derive(Clone)]
 struct State {
     open: bool,
     spline: Option<TSpline>,
@@ -49,17 +50,13 @@ impl State {
     }
     fn history(&mut self, backwards: bool) {
         let (source, destination) = if backwards { (&mut self.undo, &mut self.redo) } else { (&mut self.redo, &mut self.undo) };
-        if let (Some(previous), Some(current)) = (source.pop(), self.spline.replace_placeholder()) {
-            destination.push(current);
-            self.spline = Some(previous);
+        if let Some(previous) = source.pop() {
+            if let Some(current) = self.spline.replace(previous) { destination.push(current); }
             self.selected.clear();
             self.error.clear();
         }
     }
 }
-trait ReplacePlaceholder { fn replace_placeholder(&mut self) -> Option<TSpline>; }
-impl ReplacePlaceholder for Option<TSpline> { fn replace_placeholder(&mut self) -> Option<TSpline> { self.take() } }
-
 fn screen(x: f64, y: f64, rect: egui::Rect) -> Pos2 {
     let center = rect.center();
     center + Vec2::new(x as f32 * 3.7, -y as f32 * 3.7)
