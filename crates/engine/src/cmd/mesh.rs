@@ -336,3 +336,176 @@ fn root(parent: &mut [usize], mut x: usize) -> usize {
         x = up;
     }
 }
+
+#[cfg(test)]
+mod manufacturing_quality_tests {
+    use super::*;
+    use solidcraft_geom::{Aabb3, Mesh};
+
+    /// Indexed, outward-oriented 20 mm cube (12 triangles, 8 vertices).
+    fn box_mesh(width: f64, depth: f64, height: f64) -> (Vec<Vec3>, Vec<[u32; 3]>) {
+        let points = vec![
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(width, 0.0, 0.0),
+            Vec3::new(width, depth, 0.0),
+            Vec3::new(0.0, depth, 0.0),
+            Vec3::new(0.0, 0.0, height),
+            Vec3::new(width, 0.0, height),
+            Vec3::new(width, depth, height),
+            Vec3::new(0.0, depth, height),
+        ];
+        let faces = vec![
+            [0, 2, 1], [0, 3, 2], // bottom -Z
+            [4, 5, 6], [4, 6, 7], // top +Z
+            [0, 1, 5], [0, 5, 4], // front -Y
+            [3, 6, 2], [3, 7, 6], // back +Y
+            [0, 4, 7], [0, 7, 3], // left -X
+            [1, 2, 6], [1, 6, 5], // right +X
+        ];
+        (points, faces)
+    }
+
+    fn mm(report: &Value, field: &str, expected: f64, absolute_tolerance: f64) {
+        let got = report[field].as_f64().unwrap_or(f64::NAN);
+        assert!((got - expected).abs() <= absolute_tolerance,
+            "{field}: {got} against {expected} ± {absolute_tolerance}: {report}");
+    }
+
+    #[test]
+    fn exact_cube_is_closed_outward_and_has_correct_volume_area_mm() {
+        let (positions, triangles) = box_mesh(20.0, 20.0, 20.0);
+        let r = analyze(&positions, &triangles, 0.0);
+        assert_eq!(r["closed"], true, "{r}");
+        assert_eq!(r["topologically_closed"], true);
+        assert_eq!(r["consistently_oriented"], true);
+        assert_eq!(r["duplicate_faces"], 0);
+        assert_eq!(r["winding_conflicts"], 0);
+        mm(&r, "signed_volume_mm3", 8_000.0, 1e-8);
+        mm(&r, "surface_area_mm2", 2_400.0, 1e-8);
+    }
+
+    #[test]
+    fn reversed_triangles_are_not_closed_even_with_two_incident_faces_per_edge() {
+        let (positions, mut triangles) = box_mesh(20.0, 20.0, 20.0);
+        triangles[0].swap(1, 2);
+        let r = analyze(&positions, &triangles, 0.0);
+        assert_eq!(r["topologically_closed"], true, "{r}");
+        assert_eq!(r["consistently_oriented"], false, "{r}");
+        assert!(r["winding_conflicts"].as_u64().unwrap_or(0) > 0);
+        assert_eq!(r["closed"], false);
+        for t in &mut triangles {
+            t.swap(1, 2);
+        }
+        // The original reversed face becomes right-handed again, while
+        // all other faces point inward; the winding conflict remains.
+        assert_eq!(analyze(&positions, &triangles, 0.0)["closed"], false);
+        let (positions, mut all_inward) = box_mesh(20.0, 20.0, 20.0);
+        for t in &mut all_inward { t.swap(1, 2); }
+        let inner = analyze(&positions, &all_inward, 0.0);
+        assert_eq!(inner["consistently_oriented"], true);
+        assert_eq!(inner["outward_oriented"], false);
+        mm(&inner, "signed_volume_mm3", -8_000.0, 1e-8);
+        assert_eq!(inner["closed"], false);
+    }
+
+    #[test]
+    fn missing_facets_duplicates_and_nonmanifold_edges_fail_closed() {
+        let (positions, mut triangles) = box_mesh(20.0, 20.0, 20.0);
+        triangles.pop();
+        triangles.pop();
+        let hole = analyze(&positions, &triangles, 0.0);
+        assert_eq!(hole["closed"], false);
+        assert_eq!(hole["naked_edges"], 4);
+        assert_eq!(hole["boundary_loops"], 1);
+        let (_, mut triangles) = box_mesh(20.0, 20.0, 20.0);
+        triangles.push(triangles[0]);
+        let duplicate = analyze(&positions, &triangles, 0.0);
+        assert_eq!(duplicate["duplicate_faces"], 1);
+        assert!(duplicate["non_manifold_edges"].as_u64().unwrap_or(0) >= 3);
+        assert_eq!(duplicate["closed"], false);
+    }
+
+    #[test]
+    fn out_of_range_nonfinite_zero_area_and_weld_collapses_are_invalid() {
+        let (positions, mut triangles) = box_mesh(20.0, 20.0, 20.0);
+        triangles.push([1, 2, 99]);
+        let bad_index = analyze(&positions, &triangles, 0.0);
+        assert_eq!(bad_index["invalid_index_triangles"], 1);
+        assert_eq!(bad_index["closed"], false);
+        triangles.pop();
+        triangles.push([0, 0, 1]);
+        let zero = analyze(&positions, &triangles, 0.0);
+        assert_eq!(zero["degenerate_triangles"], 1);
+        assert_eq!(zero["closed"], false);
+        triangles.pop();
+        let mut nonfinite = positions.clone();
+        nonfinite.push(Vec3::new(f64::NAN, 0.0, 0.0));
+        let invalid = analyze(&nonfinite, &triangles, 0.0);
+        assert_eq!(invalid["nonfinite_vertices"], 1);
+        assert_eq!(invalid["closed"], false);
+        let (thin_positions, thin_triangles) = box_mesh(20.0, 20.0, 0.02);
+        let collapsed = analyze(&thin_positions, &thin_triangles, 0.03);
+        assert!(collapsed["collapsed_after_weld"].as_u64().unwrap_or(0) > 0, "{collapsed}");
+        assert_eq!(collapsed["closed"], false);
+    }
+
+    #[test]
+    fn duplicate_coordinate_vertices_are_counted_without_faking_a_hole() {
+        let (mut positions, mut triangles) = box_mesh(20.0, 20.0, 20.0);
+        positions.push(positions[0]);
+        triangles[0][0] = 8;
+        let report = analyze(&positions, &triangles, 0.0);
+        assert_eq!(report["duplicate_vertices"], 1);
+        assert_eq!(report["closed"], true, "{report}");
+    }
+
+    #[test]
+    fn binary_stl_round_trip_preserves_dimensions_and_outward_volume() {
+        let (positions, triangles) = box_mesh(20.0, 20.0, 20.0);
+        let input = Mesh { positions, triangles, ..Mesh::default() };
+        let bytes = solidcraft_io::stl_binary(&[input], "Cube20");
+        assert_eq!(bytes.len(), 84 + 12 * 50);
+        assert_eq!(u32::from_le_bytes(bytes[80..84].try_into().unwrap()), 12);
+        let read = solidcraft_io::read_stl(&bytes).unwrap();
+        assert_eq!(read.len(), 12);
+        let pos: Vec<Vec3> = read.iter().flat_map(|t| t.iter().map(|p| Vec3::from(p.map(f64::from)))).collect();
+        let idx: Vec<[u32; 3]> = (0..read.len() as u32).map(|n| [3*n, 3*n+1, 3*n+2]).collect();
+        let bounds: Aabb3 = pos.iter().copied().collect();
+        assert_eq!(bounds.size(), Vec3::new(20.0, 20.0, 20.0));
+        let report = analyze(&pos, &idx, 0.0);
+        assert_eq!(report["closed"], true, "{report}");
+        mm(&report, "signed_volume_mm3", 8_000.0, 1e-8);
+    }
+
+    #[test]
+    fn three_mf_round_trip_preserves_multiple_parts_colors_and_mm() {
+        use solidcraft_io::{MeshObject, read_3mf, write_3mf};
+        let (pos, tri) = box_mesh(20.0, 20.0, 20.0);
+        let first = MeshObject {
+            name: "Cube20".to_owned(), positions: pos.clone(), triangles: tri.clone(),
+            color: Some([0.2, 0.4, 0.6]), ..Default::default()
+        };
+        let offset = Vec3::new(30.0, 0.0, 0.0);
+        let second = MeshObject {
+            name: "SecondPart".to_owned(), positions: pos.iter().map(|p| *p + offset).collect(),
+            triangles: tri, ..Default::default()
+        };
+        let bytes = write_3mf(&[first, second]).unwrap();
+        let (objects, warnings) = read_3mf(&bytes).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(objects.len(), 2);
+        let cube = objects.iter().find(|o| o.name == "Cube20").unwrap();
+        let other = objects.iter().find(|o| o.name == "SecondPart").unwrap();
+        let bounds: Aabb3 = cube.positions.iter().copied().collect();
+        let far: Aabb3 = other.positions.iter().copied().collect();
+        assert!(bounds.size().dist(Vec3::new(20.0, 20.0, 20.0)) < 1e-5);
+        assert!(far.min.dist(Vec3::new(30.0, 0.0, 0.0)) < 1e-5);
+        let report = analyze(&cube.positions, &cube.triangles, 0.0);
+        assert_eq!(report["closed"], true, "{report}");
+        mm(&report, "signed_volume_mm3", 8_000.0, 1e-3);
+        let color = cube.color.unwrap();
+        for (got, want) in color.iter().zip([0.2_f32, 0.4, 0.6]) {
+            assert!((*got - want).abs() <= 1.0 / 255.0 + 1e-6);
+        }
+    }
+}
