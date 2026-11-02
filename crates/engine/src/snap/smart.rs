@@ -16,6 +16,7 @@ use crate::{Sel, Session};
 
 const MAX_OBJECTS: usize = 4096;
 const MAX_PAIRS: usize = 128;
+const MAX_CURVE_PAIR_OBJECTS: usize = 16;
 const MAX_CANDIDATES: usize = 1024;
 const MAX_TRACKING: usize = 64;
 const SEARCH_STEPS: usize = 64;
@@ -385,6 +386,12 @@ pub fn query_snaps(objects: &[SnapObject], query: &SnapQuery) -> Result<SnapResu
         } else {
             for i in 0..active.len() {
                 for j in i + 1..active.len() {
+                    let numerical = matches!(&active[i].1, WorldGeometry::Nurbs(_, _))
+                        || matches!(&active[j].1, WorldGeometry::Nurbs(_, _));
+                    if numerical && active.len() > MAX_CURVE_PAIR_OBJECTS {
+                        truncated = true;
+                        continue;
+                    }
                     for (point, accuracy) in intersections(&active[i].1, &active[j].1) {
                         let id = if active[i].0.id <= active[j].0.id {
                             format!("{}&{}", active[i].0.id, active[j].0.id)
@@ -783,7 +790,114 @@ fn intersections(a: &WorldGeometry, b: &WorldGeometry) -> Vec<(Vec3, SnapAccurac
         (WorldGeometry::Round(a), WorldGeometry::Round(b)) => {
             result.extend(circle_intersections(*a, *b).into_iter().map(|p| (p, SnapAccuracy::Analytic)));
         }
+        (WorldGeometry::Nurbs(_, _), WorldGeometry::Nurbs(_, _))
+        | (WorldGeometry::Nurbs(_, _), WorldGeometry::Segment(_, _, _))
+        | (WorldGeometry::Segment(_, _, _), WorldGeometry::Nurbs(_, _))
+        | (WorldGeometry::Nurbs(_, _), WorldGeometry::Round(_))
+        | (WorldGeometry::Round(_), WorldGeometry::Nurbs(_, _)) => {
+            result.extend(numerical_curve_intersections(a, b).into_iter().map(|p| (p, SnapAccuracy::Evaluated)));
+        }
         _ => {}
+    }
+    result
+}
+
+/// A parameterization of exact line, round and rational-spline geometry.
+/// The spline is evaluated from its control net; sampled segments below only
+/// generate Newton seeds and are never returned as intersection positions.
+fn curve_point_and_tangent(shape: &WorldGeometry, fraction: f64) -> Option<(Vec3, Vec3)> {
+    if !(0.0..=1.0).contains(&fraction) {
+        return None;
+    }
+    let (point, tangent) = match shape {
+        WorldGeometry::Segment(a, b, _) => (a * (1.0 - fraction) + b * fraction, *b - *a),
+        WorldGeometry::Round(c) => {
+            let theta = c.start_angle + c.sweep * fraction;
+            (c.at(theta), (c.y * theta.cos() - c.x * theta.sin()) * (c.radius * c.sweep))
+        }
+        WorldGeometry::Nurbs(c, frame) => {
+            let [a, b] = c.domain();
+            let t = a * (1.0 - fraction) + b * fraction;
+            let jet = c.jet(t).ok()?;
+            (frame.point(jet.point), frame.vector(jet.d1) * (b - a))
+        }
+        WorldGeometry::Polyline(_) | WorldGeometry::Anchor(_, _, _) => return None,
+    };
+    (point.is_finite() && tangent.is_finite()).then_some((point, tangent))
+}
+
+fn refine_curve_crossing(a: &WorldGeometry, b: &WorldGeometry, mut u: f64, mut v: f64, tol: f64) -> Option<Vec3> {
+    for _ in 0..22 {
+        let (pa, da) = curve_point_and_tangent(a, u)?;
+        let (pb, db) = curve_point_and_tangent(b, v)?;
+        let r = pa - pb;
+        if length(r) <= tol {
+            let p = (pa + pb) * 0.5;
+            return p.is_finite().then_some(p);
+        }
+        let aa = da.dot(da);
+        let ab = -da.dot(db);
+        let bb = db.dot(db);
+        let det = aa * bb - ab * ab;
+        if !(det.is_finite() && det > 1e-18 * aa * bb) {
+            return None; // non-transverse or ill-conditioned tangents
+        }
+        let rhs_u = -r.dot(da);
+        let rhs_v = r.dot(db);
+        let du = ((rhs_u * bb - rhs_v * ab) / det).clamp(-0.25, 0.25);
+        let dv = ((aa * rhs_v - ab * rhs_u) / det).clamp(-0.25, 0.25);
+        if !(du.is_finite() && dv.is_finite()) {
+            return None;
+        }
+        let nu = (u + du).clamp(0.0, 1.0);
+        let nv = (v + dv).clamp(0.0, 1.0);
+        if nu == u && nv == v {
+            break;
+        }
+        u = nu;
+        v = nv;
+    }
+    let (pa, _) = curve_point_and_tangent(a, u)?;
+    let (pb, _) = curve_point_and_tangent(b, v)?;
+    (length(pa - pb) <= tol).then_some((pa + pb) * 0.5).filter(|p| p.is_finite())
+}
+
+fn numerical_curve_intersections(a: &WorldGeometry, b: &WorldGeometry) -> Vec<Vec3> {
+    const PIECES: usize = 48;
+    // A bounded coarse search finds crossing chords. Refine each crossing
+    // against the exact analytic tangent/point functions; near-tangencies or
+    // oscillations between sample intervals may be missed.
+    let sample = |shape: &WorldGeometry| -> Vec<Option<Vec3>> {
+        (0..=PIECES).map(|i| curve_point_and_tangent(shape, i as f64 / PIECES as f64).map(|x| x.0)).collect()
+    };
+    let pa = sample(a);
+    let pb = sample(b);
+    let (Some(aa), Some(ab), Some(ba), Some(bb)) = (
+        pa.first().copied().flatten(), pa.last().copied().flatten(),
+        pb.first().copied().flatten(), pb.last().copied().flatten(),
+    ) else {
+        return Vec::new();
+    };
+    let extent = length(ab - aa).max(length(bb - ba)).max(1e-9);
+    let tolerance = extent * 1e-9;
+    let mut result = Vec::new();
+    for (i, aw) in pa.windows(2).enumerate() {
+        let (Some(a0), Some(a1)) = (aw[0], aw[1]) else { continue };
+        for (j, bw) in pb.windows(2).enumerate() {
+            let (Some(b0), Some(b1)) = (bw[0], bw[1]) else { continue };
+            let Some(chord) = segment_intersection(a0, a1, b0, b1) else { continue };
+            let seed = |start: Vec3, end: Vec3| {
+                let d = end - start;
+                let denom = d.dot(d);
+                if denom > 0.0 { ((chord - start).dot(d) / denom).clamp(0.0, 1.0) } else { 0.5 }
+            };
+            let u = (i as f64 + seed(a0, a1)) / PIECES as f64;
+            let v = (j as f64 + seed(b0, b1)) / PIECES as f64;
+            if let Some(p) = refine_curve_crossing(a, b, u, v, tolerance)
+                && !result.iter().any(|other: &Vec3| length(*other - p) <= tolerance) {
+                result.push(p);
+            }
+        }
     }
     result
 }
