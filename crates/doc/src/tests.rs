@@ -685,7 +685,6 @@ fn empty_boolean_targets_without_overlap_keep_plain_message() {
     }
 }
 
-
 #[test]
 fn assembly_shared_instances_keep_unique_paths_and_checked_world_frames() {
     let mut doc = Document::new("assembly instances");
@@ -693,10 +692,7 @@ fn assembly_shared_instances_keep_unique_paths_and_checked_world_frames() {
     let first = doc.occurrence_of(parent).unwrap().id;
     let wheel = doc.add_component(Some("Wheel"), parent).unwrap();
     let child = doc.occurrence_of(wheel).unwrap().id;
-    let second = doc.add_occurrence(
-        parent, 0,
-        rigid(Vec3::new(40.0, 0.0, 0.0), Vec3::ZERO, Vec3::Z, 0.0),
-    ).unwrap();
+    let second = doc.add_occurrence(parent, 0, rigid(Vec3::new(40.0, 0.0, 0.0), Vec3::ZERO, Vec3::Z, 0.0)).unwrap();
     assert_eq!(doc.components.iter().filter(|c| c.id == wheel).count(), 1);
     let checked = doc.placements_checked().unwrap();
     assert_eq!(checked, doc.placements());
@@ -726,12 +722,7 @@ fn assembly_rejects_invalid_parent_cycles_and_nonrigid_instances_atomically() {
 
     let mut scaled = IDENTITY;
     scaled[0][0] = 2.0;
-    for (component, parent, transform) in [
-        (wheel, 123456, IDENTITY),
-        (wheel, wheel, IDENTITY),
-        (frame, wheel, IDENTITY),
-        (wheel, frame, scaled),
-    ] {
+    for (component, parent, transform) in [(wheel, 123456, IDENTITY), (wheel, wheel, IDENTITY), (frame, wheel, IDENTITY), (wheel, frame, scaled)] {
         assert!(doc.add_occurrence(component, parent, transform).is_err());
         assert_eq!(doc, initial, "rejected occurrence edits preserve every stored ID and body definition");
     }
@@ -758,10 +749,7 @@ fn assembly_checked_expansion_handles_many_instances_and_reports_excess_depth() 
     let frame = doc.add_component(Some("Frame"), 0).unwrap();
     let wheel = doc.add_component(Some("Wheel"), frame).unwrap();
     for i in 1..600 {
-        doc.add_occurrence(
-            frame, 0,
-            rigid(Vec3::new(i as f64, 0.0, 0.0), Vec3::ZERO, Vec3::Z, 0.0),
-        ).unwrap();
+        doc.add_occurrence(frame, 0, rigid(Vec3::new(i as f64, 0.0, 0.0), Vec3::ZERO, Vec3::Z, 0.0)).unwrap();
     }
     let paths = doc.placements_checked().unwrap();
     assert_eq!(paths.len(), 1 + 600 + 600);
@@ -776,15 +764,12 @@ fn assembly_checked_expansion_handles_many_instances_and_reports_excess_depth() 
     assert!(too_deep.placements_checked().is_err(), "silent truncation must not count as a valid expansion");
 }
 
-
 #[test]
 fn assembly_checked_body_frames_follow_shared_definition_edits() {
     let (mut doc, _) = plate_doc();
     let component = doc.add_component(Some("Shared panel"), 0).unwrap();
     let first = doc.occurrence_of(component).unwrap().id;
-    let second = doc.add_occurrence(
-        component, 0, rigid(Vec3::new(60.0, 0.0, 0.0), Vec3::ZERO, Vec3::Z, 0.0),
-    ).unwrap();
+    let second = doc.add_occurrence(component, 0, rigid(Vec3::new(60.0, 0.0, 0.0), Vec3::ZERO, Vec3::Z, 0.0)).unwrap();
     doc.body_components.insert("Body1".into(), component);
     let mut model = Model::new();
     model.evaluate(&doc);

@@ -2478,9 +2478,18 @@ mod tests {
 
     fn arclet_joint(id: u64, name: &str, kind: JointKind, a: JointOrigin, b: JointOrigin, values: Vec<f64>) -> Joint {
         Joint {
-            id, name: name.into(), kind, a, b, values,
-            limits: vec![], flip: true, offset: 0.0, angle: 0.0,
-            suppressed: false, exprs: JointExprs::default(),
+            id,
+            name: name.into(),
+            kind,
+            a,
+            b,
+            values,
+            limits: vec![],
+            flip: true,
+            offset: 0.0,
+            angle: 0.0,
+            suppressed: false,
+            exprs: JointExprs::default(),
         }
     }
 
@@ -2490,7 +2499,9 @@ mod tests {
         let occurrence = doc.occurrence_of(component).unwrap().id;
         doc.occurrences.iter_mut().find(|o| o.id == occurrence).unwrap().grounded = false;
         doc.assembly.joints.push(arclet_joint(
-            1000, "Mate", kind,
+            1000,
+            "Mate",
+            kind,
             arclet_point_origin(0, Vec3::ZERO, axis),
             arclet_point_origin(occurrence, Vec3::ZERO, axis),
             values,
@@ -2504,9 +2515,25 @@ mod tests {
             ("fixed", JointKind::Rigid, vec![], Vec3::Z, 0, Vec3::ZERO, Vec3::X),
             ("door hinge", JointKind::Revolute, vec![std::f64::consts::FRAC_PI_2], Vec3::Z, 1, Vec3::ZERO, Vec3::Y),
             ("piston", JointKind::Slider, vec![12.0], Vec3::Z, 1, Vec3::new(0.0, 0.0, 12.0), Vec3::new(1.0, 0.0, 12.0)),
-            ("wheel and axle", JointKind::Cylindrical, vec![std::f64::consts::FRAC_PI_2, 9.0], Vec3::Z, 2, Vec3::new(0.0, 0.0, 9.0), Vec3::new(0.0, 1.0, 9.0)),
+            (
+                "wheel and axle",
+                JointKind::Cylindrical,
+                vec![std::f64::consts::FRAC_PI_2, 9.0],
+                Vec3::Z,
+                2,
+                Vec3::new(0.0, 0.0, 9.0),
+                Vec3::new(0.0, 1.0, 9.0),
+            ),
             ("drawer", JointKind::Slider, vec![15.0], Vec3::X, 1, Vec3::new(15.0, 0.0, 0.0), Vec3::new(16.0, 0.0, 0.0)),
-            ("planar carriage", JointKind::Planar, vec![4.0, 5.0, std::f64::consts::FRAC_PI_2], Vec3::Z, 3, Vec3::new(4.0, 5.0, 0.0), Vec3::new(4.0, 6.0, 0.0)),
+            (
+                "planar carriage",
+                JointKind::Planar,
+                vec![4.0, 5.0, std::f64::consts::FRAC_PI_2],
+                Vec3::Z,
+                3,
+                Vec3::new(4.0, 5.0, 0.0),
+                Vec3::new(4.0, 6.0, 0.0),
+            ),
             ("ball", JointKind::Ball, vec![0.0, std::f64::consts::FRAC_PI_2, 0.0], Vec3::Z, 3, Vec3::ZERO, Vec3::new(0.0, 0.0, -1.0)),
         ];
         for (name, kind, values, axis, expected_dof, expected_origin, expected_x) in cases {
@@ -2549,13 +2576,17 @@ mod tests {
             occurrence.grounded = false;
         }
         doc.assembly.joints.push(arclet_joint(
-            1000, "Root hinge", JointKind::Revolute,
+            1000,
+            "Root hinge",
+            JointKind::Revolute,
             arclet_point_origin(0, Vec3::ZERO, Vec3::Z),
             arclet_point_origin(arm_occ, Vec3::ZERO, Vec3::Z),
             vec![std::f64::consts::FRAC_PI_2],
         ));
         doc.assembly.joints.push(arclet_joint(
-            1001, "Elbow", JointKind::Revolute,
+            1001,
+            "Elbow",
+            JointKind::Revolute,
             arclet_point_origin(arm_occ, Vec3::new(2.0, 0.0, 0.0), Vec3::Z),
             arclet_point_origin(rod_occ, Vec3::ZERO, Vec3::Z),
             vec![std::f64::consts::FRAC_PI_2],
@@ -2578,7 +2609,9 @@ mod tests {
     fn arclet_conflicting_closed_loop_reports_an_unmet_constraint() {
         let (mut doc, occurrence) = arclet_mechanism(JointKind::Rigid, vec![], Vec3::Z);
         let mut incompatible = arclet_joint(
-            1001, "Impossible second mate", JointKind::Rigid,
+            1001,
+            "Impossible second mate",
+            JointKind::Rigid,
             arclet_point_origin(0, Vec3::ZERO, Vec3::Z),
             arclet_point_origin(occurrence, Vec3::ZERO, Vec3::Z),
             vec![],
@@ -2596,9 +2629,12 @@ mod tests {
         let second_component = doc.add_component(Some("Follower"), 0).unwrap();
         let follower = doc.occurrence_of(second_component).unwrap().id;
         doc.assembly.joints.push(arclet_joint(
-            1001, "Follower hinge", JointKind::Revolute,
+            1001,
+            "Follower hinge",
+            JointKind::Revolute,
             arclet_point_origin(0, Vec3::ZERO, Vec3::Z),
-            arclet_point_origin(follower, Vec3::ZERO, Vec3::Z), vec![0.0],
+            arclet_point_origin(follower, Vec3::ZERO, Vec3::Z),
+            vec![0.0],
         ));
         let valid = doc.clone();
         doc.assembly.joints[0].b.occurrence = 999999;
@@ -2610,9 +2646,7 @@ mod tests {
         doc.assembly.joints[0].limits = vec![Some((f64::NAN, 10.0))];
         assert!(doc.validate_mechanism().is_err(), "non-finite limit");
         doc = valid.clone();
-        let link = |a, b| MotionLink {
-            a, ia: 0, b, ib: 0, ratio: 1.0, offset: 0.0, coupling: None, lift: Vec::new(),
-        };
+        let link = |a, b| MotionLink { a, ia: 0, b, ib: 0, ratio: 1.0, offset: 0.0, coupling: None, lift: Vec::new() };
         doc.assembly.links.push(link(1000, 1001));
         doc.assembly.links.push(link(1001, 1000));
         assert!(doc.validate_mechanism().unwrap_err().to_string().contains("cyclic"));
@@ -2622,11 +2656,13 @@ mod tests {
         assert_ne!(doc.occurrences.iter().find(|o| o.id == occurrence).unwrap().component, 0);
         assert!(doc.validate_mechanism().is_ok());
         doc.assembly.contact_sets.push(crate::motion::ContactSet {
-            id: 9, name: "Body contact".into(), occurrences: vec![occurrence, 999999], suppressed: false,
+            id: 9,
+            name: "Body contact".into(),
+            occurrences: vec![occurrence, 999999],
+            suppressed: false,
         });
         assert!(doc.validate_mechanism().unwrap_err().to_string().contains("removed occurrence"));
     }
-
 
     #[test]
     fn arclet_checked_solve_never_commits_an_unmet_closed_constraint() {
@@ -2638,7 +2674,9 @@ mod tests {
 
         let mut conflicted = doc;
         conflicted.assembly.joints.push(arclet_joint(
-            1001, "Incompatible rigid mate", JointKind::Rigid,
+            1001,
+            "Incompatible rigid mate",
+            JointKind::Rigid,
             arclet_point_origin(0, Vec3::new(25.0, 0.0, 0.0), Vec3::Z),
             arclet_point_origin(occurrence, Vec3::ZERO, Vec3::Z),
             vec![],
@@ -2648,5 +2686,4 @@ mod tests {
         assert_eq!(conflicted, unchanged, "failed solve must not move any document or joint");
         assert_ne!(conflicted, before, "the extra constraint remains available for repair");
     }
-
 }

@@ -41,4 +41,3 @@ jobs:
         run: cargo clippy --profile ci --locked -p solidcraft-doc --all-targets -- -D warnings
       - name: Report formatting changes
         run: cargo fmt --package solidcraft-doc -- --check
-        continue-on-error: true

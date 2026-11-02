@@ -20,8 +20,7 @@ pub fn validate(doc: &Document) -> Result<()> {
     if assembly.joints.len() > MAX_JOINTS {
         return Err(DocError::Invalid("too many joints to solve safely".into()));
     }
-    let occurrences: BTreeSet<u64> =
-        std::iter::once(0).chain(doc.occurrences.iter().map(|occurrence| occurrence.id)).collect();
+    let occurrences: BTreeSet<u64> = std::iter::once(0).chain(doc.occurrences.iter().map(|occurrence| occurrence.id)).collect();
     let mut joints = BTreeMap::new();
     for joint in &assembly.joints {
         if joints.insert(joint.id, joint).is_some() {
@@ -29,9 +28,7 @@ pub fn validate(doc: &Document) -> Result<()> {
         }
         for origin in [&joint.a, &joint.b] {
             if !occurrences.contains(&origin.occurrence) {
-                return Err(DocError::Unknown(format!(
-                    "joint '{}' refers to missing occurrence {}", joint.name, origin.occurrence
-                )));
+                return Err(DocError::Unknown(format!("joint '{}' refers to missing occurrence {}", joint.name, origin.occurrence)));
             }
             if !origin.snap.is_finite() {
                 return Err(DocError::Invalid(format!("joint '{}' has a non-finite snap", joint.name)));
@@ -50,9 +47,12 @@ pub fn validate(doc: &Document) -> Result<()> {
             return Err(DocError::Invalid(format!("joint '{}' connects an occurrence to itself", joint.name)));
         }
         let n = joint.kind.dofs().len();
-        if joint.values.len() > n || joint.limits.len() > n || joint.exprs.values.len() > n
+        if joint.values.len() > n
+            || joint.limits.len() > n
+            || joint.exprs.values.len() > n
             || !joint.values.iter().all(|value| value.is_finite())
-            || !joint.offset.is_finite() || !joint.angle.is_finite()
+            || !joint.offset.is_finite()
+            || !joint.angle.is_finite()
             || joint.limits.iter().flatten().any(|(low, high)| !low.is_finite() || !high.is_finite())
         {
             return Err(DocError::Invalid(format!("joint '{}' has invalid values or limits", joint.name)));
@@ -69,20 +69,21 @@ pub fn validate(doc: &Document) -> Result<()> {
     for link in &assembly.links {
         let a = (link.a, link.ia);
         let b = (link.b, link.ib);
-        if joints.get(&link.a).is_none_or(|j| link.ia >= j.kind.dofs().len())
-            || joints.get(&link.b).is_none_or(|j| link.ib >= j.kind.dofs().len())
-        {
+        if joints.get(&link.a).is_none_or(|j| link.ia >= j.kind.dofs().len()) || joints.get(&link.b).is_none_or(|j| link.ib >= j.kind.dofs().len()) {
             return Err(DocError::Invalid(format!("motion link {:?} -> {:?} refers to a missing joint parameter", a, b)));
         }
-        if !link.ratio.is_finite() || !link.offset.is_finite()
+        if !link.ratio.is_finite()
+            || !link.offset.is_finite()
             || link.lift.len() > super::cam::CAM_SAMPLES
             || link.lift.iter().any(|v| !v.is_finite())
         {
             return Err(DocError::Invalid(format!("motion link {:?} -> {:?} has invalid or oversized values", a, b)));
         }
-        if link.coupling.as_ref().is_some_and(|coupling| {
-            coupling.sizes().iter().any(|size| matches!(size, Size::Length(value) if !value.is_finite() || *value <= 0.0))
-        }) {
+        if link
+            .coupling
+            .as_ref()
+            .is_some_and(|coupling| coupling.sizes().iter().any(|size| matches!(size, Size::Length(value) if !value.is_finite() || *value <= 0.0)))
+        {
             return Err(DocError::Invalid(format!("motion link {:?} -> {:?} has an invalid geometric size", a, b)));
         }
         if !driven.insert(b) {
@@ -98,7 +99,10 @@ pub fn validate(doc: &Document) -> Result<()> {
         visited += 1;
         for child in adjacency.get(&port).into_iter().flatten() {
             if let Some(n) = indegree.get_mut(child) {
-                *n -= 1;
+                let Some(next) = n.checked_sub(1) else {
+                    return Err(DocError::Invalid("motion links contain a cyclic dependency".into()));
+                };
+                *n = next;
                 if *n == 0 {
                     ready.push_back(*child);
                 }

@@ -84,18 +84,13 @@ impl MotionStudy {
         }
         let mut seen = std::collections::BTreeSet::new();
         for key in &self.keys {
-            let valid_port = assembly
-                .joints
-                .iter()
-                .any(|joint| joint.id == key.joint && key.index < joint.kind.dofs().len());
+            let valid_port = assembly.joints.iter().any(|joint| joint.id == key.joint && key.index < joint.kind.dofs().len());
             if !valid_port || !seen.insert((key.joint, key.index)) || key.points.is_empty() || key.points.len() > 100_001 {
                 return Err(DocError::Invalid(format!("motion study '{}' has an invalid or duplicate joint key", self.name)));
             }
             let mut prev = None;
             for &(step, value) in &key.points {
-                if !step.is_finite() || !value.is_finite() || !(0.0..=self.steps as f64).contains(&step)
-                    || prev.is_some_and(|last| step <= last)
-                {
+                if !step.is_finite() || !value.is_finite() || !(0.0..=self.steps as f64).contains(&step) || prev.is_some_and(|last| step <= last) {
                     return Err(DocError::Invalid(format!("motion study '{}' has unsorted, out-of-range or non-finite keys", self.name)));
                 }
                 prev = Some(step);
@@ -128,21 +123,30 @@ mod tests {
         assert_eq!(StudyKey { joint: 1, index: 0, points: vec![] }.value_at(1.0), None);
     }
 
-
     #[test]
     fn arclet_study_validates_driving_joint_and_preserves_interpolation_on_roundtrip() {
         use crate::joints::{Assembly, Joint, JointExprs, JointKind, JointOrigin, Snap};
 
         let origin = JointOrigin { occurrence: 0, snap: Snap::Point { point: Vec3::ZERO, z: Some(Vec3::Z), x: None } };
         let joint = Joint {
-            id: 10, name: "Door hinge".into(), kind: JointKind::Revolute,
-            a: origin.clone(), b: origin,
-            values: vec![0.0], limits: vec![Some((0.0, 1.0))],
-            flip: true, offset: 0.0, angle: 0.0, suppressed: false, exprs: JointExprs::default(),
+            id: 10,
+            name: "Door hinge".into(),
+            kind: JointKind::Revolute,
+            a: origin.clone(),
+            b: origin,
+            values: vec![0.0],
+            limits: vec![Some((0.0, 1.0))],
+            flip: true,
+            offset: 0.0,
+            angle: 0.0,
+            suppressed: false,
+            exprs: JointExprs::default(),
         };
         let assembly = Assembly { joints: vec![joint], ..Assembly::default() };
         let original = MotionStudy {
-            id: 99, name: "Open door".into(), steps: 10,
+            id: 99,
+            name: "Open door".into(),
+            steps: 10,
             keys: vec![StudyKey { joint: 10, index: 0, points: vec![(0.0, 0.0), (10.0, 1.0)] }],
         };
         assert_eq!(original.validate(&assembly), Ok(()));
@@ -166,5 +170,4 @@ mod tests {
         bad.keys.push(duplicate);
         assert!(bad.validate(&assembly).is_err(), "conflicting drivers in a study");
     }
-
 }

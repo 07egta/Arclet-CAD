@@ -391,9 +391,7 @@ impl Document {
             if !occurrence_ids.insert(occurrence.id) || occurrence.id == 0 {
                 return Err(DocError::Invalid("duplicate or root occurrence identifier".into()));
             }
-            if !component_ids.contains(&occurrence.component)
-                || (occurrence.parent != 0 && !component_ids.contains(&occurrence.parent))
-            {
+            if !component_ids.contains(&occurrence.component) || (occurrence.parent != 0 && !component_ids.contains(&occurrence.parent)) {
                 return Err(DocError::Invalid("occurrence references an unknown component".into()));
             }
             if !crate::valid_transfer_matrix(&occurrence.transform) {
@@ -593,7 +591,9 @@ fn acyclic_components(edges: &HashMap<u64, Vec<u64>>, degrees: &mut HashMap<u64,
         processed += 1;
         for child in edges.get(&component).into_iter().flatten() {
             if let Some(degree) = degrees.get_mut(child) {
-                *degree -= 1;
+                // A count below zero means the edge bookkeeping is inconsistent: report it, don't wrap.
+                let Some(next) = degree.checked_sub(1) else { return false };
+                *degree = next;
                 if *degree == 0 {
                     ready.push_back(*child);
                 }
