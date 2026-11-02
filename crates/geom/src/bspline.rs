@@ -121,7 +121,19 @@ pub fn weighted_points(points: &[Vec3], weights: &[f64]) -> SplineResult<Vec<HPo
     if weights.iter().any(|w| !(w.is_finite() && *w > 0.0)) {
         return invalid("weights must be positive numbers");
     }
-    Ok(points.iter().zip(weights).map(|(p, w)| HPoint::weighted(*p, *w)).collect())
+    points.iter().zip(weights).map(|(p, w)| {
+        let h = HPoint::weighted(*p, *w);
+        if !h.is_finite() {
+            return invalid("a weighted control coordinate overflowed");
+        }
+        // The caller provided Cartesian coordinates. If p*w has rounded a
+        // nonzero coordinate to zero, no subsequent homogeneous evaluation
+        // can recover it. Reject instead of silently altering the shape.
+        if (p.x != 0.0 && h.x == 0.0) || (p.y != 0.0 && h.y == 0.0) || (p.z != 0.0 && h.z == 0.0) {
+            return invalid("a weighted control coordinate underflowed to zero");
+        }
+        Ok(h)
+    }).collect()
 }
 
 /// Which one-sided limit a basis evaluation takes at a knot. Basis functions live on half-open
@@ -588,8 +600,11 @@ impl NurbsSurface {
             }
             check_knots(kn)?;
             let n = kn.len().checked_sub(p + 1).filter(|&n| n > p).ok_or_else(|| SplineError::Invalid("too few knots for the degree".into()))?;
-            if !(kn.get(p) < kn.get(n)) {
-                return invalid("the surface's domain is empty");
+            let (Some(&a), Some(&b)) = (kn.get(p), kn.get(n)) else {
+                return invalid("the surface has an invalid parameter domain");
+            };
+            if !(a < b && (b - a).is_finite()) {
+                return invalid("the surface needs a nonempty finite parameter range");
             }
             count[d] = n;
         }
@@ -1227,6 +1242,24 @@ pub(crate) mod tests {
                 assert_vector_near(after, original, 4.0);
             }
         }
+    }
+
+    #[test]
+    fn homogeneous_weighting_rejects_silent_coordinate_underflow() {
+        // Positive finite Cartesian controls are not enough if their
+        // homogeneous products would round nonzero coordinates to zero.
+        let tiny = Vec3::new(1e-200, 0.0, 0.0);
+        assert!(weighted_points(&[tiny], &[1e-200]).is_err());
+        assert!(weighted_points(&[Vec3::new(1e200, 0.0, 0.0)], &[1e200]).is_err());
+        assert!(weighted_points(&[Vec3::new(8.0, 0.0, 0.0)], &[1e-200]).is_ok());
+        assert!(weighted_points(&[Vec3::ZERO], &[1e-200]).is_ok());
+        let knots = [vec![0.0, 0.0, 1.0, 1.0], vec![0.0, 0.0, 1.0, 1.0]];
+        assert!(NurbsSurface::new([1, 1], knots.clone(), &[tiny; 4], &[1e-200; 4]).is_err());
+        assert!(NurbsSurface::new(
+            [1, 1],
+            [vec![-1e308, -1e308, 1e308, 1e308], knots[1].clone()],
+            &[Vec3::ZERO; 4], &[1.0; 4],
+        ).is_err());
     }
 
     #[test]
