@@ -280,7 +280,10 @@ fn closest(a: &mut Track, b: &mut Track, tol: f64) -> SplineResult<Crossing> {
         }
         d.push(best);
     }
-    // Runs of samples near `b`: one candidate crossing each, refined from its nearest sample.
+    // Use the closest sample of each near run, but ALSO its local distance minima.
+    // A shallow oscillating curve can intersect a guide twice while all samples in
+    // between are within `near` (the longest polyline segments). Grouping that
+    // entire corridor into one candidate silently accepted an ambiguous network.
     let n = d.len();
     let mut starts = Vec::new();
     let mut k = 0;
@@ -289,17 +292,34 @@ fn closest(a: &mut Track, b: &mut Track, tol: f64) -> SplineResult<Crossing> {
             k += 1;
             continue;
         }
-        let mut m = k;
+        let begin = k;
+        let mut best = k;
         while k < n && d[k].0 <= near {
-            if d[k].0 < d[m].0 {
-                m = k;
+            if d[k].0 < d[best].0 {
+                best = k;
             }
             k += 1;
         }
-        starts.push(m);
+        starts.push(best);
+        for i in begin + 1..k.saturating_sub(1) {
+            let before = d[i - 1].0;
+            let here = d[i].0;
+            let after = d[i + 1].0;
+            if here <= before && here <= after && (here < before || here < after) {
+                starts.push(i);
+            }
+        }
     }
     if starts.is_empty() {
         starts.push((0..n).min_by(|x, y| d[*x].0.total_cmp(&d[*y].0)).unwrap_or(0));
+    }
+    starts.sort_unstable();
+    starts.dedup();
+    // This is a crossing solver, not a tool for coincident/overlapping curves.
+    // Pathological samples must fail predictably instead of launching thousands of
+    // refinements for every pair in a large network.
+    if starts.len() > 64 {
+        return invalid(format!("{} and {} have too many possible crossings: divide or simplify the curves", a.label, b.label));
     }
     let mut found: Vec<Crossing> = Vec::new();
     let mut miss: Option<(f64, Vec3)> = None;
@@ -1564,6 +1584,27 @@ mod tests {
         let steep = line("steep", Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 10.0, 5.0));
         let err = network_surface(vec![edge(), far], vec![steep, curve("right", side(10.0))], TOL).unwrap_err();
         assert!(err.to_string().contains("steep") && err.to_string().contains("tangent"), "{err}");
+    }
+
+    /// A shallow sinusoid crosses twice while its *whole length* remains near the
+    /// guide at the coarse-table scale. One-minimum-per-near-run used to miss this.
+    #[test]
+    fn nearby_multiple_crossings_cannot_be_mistaken_for_one() {
+        let mut guide = Track::new(line("guide", Vec3::ZERO, Vec3::X * 10.0)).unwrap();
+        let mut wave = Track::new(curve("shallow", |t| Vec3::new(10.0 * t, 0.1 * (t - 0.3) * (t - 0.7), 0.0))).unwrap();
+        let gap = 1e-4;
+        let err = closest(&mut guide, &mut wave, gap).unwrap_err();
+        assert!(err.to_string().contains("cross more than once"), "{err}");
+    }
+
+    /// The added local-minima search does not turn a unique transverse crossing into
+    /// an apparent double crossing (the refinement candidates collapse to one).
+    #[test]
+    fn one_transverse_crossing_remains_unique() {
+        let mut guide = Track::new(line("guide", Vec3::ZERO, Vec3::X * 10.0)).unwrap();
+        let mut crossing = Track::new(line("cross", Vec3::new(5.0, -1.0, 0.0), Vec3::new(5.0, 1.0, 0.0))).unwrap();
+        let p = closest(&mut guide, &mut crossing, 1e-5).unwrap();
+        assert!(p.at.dist(Vec3::X * 5.0) < 1e-7, "{p:?}");
     }
 
     /// Networks that can't be built are refused, naming the curves; none panics.
