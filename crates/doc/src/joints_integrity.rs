@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use crate::{DocError, Document, Result};
 
-use super::MAX_JOINTS;
+use super::{MAX_JOINTS, Size, Snap};
 
 /// Validate stored component placements, joint references and motion couplings.
 ///
@@ -35,6 +35,15 @@ pub fn validate(doc: &Document) -> Result<()> {
             }
             if !origin.snap.is_finite() {
                 return Err(DocError::Invalid(format!("joint '{}' has a non-finite snap", joint.name)));
+            }
+            // A finite but zero-length hinge axis is still degenerate.
+            let explicit_frame = match &origin.snap {
+                Snap::Frame { origin, z, x } => super::frame(*origin, *z, *x),
+                Snap::Point { point, z, x } => super::frame(*point, z.unwrap_or(solidcraft_geom::Vec3::Z), *x),
+                _ => Some(crate::IDENTITY),
+            };
+            if explicit_frame.is_none() {
+                return Err(DocError::Invalid(format!("joint '{}' has a degenerate explicit frame", joint.name)));
             }
         }
         if joint.a.occurrence == joint.b.occurrence {
@@ -65,8 +74,16 @@ pub fn validate(doc: &Document) -> Result<()> {
         {
             return Err(DocError::Invalid(format!("motion link {:?} -> {:?} refers to a missing joint parameter", a, b)));
         }
-        if !link.ratio.is_finite() || !link.offset.is_finite() || link.lift.iter().any(|v| !v.is_finite()) {
-            return Err(DocError::Invalid(format!("motion link {:?} -> {:?} has non-finite values", a, b)));
+        if !link.ratio.is_finite() || !link.offset.is_finite()
+            || link.lift.len() > super::cam::CAM_SAMPLES
+            || link.lift.iter().any(|v| !v.is_finite())
+        {
+            return Err(DocError::Invalid(format!("motion link {:?} -> {:?} has invalid or oversized values", a, b)));
+        }
+        if link.coupling.as_ref().is_some_and(|coupling| {
+            coupling.sizes().iter().any(|size| matches!(size, Size::Length(value) if !value.is_finite() || *value <= 0.0))
+        }) {
+            return Err(DocError::Invalid(format!("motion link {:?} -> {:?} has an invalid geometric size", a, b)));
         }
         if !driven.insert(b) {
             return Err(DocError::Invalid(format!("motion parameter {:?} has multiple drivers", b)));
@@ -92,8 +109,21 @@ pub fn validate(doc: &Document) -> Result<()> {
         return Err(DocError::Invalid("motion links contain a cyclic dependency".into()));
     }
 
+    let mut study_ids = BTreeSet::new();
     for study in &assembly.studies {
+        if !study_ids.insert(study.id) {
+            return Err(DocError::Invalid(format!("duplicate motion study ID {}", study.id)));
+        }
         study.validate(assembly)?;
+    }
+    let mut contact_ids = BTreeSet::new();
+    for contact in &assembly.contact_sets {
+        if !contact_ids.insert(contact.id) {
+            return Err(DocError::Invalid(format!("duplicate contact set ID {}", contact.id)));
+        }
+        if contact.occurrences.iter().any(|id| !occurrences.contains(id)) {
+            return Err(DocError::Invalid(format!("contact set '{}' references a removed occurrence", contact.name)));
+        }
     }
     Ok(())
 }
