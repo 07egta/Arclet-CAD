@@ -134,11 +134,14 @@ def package_candidate(
         )
         (resources / "README.txt").write_text(readme, encoding="utf-8")
         if adhoc_sign:
-            app = stage / BUNDLE
             if sys.platform != "darwin":
                 raise CandidateError("ad-hoc codesign must run on macOS")
-            subprocess.run(["codesign", "--force", "--deep", "--sign", "-", "--timestamp=none", str(app)], check=True)
-            subprocess.run(["codesign", "--verify", "--deep", "--strict", str(app)], check=True)
+            # Sign the Mach-O itself, then record the post-signing binary digest.
+            # The enclosing .app bundle is NOT Developer-ID signed or notarized.
+            subprocess.run(["codesign", "--force", "--sign", "-", "--timestamp=none", str(exe)], check=True)
+            subprocess.run(["codesign", "--verify", "--strict", str(exe)], check=True)
+            manifest["binary_sha256"] = sha256(exe.read_bytes())
+            (stage / manifest_path).write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED, compresslevel=6, allowZip64=True) as archive:
             for path in sorted(stage.rglob("*")):
                 if not path.is_file():
