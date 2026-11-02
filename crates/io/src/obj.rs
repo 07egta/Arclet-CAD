@@ -37,7 +37,7 @@ pub fn read_obj(bytes: &[u8], default_name: &str) -> Result<(Vec<MeshObject>, Ve
         let mut it = line.split_whitespace();
         match it.next() {
             Some("v") => {
-                let c: Vec<f64> = it.take(3).filter_map(|x| x.parse::<f64>().ok()).collect();
+                let c: Vec<f64> = it.by_ref().take(3).filter_map(|x| x.parse::<f64>().ok()).collect();
                 match c[..] {
                     [x, y, z] if x.is_finite() && y.is_finite() && z.is_finite() => {
                         verts.push(Vec3::new(x, y, z));
