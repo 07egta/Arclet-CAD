@@ -426,8 +426,13 @@ fn weld_eps(b: &solidcraft_kernel::Body) -> f64 {
 
 /// Binary STL of several meshes (one solid).
 pub fn stl_binary(meshes: &[Mesh], name: &str) -> Vec<u8> {
-    let n: usize = meshes.iter().map(|m| m.triangles.len()).sum();
-    let mut out = Vec::with_capacity(84 + n * 50);
+    // The low-level writer tolerates invalid triangle indices by skipping them. Count only
+    // the facets actually written, or the header would describe a different binary layout.
+    // The model export path validates every facet first (see validate_stl_meshes).
+    let n = meshes.iter().fold(0usize, |sum, m| {
+        sum.saturating_add(m.triangles.iter().filter(|t| m.tri(t).is_some()).count())
+    });
+    let mut out = Vec::with_capacity(n.saturating_mul(50).saturating_add(84));
     let mut header = format!("SolidCraft STL {name}").into_bytes();
     header.resize(80, b' ');
     out.extend_from_slice(&header);
@@ -445,6 +450,29 @@ pub fn stl_binary(meshes: &[Mesh], name: &str) -> Vec<u8> {
         }
     }
     out
+}
+
+/// Check the exact exportable STL triangle set before writing either binary or ASCII.
+///
+/// The public low-level writers remain permissive for compatibility, but a model export must
+/// never silently omit facets or write coordinates that our own STL reader discards.
+fn validate_stl_meshes(meshes: &[Mesh]) -> Result<()> {
+    let mut count = 0usize;
+    for mesh in meshes {
+        count = count.checked_add(mesh.triangles.len()).ok_or_else(|| IoError::Invalid("STL triangle count overflow".into()))?;
+        if count > MAX_STL_TRIANGLES {
+            return Err(IoError::Invalid(format!("STL with {count} triangles (limit {MAX_STL_TRIANGLES})")));
+        }
+        for (i, triangle) in mesh.triangles.iter().enumerate() {
+            let vertices = mesh.tri(triangle).ok_or_else(|| IoError::Invalid(format!("STL triangle {i} has an invalid vertex index")))?;
+            for vertex in vertices {
+                if !vertex.is_finite() || vertex.to_f32().iter().any(|v| !v.is_finite() || v.abs() >= 1e9) {
+                    return Err(IoError::Invalid(format!("STL triangle {i} has a non-finite or unrepresentable vertex")));
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// ASCII STL.
@@ -697,6 +725,7 @@ pub fn export_with_quality(
                     Ok(Mesh { positions, triangles, ..Mesh::default() })
                 })
                 .collect::<Result<_>>()?;
+            validate_stl_meshes(&meshes)?;
             if format == Format::StlBinary { stl_binary(&meshes, name) } else { stl_ascii(&meshes, name).into_bytes() }
         }
         Format::Obj => {
@@ -824,23 +853,38 @@ pub fn read_stl(bytes: &[u8]) -> Result<Vec<[[f32; 3]; 3]>> {
     if ascii {
         let s = String::from_utf8_lossy(bytes);
         let mut cur: Vec<[f32; 3]> = Vec::new();
+        let mut bad_facet = false;
         for l in s.lines() {
             let mut it = l.split_whitespace();
             match it.next() {
+                Some("facet") => {
+                    cur.clear();
+                    bad_facet = false;
+                }
                 Some("vertex") => {
-                    let v: Vec<f32> = it.filter_map(|x| x.parse().ok()).collect();
-                    if let [x, y, z] = v[..] {
-                        cur.push([x, y, z]);
+                    // Never filter_map malformed numbers: "vertex 1 nope 2 3" would be
+                    // misread as (1, 2, 3). Poison the *whole* facet instead.
+                    match (it.next(), it.next(), it.next(), it.next()) {
+                        (Some(x), Some(y), Some(z), None) => {
+                            if let (Ok(x), Ok(y), Ok(z)) = (x.parse::<f32>(), y.parse::<f32>(), z.parse::<f32>()) {
+                                cur.push([x, y, z]);
+                            } else {
+                                bad_facet = true;
+                            }
+                        }
+                        _ => bad_facet = true,
                     }
                 }
                 // Each facet takes exactly its three vertices (a bad vertex drops the facet).
                 Some("endfacet") => {
-                    if let [a, b, c] = cur[..]
+                    if !bad_facet
+                        && let [a, b, c] = cur[..]
                         && [a, b, c].iter().all(ok)
                     {
                         tris.push([a, b, c]);
                     }
                     cur.clear();
+                    bad_facet = false;
                 }
                 _ => {}
             }
@@ -872,6 +916,26 @@ pub fn read_stl(bytes: &[u8]) -> Result<Vec<[[f32; 3]; 3]>> {
         }
     }
     Ok(tris)
+}
+
+/// Verify an externally supplied **binary** STL without the permissive count-repair and
+/// invalid-facet skipping of `read_stl`. Useful for checking exported exchange artifacts.
+/// A complete exact-sized header and finite, representable vertices are required.
+pub fn read_stl_verified(bytes: &[u8]) -> Result<Vec<[[f32; 3]; 3]>> {
+    let raw = bytes.get(80..84).ok_or_else(|| IoError::Invalid("short binary STL header".into()))?;
+    let count = u32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]) as usize;
+    if count == 0 || count > MAX_STL_TRIANGLES {
+        return Err(IoError::Invalid(format!("invalid binary STL triangle count {count}")));
+    }
+    let expected = count.checked_mul(50).and_then(|n| n.checked_add(84)).ok_or_else(|| IoError::Invalid("binary STL size overflow".into()))?;
+    if bytes.len() != expected {
+        return Err(IoError::Invalid(format!("binary STL has {} bytes, header requires {expected}", bytes.len())));
+    }
+    let triangles = read_stl(bytes)?;
+    if triangles.len() != count {
+        return Err(IoError::Invalid(format!("binary STL has {} valid triangles, header declares {count}", triangles.len())));
+    }
+    Ok(triangles)
 }
 
 /// Most triangles we read from one STL file.
@@ -959,10 +1023,42 @@ mod tests {
     }
 
     #[test]
+    fn stl_rejects_malformed_ascii_coordinates_without_shifting_columns() {
+        // The first facet looks plausible if parse failures are discarded; it must not
+        // become a triangle (1,2,3) from a four-token vertex line.
+        let bad = b"solid sample\nfacet normal 0 0 1\nouter loop\nvertex 1 wrong 2 3\nvertex 0 0 0\nvertex 0 1 0\nendloop\nendfacet\nendsolid sample\n";
+        assert!(read_stl(bad).unwrap().is_empty());
+        let good = b"solid sample\nfacet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 1 0 0\nvertex 0 1 0\nendloop\nendfacet\nendsolid sample\n";
+        assert_eq!(read_stl(good).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn stl_binary_header_matches_written_facets_and_verified_reader_rejects_damage() {
+        let mesh = Mesh {
+            positions: vec![Vec3::ZERO, Vec3::X, Vec3::Y],
+            triangles: vec![[0, 1, 2], [0, 1, 900]],
+            ..Mesh::default()
+        };
+        let bytes = stl_binary(&[mesh.clone()], "test");
+        assert_eq!(u32::from_le_bytes(bytes[80..84].try_into().unwrap()), 1);
+        assert_eq!(bytes.len(), 84 + 50);
+        assert_eq!(read_stl_verified(&bytes).unwrap().len(), 1);
+        assert!(validate_stl_meshes(&[mesh]).is_err(), "model export must not silently drop a facet");
+        let mut wrong_count = bytes.clone();
+        wrong_count[80..84].copy_from_slice(&2u32.to_le_bytes());
+        assert!(read_stl_verified(&wrong_count).is_err());
+        assert!(read_stl_verified(&bytes[..bytes.len() - 1]).is_err());
+        let mut nonfinite = bytes;
+        nonfinite[84 + 12..84 + 16].copy_from_slice(&f32::NAN.to_le_bytes());
+        assert!(read_stl_verified(&nonfinite).is_err());
+    }
+
+    #[test]
     fn stl_round_trip_volume() {
         let (_, m) = model();
         let bytes = export(&m.state(), &[], Format::StlBinary, "t").unwrap();
-        let tris = read_stl(&bytes).unwrap();
+        let tris = read_stl_verified(&bytes).unwrap();
+        assert_eq!(bytes.len(), 84 + 50 * tris.len(), "exact binary triangle count");
         let v: f64 = tris
             .iter()
             .map(|t| {
