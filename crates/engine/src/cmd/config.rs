@@ -584,9 +584,10 @@ fn sweep(s: &mut Session, p: &Value) -> Result<Value> {
         for (column, values) in parsed.iter().rev() {
             let choice = index % values.len();
             index /= values.len();
-            if let Some(cell) = cells.get_mut(*column) {
-                *cell = values[choice].clone();
-            }
+            let Some(cell) = cells.get_mut(*column) else {
+                return Err(bad(cmd, format!("sweep column {} is outside the configuration table", *column)));
+            };
+            *cell = values[choice].clone();
         }
         generated.push(ConfigRow { name, cells });
     }

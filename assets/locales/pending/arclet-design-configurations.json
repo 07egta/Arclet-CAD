@@ -1,0 +1,10 @@
+{
+  "en": {
+    "cmd.config_sweep": "Configuration Sweep",
+    "cmd.config_validate": "Validate Configurations"
+  },
+  "ja": {
+    "cmd.config_sweep": "構成スイープ",
+    "cmd.config_validate": "構成を一括検証"
+  }
+}
