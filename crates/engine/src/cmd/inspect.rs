@@ -175,13 +175,27 @@ fn body_quality(b: &solidcraft_doc::ModelBody, measured: &Value, min_edge_mm: f6
             issues.push(format!("edge inspection failed: {err}"));
         }
     }
+    // This kernel probe detects crossed boundary loops on *planar* faces only.
+    // It does not classify arbitrary NURBS face-to-face intersections.
+    let (crossed_planar_loops, crossing_error) = match b.body.crossed_faces() {
+        Ok(positions) => {
+            if !positions.is_empty() {
+                issues.push(format!("{} planar face(s) have self-crossing trim boundaries", positions.len()));
+            }
+            (positions, None)
+        }
+        Err(err) => {
+            issues.push(format!("planar boundary crossing inspection failed: {err}"));
+            (Vec::new(), Some(err.to_string()))
+        }
+    };
     let minimum_bbox_dimension_mm = measured.get("bbox").and_then(|b| {
         let lo: solidcraft_geom::Vec3 = serde_json::from_value(b.get("min")?.clone()).ok()?;
         let hi: solidcraft_geom::Vec3 = serde_json::from_value(b.get("max")?.clone()).ok()?;
         Some((hi.x - lo.x).min(hi.y - lo.y).min(hi.z - lo.z))
     });
     let mut not_checked = vec![
-        "certified_wall_thickness", "self_intersection", "global_nonmanifold_classification",
+        "certified_wall_thickness", "general_surface_self_intersection", "global_nonmanifold_classification",
         "certified_nurbs_measure_error",
     ];
     if !with_inertia {
@@ -197,10 +211,14 @@ fn body_quality(b: &solidcraft_doc::ModelBody, measured: &Value, min_edge_mm: f6
         "short_edge_threshold_mm": min_edge_mm,
         "short_edges_method": "tessellated_kernel_edges",
         "minimum_edge_mm": smallest_edge_mm,
+        "crossed_planar_face_boundaries": crossed_planar_loops,
+        "crossed_planar_face_boundaries_error": crossing_error,
+        "self_intersection_method": "planar_boundary_loop_crossings_only",
+        "verdict": if !issues.is_empty() { "invalid" } else if !short_edges.is_empty() { "short_edge_warning" } else { "passed_available_checks" },
         "edge_inspection_error": edge_error,
         "minimum_bbox_dimension_mm": minimum_bbox_dimension_mm,
         "minimum_bbox_dimension_is_wall_thickness": false,
-        "checked": ["shell_closure", "face_tessellation", "positive_volume", "edge_lengths"],
+        "checked": ["shell_closure", "face_tessellation", "positive_volume", "edge_lengths", "planar_trim_boundary_crossings"],
         "not_checked": not_checked,
     })
 }
@@ -1026,6 +1044,7 @@ mod geometry_inspection_tests {
             close(&body["center_of_mass"][i], *target, 1e-6, "mm");
         }
         assert_eq!(result["quality"]["summary"]["failed"], 0, "{result}");
+        assert_eq!(result["quality"]["bodies"][0]["crossed_planar_face_boundaries"].as_array().map(Vec::len), Some(0), "{result}");
         assert_eq!(result["quality"]["bodies"][0]["short_edges"].as_array().map(Vec::len), Some(0), "{result}");
         assert_eq!(result["total"]["complete"], true);
     }
