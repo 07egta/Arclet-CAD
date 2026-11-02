@@ -1130,7 +1130,9 @@ mod geometry_inspection_tests {
         assert_eq!(inertia["error_bound_g_mm2"], Value::Null);
         let mass = inertia["mass_g"].as_f64().unwrap();
         assert!(mass > 0.0);
-        for (axis, d2) in [20.0_f64.powi(2) + 30.0_f64.powi(2), 10.0_f64.powi(2) + 30.0_f64.powi(2), 10.0_f64.powi(2) + 20.0_f64.powi(2)].iter().enumerate() {
+        let squared_mm2 = [10.0_f64.powi(2), 20.0_f64.powi(2), 30.0_f64.powi(2)];
+        let diagonal_mm2 = [squared_mm2[1] + squared_mm2[2], squared_mm2[0] + squared_mm2[2], squared_mm2[0] + squared_mm2[1]];
+        for (axis, d2) in diagonal_mm2.into_iter().enumerate() {
             let expected = mass * d2 / 12.0;
             close(&inertia["tensor_g_mm2"][axis][axis], expected, expected * 1e-4, "g mm^2");
             for other in 0..3 {
