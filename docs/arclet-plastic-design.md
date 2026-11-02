@@ -26,7 +26,7 @@ Arcletの既存樹脂形状フィーチャを改善する。UI全体・B-repカ�
 
 1. **ルール内のThickness参照**：設計全体に同名パラメータがある場合も、ルール内の大文字 `Thickness` は同ルール自身の肉厚に固定する。
 2. **厚さルールの自己矛盾**：最小肉厚が0以下、または最大肉厚を超える定義を拒否する。名目寸法だけが推奨範囲外の場合は互換性を保って警告する。
-3. **Bossの穴と勾配**：円筒穴がテーパーの根元・先端に収まるか評価し、穴深さがボス高さを超える定義を拒否する。
+3. **Bossの穴と勾配**：円筒穴がテーパーの根元・先端に収まるか評価する。穴深さは正値が必要だが、ボスの高さを超えて土台に下穴を延ばす既存の設計は維持する。
 4. **Bossの無効入力**：負の根元フィレット、約57°以上の抜き勾配、小数のリブ本数、負のリブオフセットを拒否する。
 5. **中空Restのテーパー**：正の抜き勾配では外周が縮み穴が広がるため、頂部の肉厚消失を拒否する。負の勾配では内側開口の消失と根元の薄肉化を別に検証する。
 
@@ -39,13 +39,14 @@ Arcletの既存樹脂形状フィーチャを改善する。UI全体・B-repカ�
 | ネジボス付きパネル | 60×60×3 mm、外径10、穴径4、高さ12：ボス追加体積252π mm³ | `boss_with_hole_fillet_and_ribs` |
 | ボス直径変更 | 外径10→12：追加体積252π→384π mm³、穴周り名目肉厚3→4 mm | `plastic_audit_tracks_parametric_boss_wall_and_roundtrip` |
 | ボスのリブ4本 | 既存ボスのリブの体積増分を数値で検査 | `boss_with_hole_fillet_and_ribs` |
+| ボスの深い下穴 | 高さ12 mmのボスに深さ13 mmの穴を掘り、土台を1 mm掘り込むこと | `boss_with_hole_fillet_and_ribs` |
 | Shell後のLip | 80×50×30、シェル2 mm、Lip幅1・高さ2：追加体積496 mm³ | `lip_and_groove_on_a_shelled_box` |
 | Shell後のGroove | 上記に溝幅1・深さ2：除去体積512 mm³ | `lip_and_groove_on_a_shelled_box` |
 | スナップ嵌合 | アーム15×1.5×6＋キャッチ：追加体積144 mm³ | `snap_fit_arm_and_catch` |
 | 抜き勾配付き中空Rest | 20×10、壁厚1、高さ6、勾配2°で成立。高さ16では壁が消失するため拒否。負の勾配でも開口消失を拒否 | `plastic_preflight_rejects_bad_boss_and_rest_without_mutation` |
 | 上下ケース | ケース、Shell、複数スタンドオフ、コネクタ穴、スナップ、蓋、ねじ穴 | `examples/acceptance/sensor_enclosure.json` |
 | 再計算・再読み込み | ボスの直径変更後の体積、JSON設計の保存相当往復後の再評価 | `plastic_audit_tracks_parametric_boss_wall_and_roundtrip` |
-| 失敗時の原状維持 | 無効な穴深さ・フィレット・リブ数・中空開口で旧モデルを維持 | `plastic_preflight_rejects_bad_boss_and_rest_without_mutation` |
+| 失敗時の原状維持 | 負の穴深さ・フィレット・小数リブ数・中空開口で旧モデルを維持 | `plastic_preflight_rejects_bad_boss_and_rest_without_mutation` |
 
 診断の呼び出し例：
 
