@@ -683,4 +683,19 @@ fn empty_boolean_targets_without_overlap_keep_plain_message() {
         model.evaluate(&doc);
         assert_eq!(model.result(cut).unwrap().error.as_deref(), Some("there is no body to cut or intersect"));
     }
+
+}
+
+#[test]
+fn checked_document_json_reopens_with_editable_feature_history() {
+    let (doc, _) = plate_doc();
+    let serialized = doc.to_json_checked().unwrap();
+    assert!(!serialized.is_empty());
+    let loaded = Document::from_json(&serialized).unwrap();
+    assert_eq!(loaded.features.iter().map(|f| f.id).collect::<Vec<_>>(),
+               doc.features.iter().map(|f| f.id).collect::<Vec<_>>());
+    assert_eq!(loaded.params, doc.params);
+    assert!(loaded.next_id >= doc.next_id);
+    let saved_again = loaded.to_json_checked().unwrap();
+    assert_eq!(Document::from_json(&saved_again).unwrap(), loaded);
 }
