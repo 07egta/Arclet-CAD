@@ -12,9 +12,7 @@ use solidcraft_sketch::{ConstraintKind, CurveKind};
 use super::sketch::{add_c, edit};
 use super::{CommandSpec, in_sketch};
 use crate::params::bad;
-use crate::schema::sketch_modeling::{
-    HelixParams, JoinParams, JoinResult, PathResult, PolylineParams, PolylineResult, SpiralParams,
-};
+use crate::schema::sketch_modeling::{HelixParams, JoinParams, JoinResult, PathResult, PolylineParams, PolylineResult, SpiralParams};
 use crate::schema::{TypedContract, output_schema_for};
 use crate::{Result, Session};
 
@@ -27,11 +25,7 @@ fn in_sketch_3d(s: &Session) -> std::result::Result<(), String> {
     in_sketch(s)?;
     let id = s.active_sketch.ok_or_else(|| "no active sketch".to_string())?;
     let sketch = s.doc.sketch(id).map_err(|_| "active sketch was not found".to_string())?;
-    if sketch.view.three_d {
-        Ok(())
-    } else {
-        Err("turn on 3D Sketch (sketch.options sketch_3d: true) to create a helix".into())
-    }
+    if sketch.view.three_d { Ok(()) } else { Err("turn on 3D Sketch (sketch.options sketch_3d: true) to create a helix".into()) }
 }
 
 pub static COMMANDS: &[CommandSpec] = &[
@@ -86,7 +80,10 @@ fn samples(cmd: &str, turns: f64, per_turn: usize) -> Result<usize> {
     }
     let count = (turns * per_turn as f64).ceil() as usize;
     if count < 1 || count + 1 > solidcraft_sketch::MAX_FIT_POINTS {
-        return Err(bad(cmd, format!("too many fit points: at most {} including endpoints; reduce turns or samples_per_turn", solidcraft_sketch::MAX_FIT_POINTS)));
+        return Err(bad(
+            cmd,
+            format!("too many fit points: at most {} including endpoints; reduce turns or samples_per_turn", solidcraft_sketch::MAX_FIT_POINTS),
+        ));
     }
     Ok(count)
 }
@@ -171,27 +168,27 @@ fn join(s: &mut Session, p: &Value) -> Result<Value> {
             ends.push(((a, pa), (b, pb)));
         }
         let n = ends.len();
-        let mut parent: Vec<usize> = (0..2*n).collect();
-        for i in 0..2*n {
-            for j in (i+1)..2*n {
-                if i/2 != j/2 {
-                    let pi = if i%2 == 0 { ends[i/2].0.1 } else { ends[i/2].1.1 };
-                    let pj = if j%2 == 0 { ends[j/2].0.1 } else { ends[j/2].1.1 };
+        let mut parent: Vec<usize> = (0..2 * n).collect();
+        for i in 0..2 * n {
+            for j in (i + 1)..2 * n {
+                if i / 2 != j / 2 {
+                    let pi = if i % 2 == 0 { ends[i / 2].0.1 } else { ends[i / 2].1.1 };
+                    let pj = if j % 2 == 0 { ends[j / 2].0.1 } else { ends[j / 2].1.1 };
                     if pi.dist(pj) <= tol {
                         union(&mut parent, i, j);
                     }
                 }
             }
         }
-        let nodes: Vec<usize> = (0..2*n).map(|i| root(&mut parent, i)).collect();
-        let mut degree = vec![0_usize; 2*n];
+        let nodes: Vec<usize> = (0..2 * n).map(|i| root(&mut parent, i)).collect();
+        let mut degree = vec![0_usize; 2 * n];
         for &node in &nodes {
             degree[node] += 1;
             if degree[node] > 2 {
                 return Err(bad(cmd, "branch junction: more than two selected ends coincide"));
             }
         }
-        let open: Vec<usize> = (0..2*n).filter(|&i| degree[nodes[i]] == 1).map(|i| nodes[i]).collect();
+        let open: Vec<usize> = (0..2 * n).filter(|&i| degree[nodes[i]] == 1).map(|i| nodes[i]).collect();
         if !(open.is_empty() || open.len() == 2) {
             return Err(bad(cmd, "curves do not form one open chain or one closed loop"));
         }
@@ -205,14 +202,12 @@ fn join(s: &mut Session, p: &Value) -> Result<Value> {
         let mut prev_end = None;
         let mut first_start = None;
         for step in 0..n {
-            let options: Vec<usize> = (0..n)
-                .filter(|&i| !used[i] && (nodes[2*i] == at || nodes[2*i+1] == at))
-                .collect();
+            let options: Vec<usize> = (0..n).filter(|&i| !used[i] && (nodes[2 * i] == at || nodes[2 * i + 1] == at)).collect();
             if options.is_empty() || (options.len() > 1 && step > 0) {
                 return Err(bad(cmd, "selection is disconnected or branches at a junction"));
             }
             let i = options[0];
-            let forward = nodes[2*i] == at;
+            let forward = nodes[2 * i] == at;
             let begin = if forward { ends[i].0.0 } else { ends[i].1.0 };
             let end = if forward { ends[i].1.0 } else { ends[i].0.0 };
             if let Some(prev) = prev_end {
@@ -224,7 +219,7 @@ fn join(s: &mut Session, p: &Value) -> Result<Value> {
             indices.push(ids[i]);
             backwards.push(!forward);
             used[i] = true;
-            at = if forward { nodes[2*i+1] } else { nodes[2*i] };
+            at = if forward { nodes[2 * i + 1] } else { nodes[2 * i] };
         }
         if closed {
             if at != start {
@@ -288,11 +283,9 @@ fn helix(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(sketch) = p.get("sketch") {
         params["sketch"] = sketch.clone();
     }
-    let existing = super::find_command("sketch.spline3d")
-        .ok_or_else(|| bad(cmd, "sketch.spline3d is not available"))?;
+    let existing = super::find_command("sketch.spline3d").ok_or_else(|| bad(cmd, "sketch.spline3d is not available"))?;
     let reply = existing.run_nested(s, &params)?;
-    let curve = reply["curves"].get(0).and_then(Value::as_str)
-        .ok_or_else(|| bad(cmd, "sketch.spline3d returned no curve"))?;
+    let curve = reply["curves"].get(0).and_then(Value::as_str).ok_or_else(|| bad(cmd, "sketch.spline3d returned no curve"))?;
     Ok(json!({"curve": curve, "samples": count + 1, "approximation": "sampled_3d_fit_wire", "sketch": reply["sketch"]}))
 }
 

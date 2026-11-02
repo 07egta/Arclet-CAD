@@ -1984,18 +1984,13 @@ fn a_changed_length_dimension_keeps_its_first_point() {
     assert!((at(&s, "p1").x + 30.0).abs() < 1e-6 && (at(&s, "p2").x - 30.0).abs() < 1e-6, "{:?} {:?}", at(&s, "p1"), at(&s, "p2"));
 }
 
-
 // ---------------------------------------------------------------------------------------------
 // Arclet modeling tools: real multi-command workflows and hostile input.
 
 #[test]
 fn modeling_polyline_break_join_and_extrude_are_one_editable_workflow() {
     let mut s = new_sketch();
-    let poly = run(
-        &mut s,
-        "sketch.polyline",
-        json!({"points": [[0,0], [30,0], [30,20], [0,20]], "closed": true}),
-    );
+    let poly = run(&mut s, "sketch.polyline", json!({"points": [[0,0], [30,0], [30,20], [0,20]], "closed": true}));
     assert_eq!(curve_ids(&poly).len(), 4, "a polyline creates four exact line segments");
     assert_eq!(sketch(&s).curves.len(), 4);
     let split = run(&mut s, "sketch.break", json!({"curve": "l1", "points": [[15,0]]}));
@@ -2050,10 +2045,7 @@ fn modeling_join_ties_tolerant_ends_preserves_sources_and_refuses_branches() {
 #[test]
 fn modeling_spiral_is_editable_and_helix_requires_3d_sketch() {
     let mut s = new_sketch();
-    let spiral = run(
-        &mut s, "sketch.spiral",
-        json!({"center": [2,3], "start_radius": 2, "end_radius": 7, "turns": 1.5, "samples_per_turn": 16}),
-    );
+    let spiral = run(&mut s, "sketch.spiral", json!({"center": [2,3], "start_radius": 2, "end_radius": 7, "turns": 1.5, "samples_per_turn": 16}));
     assert_eq!(spiral["samples"], 25);
     let curve = spiral["curve"].as_str().expect("spiral curve id").to_string();
     let before = sketch(&s);

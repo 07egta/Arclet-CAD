@@ -5,9 +5,15 @@ use serde_json::Value;
 
 use super::types::{Point2, Point3, SketchRef, present};
 
-fn default_samples() -> usize { 48 }
-fn default_tolerance() -> f64 { 1e-6 }
-fn default_connect() -> bool { true }
+fn default_samples() -> usize {
+    48
+}
+fn default_tolerance() -> f64 {
+    1e-6
+}
+fn default_connect() -> bool {
+    true
+}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
