@@ -1929,13 +1929,44 @@ pub(super) fn plastic_eval(doc: &Document, vals: &BTreeMap<String, Value>, f: &F
                 Some(e) => val(vals, e, Kind::Angle)?,
                 None => rule(&target)?.map_or(0.0, |r| r.draft),
             };
+            // A negative root fillet is not the same as omitting it; silently
+            // treating it as zero hides an invalid parametric edit.
             let rf = match fillet {
-                Some(e) => len(e)?.max(0.0),
+                Some(e) => len(e)?,
                 None => 0.0,
             };
+            if !dr.is_finite() || dr.abs() >= 1.0 {
+                return Err(DocError::Invalid("the boss draft must be under 57° in magnitude".into()));
+            }
+            if !rf.is_finite() || rf < 0.0 {
+                return Err(DocError::Invalid("the boss root fillet must not be negative".into()));
+            }
             let r_top = r0 - h * dr.tan();
             if r_top <= 0.0 {
                 return Err(DocError::Invalid("the draft closes the boss before its top".into()));
+            }
+            // A straight drilled hole must fit in both the base and the tip of
+            // a tapered boss. Check before building/joining the post, so even a
+            // failed booleans path cannot leave a partially changed target.
+            let hole = hole_diameter
+                .as_deref()
+                .map(|e| plastic_size("boss", "hole_diameter", len(e)?))
+                .transpose()?;
+            let depth = if hole.is_some() {
+                Some(match hole_depth {
+                    Some(e) => plastic_size("boss", "hole_depth", len(e)?)?,
+                    None => h,
+                })
+            } else {
+                None
+            };
+            if let Some(d) = hole {
+                if !(d * 0.5 < r0.min(r_top)) {
+                    return Err(DocError::Invalid("the boss hole must fit inside the boss at both ends".into()));
+                }
+            }
+            if depth.is_some_and(|d| d > h) {
+                return Err(DocError::Invalid("the boss hole depth must not exceed the boss height".into()));
             }
             let delta = (h * 0.05).clamp(1e-3, 0.5);
             let (x, _, z) = local_frame(direction.0, None)?;
@@ -1950,9 +1981,9 @@ pub(super) fn plastic_eval(doc: &Document, vals: &BTreeMap<String, Value>, f: &F
             };
             let mut tools: Vec<Traced> = post.into_iter().map(|b| crate::lineage::part_tool(b, "post")).collect();
             if let Some(n) = ribs {
-                let n = val(vals, n, Kind::Unitless)?.round();
-                if !(0.0..=64.0).contains(&n) {
-                    return Err(DocError::Invalid("0…64 ribs".into()));
+                let n = val(vals, n, Kind::Unitless)?;
+                if !n.is_finite() || !(0.0..=64.0).contains(&n) || n.fract() != 0.0 {
+                    return Err(DocError::Invalid("the boss ribs count must be a whole number from 0 to 64".into()));
                 }
                 let t = match rib_thickness {
                     Some(e) => len(e)?,
@@ -1967,6 +1998,9 @@ pub(super) fn plastic_eval(doc: &Document, vals: &BTreeMap<String, Value>, f: &F
                     None => 0.0,
                 };
                 let hr = h - off;
+                if n > 0.0 && !(off.is_finite() && off >= 0.0 && hr.is_finite()) {
+                    return Err(DocError::Invalid("the boss rib offset must be between zero and the post height".into()));
+                }
                 if n > 0.0 {
                     plastic_size("boss", "rib_thickness", t)?;
                     plastic_size("boss", "rib_length", l)?;
@@ -2000,15 +2034,8 @@ pub(super) fn plastic_eval(doc: &Document, vals: &BTreeMap<String, Value>, f: &F
                     *slot = ModelBody::traced_new(mb.name, nb, mb.feature);
                 }
             }
-            if let Some(hd) = hole_diameter {
-                let rh = plastic_size("boss", "hole_diameter", len(hd)?)? / 2.0;
-                let depth = match hole_depth {
-                    Some(e) => plastic_size("boss", "hole_depth", len(e)?)?,
-                    None => h,
-                };
-                if !(rh > 0.0 && rh < r_top && depth > 0.0) {
-                    return Err(DocError::Invalid("the boss hole must fit inside the boss".into()));
-                }
+            if let (Some(d), Some(depth)) = (hole, depth) {
+                let rh = d * 0.5;
                 let hp = Plane::new(position.0, x, z.cross(x)).ok_or_else(|| DocError::Invalid("hole frame".into()))?;
                 let tool = kernel::extrude(&hp, &[Region2 { outer: Loop2::circle(Vec2::ZERO, rh), holes: Vec::new() }], h - depth, h + delta)?;
                 let tool = tool.into_iter().map(|b| crate::lineage::part_tool(b, "hole")).collect();
@@ -2150,11 +2177,12 @@ pub(super) fn plastic_eval(doc: &Document, vals: &BTreeMap<String, Value>, f: &F
                 return Err(DocError::Invalid("the rest's draft must be under 57°".into()));
             }
             let shrink = h * dr.tan();
-            let closes = match t {
-                Some(t) => 2.0 * shrink >= t,
-                None => 2.0 * shrink >= w.min(l.unwrap_or(w)),
-            };
-            if closes {
+            // A hollow rest's limiting top dimension is its INNER opening:
+            // (minimum outside width - twice the wall). Comparing the
+            // taper to the wall thickness rejects valid tall hollow rests and
+            // admits some whose inner opening has already collapsed.
+            let smallest_opening = w.min(l.unwrap_or(w)) - 2.0 * t.unwrap_or(0.0);
+            if !(smallest_opening.is_finite() && smallest_opening > 2.0 * shrink) {
                 return Err(DocError::Invalid("the draft closes the rest before its top".into()));
             }
             let delta = (h * 0.05).clamp(1e-3, 0.5);
