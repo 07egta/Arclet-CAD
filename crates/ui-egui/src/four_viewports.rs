@@ -8,7 +8,7 @@
 
 use std::hash::{Hash, Hasher};
 
-use egui::{Color32, ColorImage, FontId, Pos2, Rect, Stroke, TextureHandle, TextureOptions, Ui, pos2, vec2};
+use egui::{ColorImage, FontId, Pos2, Rect, Stroke, TextureHandle, TextureOptions, Ui, pos2, vec2};
 use serde_json::{Value, json};
 use solidcraft_engine::render::{Camera, CameraAnim};
 
@@ -166,7 +166,7 @@ impl FourViewports {
         app.ui.visual_style.hash(&mut hash);
         app.ui.show_grid.hash(&mut hash);
         app.origin_visible().hash(&mut hash);
-        app.preferences.color_vision.hash(&mut hash);
+        format!("{:?}", app.preferences.color_vision).hash(&mut hash);
         app.viewport_dark().hash(&mut hash);
         w.hash(&mut hash);
         h.hash(&mut hash);
@@ -246,7 +246,7 @@ impl FourViewports {
         }
     }
 
-    fn decorate(&mut self, ui: &mut Ui, rects: &[Rect; PANES]) {
+    fn decorate(&mut self, app: &mut SolveApp, ui: &mut Ui, rects: &[Rect; PANES]) {
         let tokens = crate::theme::Tokens::get();
         for (i, rect) in rects.iter().copied().enumerate().filter(|(_, rect)| rect.is_positive()) {
             let highlight = i == self.active;
@@ -272,7 +272,7 @@ impl FourViewports {
                 if self.maximized == Some(i) { "Restore four views" } else { "Maximize viewport" }
             ).clicked() {
                 self.maximized = if self.maximized == Some(i) { None } else { Some(i) };
-                self.active = i;
+                self.activate(app, i);
                 ui.ctx().request_repaint();
             }
         }
@@ -292,7 +292,7 @@ impl FourViewports {
                 self.show_pane(app, ui, i, pane_rect);
             }
         }
-        self.decorate(ui, &rects);
+        self.decorate(app, ui, &rects);
     }
 }
 
