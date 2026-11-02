@@ -68,6 +68,49 @@ impl ConfigTable {
     pub fn is_empty(&self) -> bool {
         self.columns.is_empty() && self.rows.is_empty() && self.rules.is_empty()
     }
+
+    /// Check the table independently of the geometry. An incomplete or ambiguous saved
+    /// table must not silently choose the first duplicate row or overwrite duplicate cells.
+    /// A row's expressions and its rebuilt geometry are checked separately on activation.
+    pub fn validate_layout(&self) -> Result<()> {
+        if self.columns.len() > MAX_COLUMNS || self.rows.len() > MAX_ROWS {
+            return Err(DocError::Invalid("configuration table exceeds limits".into()));
+        }
+        if self.rows.is_empty() && !self.rules.is_empty() {
+            return Err(DocError::Invalid("configuration rules require at least one row".into()));
+        }
+        if self.rules.len() > MAX_RULES {
+            return Err(DocError::Invalid("too many configuration rules".into()));
+        }
+        for (i, column) in self.columns.iter().enumerate() {
+            if self.columns[..i].iter().any(|previous| {
+                previous == column
+                    || matches!((previous, column), (Column::FaceAppearance(a), Column::FaceAppearance(b))
+                        if a.body == b.body && a.name == b.name)
+            }) {
+                return Err(DocError::Invalid(format!("duplicate configuration column {}", i + 1)));
+            }
+        }
+        let mut names = std::collections::BTreeSet::new();
+        for row in &self.rows {
+            if row.name.trim().is_empty() || row.name.len() > 128 {
+                return Err(DocError::Invalid("configuration row name must be 1..128 bytes".into()));
+            }
+            if !names.insert(row.name.as_str()) {
+                return Err(DocError::Invalid(format!("duplicate configuration row {}", row.name)));
+            }
+            if row.cells.len() != self.columns.len() {
+                return Err(DocError::Invalid(format!("configuration row {} has incomplete cells", row.name)));
+            }
+            if row.cells.iter().any(|cell| cell.len() > 4096) {
+                return Err(DocError::Invalid(format!("configuration row {} has an oversized cell", row.name)));
+            }
+        }
+        if self.active.as_ref().is_some_and(|name| !names.contains(name.as_str())) {
+            return Err(DocError::Invalid("active configuration row does not exist".into()));
+        }
+        Ok(())
+    }
 }
 
 /// Parse an appearance cell. Empty/Default follows the body's material; named library looks
@@ -170,7 +213,12 @@ impl Document {
     }
 
     pub fn apply_configuration_with_trace(&mut self, row: &str) -> Result<Vec<RuleTrace>> {
-        let r = self.configs.rows.iter().find(|r| r.name == row).cloned().ok_or_else(|| DocError::Unknown(format!("configuration `{row}`")))?;
+        self.configs.validate_layout()?;
+        let mut rows = self.configs.rows.iter().filter(|r| r.name == row);
+        let r = rows.next().cloned().ok_or_else(|| DocError::Unknown(format!("configuration `{row}`")))?;
+        if rows.next().is_some() {
+            return Err(DocError::Invalid(format!("duplicate configuration row `{row}`")));
+        }
         if self.configs.columns.len() > MAX_COLUMNS || self.configs.rows.len() > MAX_ROWS || r.cells.len() != self.configs.columns.len() {
             return Err(DocError::Invalid("configuration table exceeds limits or has incomplete rows".into()));
         }
@@ -348,6 +396,77 @@ mod tests {
         let before = d.clone();
         assert!(d.apply_configuration("Bad").is_err());
         assert_eq!(d, before, "all or nothing");
+    }
+
+
+    #[test]
+    fn configuration_layout_refuses_ambiguous_or_incomplete_tables() {
+        let mut table = ConfigTable {
+            columns: vec![Column::Param("width".into())],
+            rows: vec![ConfigRow { name: "Small".into(), cells: vec!["40 cm".into()] }],
+            active: Some("Small".into()),
+            ..ConfigTable::default()
+        };
+        assert!(table.validate_layout().is_ok());
+        table.rows.push(table.rows[0].clone());
+        assert!(table.validate_layout().unwrap_err().to_string().contains("duplicate configuration row"));
+        table.rows.pop();
+        table.columns.push(Column::Param("width".into()));
+        assert!(table.validate_layout().unwrap_err().to_string().contains("duplicate configuration column"));
+        table.columns.pop();
+        table.rows[0].cells.clear();
+        assert!(table.validate_layout().unwrap_err().to_string().contains("incomplete"));
+        table.rows[0].cells.push("40 cm".into());
+        table.active = Some("Missing".into());
+        assert!(table.validate_layout().unwrap_err().to_string().contains("active configuration"));
+        table.active = None;
+        table.rows.clear();
+        table.rules.push(ConfigRule {
+            id: "rule".into(),
+            name: "Rule".into(),
+            enabled: true,
+            length_unit: None,
+            condition: RuleCondition::Always,
+            effect: RuleEffect::DriveSuppression { feature: 1, value: true },
+        });
+        assert!(table.validate_layout().unwrap_err().to_string().contains("require at least one row"));
+    }
+
+    #[test]
+    fn chair_parameters_switch_units_dependencies_and_reject_invalid_rows_atomically() {
+        let mut doc = Document::new("Designer Chair");
+        doc.add_user_param("width", "45 cm", Some("mm"), None).unwrap();
+        doc.add_user_param("height", "0.9 m", Some("mm"), None).unwrap();
+        doc.add_user_param("seat_height", "height / 2", Some("mm"), None).unwrap();
+        doc.add_user_param("back_angle", "15 deg", Some("deg"), None).unwrap();
+        doc.add_user_param("leg_width", "1 in", Some("mm"), None).unwrap();
+        doc.configs.columns = vec![
+            Column::Param("width".into()),
+            Column::Param("height".into()),
+            Column::Param("back_angle".into()),
+        ];
+        doc.configs.rows = vec![
+            ConfigRow { name: "Compact".into(), cells: vec!["45 cm".into(), "0.9 m".into(), "15 deg".into()] },
+            ConfigRow { name: "Wide".into(), cells: vec!["20 in".into(), "95 cm".into(), "0.25 rad".into()] },
+            ConfigRow { name: "Cycle".into(), cells: vec!["height".into(), "width".into(), "15 deg".into()] },
+            ConfigRow { name: "Wrong unit".into(), cells: vec!["45 deg".into(), "95 cm".into(), "15 deg".into()] },
+            ConfigRow { name: "Invalid".into(), cells: vec!["1/0".into(), "95 cm".into(), "15 deg".into()] },
+        ];
+        doc.apply_configuration("Wide").unwrap();
+        let expected = doc.param_values().0;
+        assert!((expected["width"].v - 508.0).abs() < 1e-9);
+        assert!((expected["seat_height"].v - 475.0).abs() < 1e-9);
+        assert!((expected["leg_width"].v - 25.4).abs() < 1e-9);
+        assert!((expected["back_angle"].v - 0.25).abs() < 1e-12);
+        doc.apply_configuration("Compact").unwrap();
+        doc.apply_configuration("Wide").unwrap();
+        assert_eq!(doc.param_values().0, expected, "switching back must be deterministic");
+        assert!(doc.configuration_matches());
+        for name in ["Cycle", "Wrong unit", "Invalid"] {
+            let before = doc.clone();
+            assert!(doc.apply_configuration(name).is_err(), "{name}");
+            assert_eq!(doc, before, "invalid configuration must not change the document");
+        }
     }
 
     #[test]

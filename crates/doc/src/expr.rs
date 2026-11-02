@@ -299,6 +299,9 @@ pub fn value_in_unit(v: Value, unit: &str) -> f64 {
 }
 
 fn unit(name: &str) -> Option<Value> {
+    if matches!(name, "degree" | "degrees") {
+        return Some(Value::angle(std::f64::consts::PI / 180.0));
+    }
     UNITS.iter().find(|(n, _, _)| *n == name).map(|(_, k, s)| match k {
         Kind::Angle => Value::angle(*s),
         _ => Value::length(*s),
@@ -1398,6 +1401,20 @@ mod tests {
         assert_eq!(references("2*width + sin(ang) + 3 mm + pi"), vec!["width".to_string(), "ang".to_string()]);
         let (_, e) = eval_params(&[def("s", "s", "mm")], 1.0);
         assert!(e["s"].contains("s → s"));
+    }
+
+
+    #[test]
+    fn configuration_degree_aliases_parse_as_real_units() {
+        for angle in ["45 degree", "45 degrees", "45 deg", "45°"] {
+            assert!((ev(angle, Kind::Angle).unwrap() - std::f64::consts::FRAC_PI_4).abs() < 1e-12, "{angle}");
+            assert!(references(angle).is_empty(), "{angle}");
+        }
+        assert_eq!(reserved_kind("degree"), Some("unit"));
+        assert_eq!(reserved_kind("degrees"), Some("unit"));
+        assert!((ev("1 m + 25 cm + 10 mm", Kind::Length).unwrap() - 1260.0).abs() < 1e-12);
+        assert_eq!(ev("1 inch", Kind::Length).unwrap(), 25.4);
+        assert!(ev("45 degree + 10 mm", Kind::Angle).is_err());
     }
 
     #[test]
