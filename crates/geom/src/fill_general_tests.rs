@@ -142,37 +142,31 @@ fn a_planar_polygon_is_its_plane_and_a_point_lifts_it() {
     assert!(f.deviation <= TOL && f.point_deviation <= TOL);
 }
 
-/// Curvature has its own geometric tolerance (1/mm). An excellent G0/G1
-/// fit with the wrong normal curvature must not be published as G2.
+/// One very curved neighbouring side must not hide the G2 error beside a
+/// nearly flat side. The acceptance test compares *local* relative curvature
+/// mismatches, not a global maximum absolute mismatch.
 #[test]
 fn g2_mismatch_is_a_failure_even_when_positions_and_normals_fit() {
-    let stations: Vec<Station> = [0.0, PI / 2.0, PI, 3.0 * PI / 2.0]
-        .into_iter()
-        .map(|a| Station {
-            p: radial(a) * 10.0,
-            up: Vec3::Z,
-            across: Some(Across { leave: Vec3::Z, normal: radial(a), bend: Some(radial(a) * -0.1) }),
-            corner: false,
-            clash: false,
-        })
-        .collect();
-    let limit = g2_curvature_tolerance(&stations);
-    assert!((limit - 0.002).abs() < 1e-12, "{limit}");
-    let with_mismatch = |curvature| Measured {
-        shortfall: Shortfall { deviation: 0.0, angle: 0.0, points: 0.0, curvature },
+    let with_ratio = |ratio| Measured {
+        shortfall: Shortfall { deviation: 0.0, angle: 0.0, points: 0.0, curvature: ratio },
         angle_all: 0.0,
-        curvature,
+        curvature: ratio,
+        curvature_ratio: ratio,
     };
-    assert!(meets_fill_tolerances(&with_mismatch(0.001), &stations, &spec(&[])));
-    assert!(!meets_fill_tolerances(&with_mismatch(0.01), &stations, &spec(&[])));
-    let mut g1_only = stations;
-    for s in &mut g1_only {
-        if let Some(across) = s.across.as_mut() {
-            across.bend = None;
-        }
-    }
-    assert_eq!(g2_curvature_tolerance(&g1_only), f64::INFINITY);
-    assert!(meets_fill_tolerances(&with_mismatch(0.01), &g1_only, &spec(&[])));
+    assert!(meets_fill_tolerances(&with_ratio(0.01), &spec(&[])));
+    assert!(!meets_fill_tolerances(&with_ratio(0.1), &spec(&[])));
+
+    // For a 20 mm loop, a zero-curvature neighbour (plane) has reference
+    // 1/20 mm^-1. 0.01 mm^-1 extra curvature is 20% of that scale and fails.
+    let inverse_size = 1.0 / 20.0;
+    let flat_error = relative_curvature_mismatch(0.01, 0.0, inverse_size);
+    assert!((flat_error - 0.2).abs() < 1e-12);
+    assert!(!meets_fill_tolerances(&with_ratio(flat_error), &spec(&[])));
+
+    // Even if another side has curvature 2/mm, only the local neighbour's
+    // curvature is relevant at each station (0.1/mm in this example).
+    assert!((relative_curvature_mismatch(0.101, 0.1, inverse_size) - 0.01).abs() < 1e-12);
+    assert!((relative_curvature_mismatch(0.11, 0.1, inverse_size) - 0.1).abs() < 1e-12);
 }
 
 /// A crown is checked after modifying the control net, not just before.
