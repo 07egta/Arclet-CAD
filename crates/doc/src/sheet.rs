@@ -8655,4 +8655,111 @@ mod tests {
         assert_eq!(material.len(), 2);
         assert!(after.parted_from_base(&material, &two).unwrap().is_empty());
     }
+
+
+    /// Analytic reference for a 90-degree bend with no adjoining corners:
+    /// the neutral-axis arc is BA = pi/2 * (R + K*T), the outer-sharp
+    /// setback is R + T, and the formed leg is height - (R + T).
+    /// Both upward and downward bends must cut the same size blank.
+    #[test]
+    fn arclet_ninety_degree_blank_matches_neutral_axis_across_thickness_radius_and_direction() {
+        let cases = [(0.8, 0.8, 0.33), (2.0, 1.0, 0.5), (3.2, 5.0, 0.44)];
+        for (thickness, radius, k) in cases {
+            for flip in [false, true] {
+                let rule = RuleValues { thickness, k_factor: k, bend_radius: radius, ..steel() };
+                let region = rect(
+                    Vec2::ZERO, Vec2::new(100.0, 0.0),
+                    Vec2::new(100.0, 60.0), Vec2::new(0.0, 60.0),
+                );
+                let mut sheet = base_flange("Bracket", "Engineering", &rule, Plane::XY, region);
+                sheet.add_flange(
+                    Vec3::new(50.0, 0.0, thickness), 40.0,
+                    std::f64::consts::FRAC_PI_2, radius, "inside", flip,
+                ).unwrap();
+                let flange = &sheet.flanges[0];
+                let allowance = std::f64::consts::FRAC_PI_2 * (radius + k * thickness);
+                let setback = radius + thickness;
+                let expected_blank = 60.0 - setback + allowance + (40.0 - setback);
+                assert!((sheet.allowance(flange) - allowance).abs() < 1e-9);
+                assert!((flange.leg - (40.0 - setback)).abs() < 1e-9);
+                assert_eq!(flange.angle < 0.0, flip, "direction must not change neutral-axis length");
+                let (width, height) = sheet.flat_size().unwrap();
+                assert!((width - 100.0).abs() < 1e-6, "{thickness}, {radius}, {k}, {flip}: {width}");
+                assert!((height - expected_blank).abs() < 1e-6, "{thickness}, {radius}, {k}, {flip}: {height} != {expected_blank}");
+                let bends = sheet.bends();
+                assert_eq!(bends.len(), 1, "{thickness}, {radius}, {k}, {flip}");
+                assert!((bends[0].allowance - allowance).abs() < 1e-9);
+                assert!((bends[0].length - 100.0).abs() < 1e-6);
+                assert_eq!(bends[0].up, !flip);
+                let flat_before = sheet.flat_regions().unwrap();
+                assert_eq!(flat_before.len(), 1, "unrelieved bracket must have one blank");
+                let formed = sheet.solid().unwrap();
+                assert!(formed.validity().is_empty(), "the folded bracket must be a valid B-rep");
+                sheet.flat = true;
+                assert_eq!(sheet.flat_regions().unwrap(), flat_before, "unfolding preserves all the cut material");
+                let unfolded = sheet.solid().unwrap();
+                assert!(unfolded.validity().is_empty(), "unfolded blank must be a valid B-rep");
+                let flat_volume = flat_before.iter().map(Region2::area).sum::<f64>() * thickness;
+                assert!((vol(&unfolded) - flat_volume).abs() <= flat_volume * 1e-5);
+                sheet.flat = false;
+                assert!((sheet.flat_size().unwrap().1 - expected_blank).abs() < 1e-6);
+            }
+        }
+    }
+
+    #[test]
+    fn arclet_invalid_radius_and_corner_relief_never_mutate_an_existing_sheet() {
+        let before = plate(100.0, 60.0);
+        let edge = EdgeFlange {
+            pick: Vec3::new(50.0, 0.0, before.t),
+            height: 40.0, angle: std::f64::consts::FRAC_PI_2, from: HeightFrom::Outer,
+        };
+        for radius in [-1.0, f64::NAN, f64::INFINITY, 10_000_001.0] {
+            let mut sheet = before.clone();
+            assert!(sheet.add_flanges_each(&[edge], radius, "inside", false, ReliefOverride::default()).is_err(), "{radius}");
+            assert_eq!(sheet, before, "invalid flange input must not trim the base");
+        }
+        for size in [-0.1, f64::NAN, f64::INFINITY, 10_000_001.0] {
+            let mut sheet = before.clone();
+            assert!(sheet.add_flanges_each(
+                &[edge], 2.5, "inside", false,
+                ReliefOverride { shape: Some(ReliefShape::Round), size: Some(size) },
+            ).is_err(), "{size}");
+            assert_eq!(sheet, before, "invalid relief size must not change an existing panel");
+        }
+    }
+
+    #[test]
+    fn arclet_rule_length_fields_are_bounded_without_rejecting_zero_relief() {
+        let doc = Document::default();
+        let (params, _) = doc.param_values();
+        for (field, expression, reason) in [
+            ("k_factor", "-0.1", "K-factor"),
+            ("k_factor", "1.1", "K-factor"),
+            ("bend_radius", "-0.1 mm", "bend radius"),
+            ("bend_radius", "10000001 mm", "bend radius"),
+            ("relief_width", "-1 mm", "bend relief width"),
+            ("relief_depth", "-1 mm", "bend relief depth"),
+            ("corner_relief", "-1 mm", "corner relief"),
+            ("hem_gap", "-1 mm", "hem gap"),
+            ("gap", "-1 mm", "flange gap"),
+        ] {
+            let mut rule = SheetRule::steel();
+            for (name, value, _) in rule.fields_mut() {
+                if name == field {
+                    *value = expression.to_string();
+                }
+            }
+            let error = doc.rule_values(&params, &rule).unwrap_err().to_string();
+            assert!(error.contains(reason), "{field}={expression}: {error}");
+        }
+        let mut zero = SheetRule::steel();
+        zero.relief_width = "0 mm".into();
+        zero.relief_depth = "0 mm".into();
+        zero.corner_relief = "0 mm".into();
+        zero.hem_gap = "0 mm".into();
+        zero.gap = "0 mm".into();
+        assert!(doc.rule_values(&params, &zero).is_ok(), "legacy zero-gap/zero-relief rules stay valid");
+    }
+
 }
