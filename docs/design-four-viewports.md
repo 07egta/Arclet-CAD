@@ -189,6 +189,16 @@ Each step is shippable on its own. Steps 1 to 3 change no behaviour. Step 0 is p
 7. Four equal panes on the CPU and capture path first, then the GPU: give each pane its own `Renderer` through a `pane` field on `Frame` (`gpu.rs:177-200`, `view.rs:948`), and measure memory and frame time on a large model with `DrawStats`. Move to candidate B2 only if the measurement says the per-pane copies are too costly.
 8. Default and polish: four panes as a preference, with the single view kept as the default until screenshots and a perf check pass; then switch the default with a changed-default note (AGENTS.md rule). Add locale strings in `assets/locales/pending/`.
 
+### Step 1 done
+
+Pure additions in `crates/ui-egui/src/viewport_layout.rs`, with no callers yet, so no behaviour changes:
+
+- `Layout::quad(rect) -> [Rect; 4]`: splits a rect into a 2 x 2 grid, returned as [top left, top right, bottom left, bottom right]. A rect that is not finite or has no area gives four empty rects.
+- `ViewPreset` (`Top`, `Front`, `Right`, `Perspective`, with `ViewPreset::ALL` in that order): `standard_view()` and `angles()` delegate to `StandardView::angles` (`crates/render/src/camera.rs`). Perspective uses the iso angles. `is_perspective()` is true only for Perspective.
+- Tests in `crates/ui-egui/src/viewport_layout_tests.rs`: the quads tile the rect without overlap, empty and non-finite input is handled, and the presets match the standard-view angles.
+
+Not changed: `SolveApp.cam`, `ViewportState` and every call site. The brief's example for step 1 (grouping per-viewport state into a struct) is the doc's step 3 and is still to do.
+
 ## 4. Open questions
 
 1. Interaction ownership: which pane owns a drag that starts in one pane and ends in another, and does hover need to be per pane (`viewport.rs:153`) or only the pane under the pointer?

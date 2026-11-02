@@ -1,7 +1,7 @@
 //! Floating controls reserve drawing space without changing rendering or picking projection.
 use egui::{Rect, pos2, vec2};
 use solidcraft_engine::geom::{Aabb3, Vec3};
-use solidcraft_engine::render::Camera;
+use solidcraft_engine::render::{Camera, StandardView};
 
 #[derive(Clone, Debug)]
 pub(crate) struct Layout {
@@ -157,6 +157,61 @@ impl Layout {
         }
         let drawable = free_rect(if fit_in_content { content } else { viewport }, &obstacles).shrink(16.0 / scale);
         Self { viewport, drawable, content, axis_view, navigation, confirm }
+    }
+}
+
+/// The four panes of the four-viewport layout, in the order [`Layout::quad`] returns them.
+#[allow(dead_code)] // Step 1 of docs/design-four-viewports.md: nothing draws four panes yet.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ViewPreset {
+    Top,
+    Front,
+    Right,
+    Perspective,
+}
+
+#[allow(dead_code)] // Step 1 of docs/design-four-viewports.md: nothing draws four panes yet.
+impl ViewPreset {
+    pub const ALL: [ViewPreset; 4] = [ViewPreset::Top, ViewPreset::Front, ViewPreset::Right, ViewPreset::Perspective];
+
+    /// The standard view this pane starts from. The Perspective pane starts from the iso angles.
+    pub fn standard_view(self) -> StandardView {
+        match self {
+            ViewPreset::Top => StandardView::Top,
+            ViewPreset::Front => StandardView::Front,
+            ViewPreset::Right => StandardView::Right,
+            ViewPreset::Perspective => StandardView::Iso,
+        }
+    }
+
+    /// (yaw, pitch) in radians, as [`StandardView::angles`] gives them.
+    pub fn angles(self) -> (f64, f64) {
+        self.standard_view().angles()
+    }
+
+    /// Only the Perspective pane projects with a field of view; the other three are orthographic.
+    pub fn is_perspective(self) -> bool {
+        self == ViewPreset::Perspective
+    }
+}
+
+#[allow(dead_code)] // Step 1 of docs/design-four-viewports.md: nothing draws four panes yet.
+impl Layout {
+    /// Split `rect` into a 2 x 2 grid of pane rectangles, returned as
+    /// [top left, top right, bottom left, bottom right]. Those are the panes of [`ViewPreset::ALL`].
+    /// A rectangle that is not finite or has no area gives four empty rectangles.
+    pub fn quad(rect: Rect) -> [Rect; 4] {
+        if !rect.is_finite() || !rect.is_positive() {
+            return [Rect::NOTHING; 4];
+        }
+        let (left, right, top, bottom) = (rect.left(), rect.right(), rect.top(), rect.bottom());
+        let (mid_x, mid_y) = (rect.center().x, rect.center().y);
+        [
+            Rect::from_min_max(pos2(left, top), pos2(mid_x, mid_y)),
+            Rect::from_min_max(pos2(mid_x, top), pos2(right, mid_y)),
+            Rect::from_min_max(pos2(left, mid_y), pos2(mid_x, bottom)),
+            Rect::from_min_max(pos2(mid_x, mid_y), pos2(right, bottom)),
+        ]
     }
 }
 

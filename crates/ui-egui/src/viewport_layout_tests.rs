@@ -554,3 +554,39 @@ fn escape_ends_navigation_before_sketch_tools_and_does_not_count_as_a_finish_pre
     h.step(&json!({"key":"Escape"})).unwrap();
     assert!(h.app.session.active_sketch.is_none(), "two ordinary quick Escapes still finish the sketch");
 }
+
+#[test]
+fn quad_tiles_the_rect_into_four_disjoint_quarters() {
+    let rect = Rect::from_min_size(pos2(10.0, 20.0), vec2(400.0, 300.0));
+    let panes = Layout::quad(rect);
+    for pane in panes {
+        assert_eq!(pane.size(), vec2(200.0, 150.0));
+        assert!(rect.contains_rect(pane));
+    }
+    for (i, a) in panes.iter().enumerate() {
+        for b in panes.iter().skip(i + 1) {
+            assert!(!a.intersect(*b).is_positive(), "panes must not overlap");
+        }
+    }
+    let union = panes.iter().skip(1).fold(panes[0], |acc, r| acc.union(*r));
+    assert_eq!(union, rect);
+}
+
+#[test]
+fn quad_of_an_empty_or_non_finite_rect_is_empty() {
+    for rect in [Rect::NOTHING, Rect::from_min_size(pos2(0.0, 0.0), vec2(0.0, 300.0)), Rect::from_min_size(pos2(f32::NAN, 0.0), vec2(10.0, 10.0))] {
+        assert!(Layout::quad(rect).iter().all(|r| !r.is_positive()));
+    }
+}
+
+#[test]
+fn view_presets_use_the_standard_view_angles() {
+    use std::f64::consts::FRAC_PI_2;
+    assert_eq!(ViewPreset::ALL, [ViewPreset::Top, ViewPreset::Front, ViewPreset::Right, ViewPreset::Perspective]);
+    assert_eq!(ViewPreset::Top.angles(), (0.0, FRAC_PI_2));
+    assert_eq!(ViewPreset::Front.angles(), StandardView::Front.angles());
+    assert_eq!(ViewPreset::Right.angles(), StandardView::Right.angles());
+    assert_eq!(ViewPreset::Perspective.angles(), StandardView::Iso.angles());
+    assert_eq!(ViewPreset::ALL.iter().filter(|p| p.is_perspective()).count(), 1);
+    assert!(ViewPreset::Perspective.is_perspective() && !ViewPreset::Top.is_perspective());
+}
