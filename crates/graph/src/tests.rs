@@ -523,3 +523,38 @@ fn incremental_stress_two_thousand_nodes_reuses_and_invalidates_only_dependents(
     let restored = Graph::from_json(&saved).unwrap();
     assert_eq!(restored.evaluate().unwrap(), graph.evaluate().unwrap());
 }
+
+
+#[test]
+fn incremental_cached_errors_recover_and_resource_budget_is_order_sensitive() {
+    let mut graph = Graph::new();
+    let source = graph.add_node("Series", (0.0, 0.0)).unwrap();
+    let independent = graph.add_node("Add", (10.0, 0.0)).unwrap();
+    let divide = graph.add_node("Divide", (20.0, 0.0)).unwrap();
+    let dependent = graph.add_node("Add", (30.0, 0.0)).unwrap();
+    graph.set_constant(source, 2, Value::Number(1.0)).unwrap();
+    graph.set_constant(divide, 1, Value::Number(0.0)).unwrap();
+    graph.connect_checked(divide, 0, dependent, 0).unwrap();
+
+    let mut cache = IncrementalEvaluator::new();
+    cache.update(&graph, &|| false).unwrap();
+    assert!(cache.current().unwrap().errors.contains_key(&divide));
+    assert!(cache.current().unwrap().errors.contains_key(&dependent));
+    assert_eq!(cache.update(&graph, &|| false).unwrap().recomputed.len(), 0);
+
+    graph.set_constant(divide, 1, Value::Number(2.0)).unwrap();
+    let recovered = cache.update(&graph, &|| false).unwrap();
+    assert!(recovered.recomputed.contains(&divide));
+    assert!(recovered.recomputed.contains(&dependent));
+    assert!(!recovered.recomputed.contains(&independent));
+    assert!(cache.current().unwrap().errors.is_empty());
+    assert_eq!(cache.current(), Some(&graph.evaluate().unwrap()));
+
+    // The global retained-output budget is order-dependent. Expanding a
+    // preceding independent node changes the budget seen by later nodes.
+    graph.set_constant(source, 2, Value::Number(3.0)).unwrap();
+    let expanded = cache.update(&graph, &|| false).unwrap();
+    assert!(expanded.recomputed.contains(&source));
+    assert!(expanded.recomputed.contains(&independent));
+    assert_eq!(cache.current(), Some(&graph.evaluate().unwrap()));
+}
