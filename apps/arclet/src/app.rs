@@ -590,6 +590,19 @@ impl ArcletApp {
         }
     }
 
+    /// A clicked/autocompleted command must keep an explicitly typed Boolean mode. For a
+    /// prefix query, the selected label is the actual command recorded in history.
+    fn start_suggested_command(&mut self, id: &str, label: &str) {
+        let entered = std::mem::take(&mut self.command);
+        if commands::resolve(&entered).is_ok_and(|resolved| resolved == id) {
+            self.cmdline.entered(&entered);
+        } else {
+            self.cmdline.entered(label);
+        }
+        self.start_logged(id);
+        self.preset_boolean_operation(id, &entered);
+    }
+
     fn command_bar(&mut self, ui: &mut Ui) {
         if self.cad.nodes.open {
             return;
@@ -606,13 +619,7 @@ impl ArcletApp {
                 match cmdline::show(ui, &mut self.cmdline, &mut self.command, &mut self.command_focus, invalid) {
                     cmdline::Action::Nothing => {}
                     cmdline::Action::Run => self.run_command_text(),
-                    cmdline::Action::Suggested { id, label } => {
-                        let entered = self.command.clone();
-                        self.cmdline.entered(label);
-                        self.start_logged(id);
-                        self.preset_boolean_operation(id, &entered);
-                        self.command.clear();
-                    }
+                    cmdline::Action::Suggested { id, label } => self.start_suggested_command(id, label),
                     cmdline::Action::Cancel => {
                         self.command_error = None;
                         cmdline::cancel_active(&mut self.cad);
@@ -1136,6 +1143,26 @@ mod tests {
         assert!(matches!(app.cad.dialog.as_ref().map(|d| &d.kind), Some(Kind::Combine { operation: 1, .. })));
 
         app.run_command_text();
+        assert!(matches!(app.cad.dialog.as_ref().map(|d| &d.kind), Some(Kind::Combine { operation: 1, .. })));
+    }
+
+    #[test]
+    fn selecting_an_autocomplete_boolean_command_preserves_its_specific_mode() {
+        use solidcraft_ui_egui::dialogs::Kind;
+
+        let mut app = ArcletApp::with_services(Default::default());
+        app.command = "bOolEaNiNtErSeCtIoN".into();
+        app.start_suggested_command("solid.combine", "Combine");
+        assert!(app.command.is_empty());
+        assert!(app.command_error.is_none());
+        assert!(matches!(app.cad.dialog.as_ref().map(|d| &d.kind), Some(Kind::Combine { operation: 3, .. })));
+        let typed = app.cmdline.history.iter().find(|line| line.kind == cmdline::LineKind::Entered);
+        assert_eq!(typed.map(|line| line.fill.as_str()), Some("bOolEaNiNtErSeCtIoN"));
+
+        // A partial query with an explicit clicked suggestion has no implied Boolean mode.
+        app.command = "bool".into();
+        app.start_suggested_command("solid.combine", "Combine");
+        assert!(app.last_boolean_alias.is_none());
         assert!(matches!(app.cad.dialog.as_ref().map(|d| &d.kind), Some(Kind::Combine { operation: 1, .. })));
     }
 
