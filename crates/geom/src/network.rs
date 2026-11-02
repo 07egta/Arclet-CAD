@@ -956,7 +956,9 @@ pub fn network_surface(u: Vec<NetworkCurve>, v: Vec<NetworkCurve>, tol: Toleranc
     let v_op_space = across_v.space().clone();
     let Some(across_u) = across_u else {
         // Curves in one direction only: the skinned surface.
-        return surface(&u_space, &v_op_space, &pu);
+        let result = surface(&u_space, &v_op_space, &pu)?;
+        verify_network_samples(&result, &mut us, &mut vs, &up, &vp, &ubar, &vbar, tol.fit)?;
+        return Ok(result);
     };
 
     // The derivative data at each crossing of a conditioned boundary, exactly as the fitted
@@ -1036,7 +1038,60 @@ pub fn network_surface(u: Vec<NetworkCurve>, v: Vec<NetworkCurve>, tol: Toleranc
             .collect();
         net.push(col);
     }
-    surface(&u_space, &v_space, &net)
+    let result = surface(&u_space, &v_space, &net)?;
+    verify_network_samples(&result, &mut us, &mut vs, &up, &vp, &ubar, &vbar, tol.fit)?;
+    Ok(result)
+}
+
+/// Check the actual tensor-product result, independently of the control-space fit.
+/// A small fitting residual before Gordon blending does not guarantee that subtracting
+/// the crossing interpolant leaves the final surface on every input curve, especially
+/// when control-point coordinates are large. These are *sampled* errors, not a certified
+/// Hausdorff distance or a promise about unsampled intervals.
+fn verify_network_samples(
+    surface: &NurbsSurface,
+    us: &mut [Track],
+    vs: &mut [Track],
+    up: &[Placement],
+    vp: &[Placement],
+    ubar: &[f64],
+    vbar: &[f64],
+    tol: f64,
+) -> SplineResult<()> {
+    const CHECK_SAMPLES: usize = 32;
+    // Each input curve is compared against the *placed* version used by Gordon:
+    // its crossing offsets are part of the surface's intended geometry.
+    for (i, (track, placement)) in us.iter_mut().zip(up).enumerate() {
+        let Some(&v) = vbar.get(i) else { return invalid("the surface is missing a u-curve parameter") };
+        for k in 0..=CHECK_SAMPLES {
+            let u = k as f64 / CHECK_SAMPLES as f64;
+            let want = placement.point(track, u)?;
+            let actual = surface.eval(u, v)?;
+            let error = want.dist(actual);
+            if !error.is_finite() || error > 4.0 * tol {
+                return Err(SplineError::Unsupported(format!(
+                    "surface interpolation strays {error:.3e} mm from {} at parameter {u:.4} (allowed sampled deviation {:.3e} mm)",
+                    track.label, 4.0 * tol
+                )));
+            }
+        }
+    }
+    for (j, (track, placement)) in vs.iter_mut().zip(vp).enumerate() {
+        let Some(&u) = ubar.get(j) else { return invalid("the surface is missing a v-curve parameter") };
+        for k in 0..=CHECK_SAMPLES {
+            let v = k as f64 / CHECK_SAMPLES as f64;
+            let want = placement.point(track, v)?;
+            let actual = surface.eval(u, v)?;
+            let error = want.dist(actual);
+            if !error.is_finite() || error > 4.0 * tol {
+                return Err(SplineError::Unsupported(format!(
+                    "surface interpolation strays {error:.3e} mm from {} at parameter {v:.4} (allowed sampled deviation {:.3e} mm)",
+                    track.label, 4.0 * tol
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// A conditioned end of the u-direction: which curve, the derivative orders, its neighbouring
@@ -1584,6 +1639,24 @@ mod tests {
         let steep = line("steep", Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 10.0, 5.0));
         let err = network_surface(vec![edge(), far], vec![steep, curve("right", side(10.0))], TOL).unwrap_err();
         assert!(err.to_string().contains("steep") && err.to_string().contains("tangent"), "{err}");
+    }
+
+    /// The final Gordon interpolation is independently checked on all six curves,
+    /// including interior curves (not just at their crossing points).
+    #[test]
+    fn final_network_keeps_curves_at_unsampled_positions() {
+        let z = |x: f64, y: f64| 0.02 * x * x - 0.04 * y * y + 0.01 * x * y;
+        let s = network_surface(
+            [0.0, 3.0, 7.0].into_iter().map(|y| curve("u", move |t| Vec3::new(10.0 * t, y, z(10.0 * t, y)))).collect(),
+            [0.0, 5.0, 10.0].into_iter().map(|x| curve("v", move |t| Vec3::new(x, 7.0 * t, z(x, 7.0 * t)))).collect(),
+            TOL,
+        )
+        .unwrap();
+        assert_eq!(s.degree()[0], 3);
+        assert_eq!(s.degree()[1], 3);
+        for q in grid(&s, 15) {
+            assert!((q.z - z(q.x, q.y)).abs() < 0.02, "{q:?}");
+        }
     }
 
     /// A shallow sinusoid crosses twice while its *whole length* remains near the
