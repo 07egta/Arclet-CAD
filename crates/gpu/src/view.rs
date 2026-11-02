@@ -1244,7 +1244,13 @@ pub fn placement_scale(rows: &[[f32; 4]; 3], bounds: &[[f32; 3]; 2], vp: &[[f32;
 /// The coarsest level whose error (mm; level 0, the full triangles, has none) stays under
 /// [`LOD_PX`] at `scale` pixels per millimetre.
 pub fn level_for(errors: &[f32], scale: f32) -> usize {
-    errors.iter().rposition(|e| *e * scale <= LOD_PX).unwrap_or(0)
+    level_for_iter(errors.iter().copied(), scale)
+}
+
+/// Pick a level directly from the renderer's resident level metadata. Camera interaction
+/// must not allocate a temporary Vec of errors for every instanced object on every frame.
+fn level_for_iter(errors: impl DoubleEndedIterator<Item = f32> + ExactSizeIterator, scale: f32) -> usize {
+    errors.enumerate().rfind(|(_, error)| *error * scale <= LOD_PX).map_or(0, |(index, _)| index)
 }
 
 /// Whether a box (`bounds`, min and max) moved by a placement (`rows`, see [`INSTANCE_SIZE`])
@@ -1857,7 +1863,6 @@ impl Batches {
         self.cull_blocks(vp);
         let f = |b: &[u8], i: usize| b.get(i..i + 4).and_then(|x| x.try_into().ok()).map_or(0.0, f32::from_le_bytes);
         for d in &mut self.instanced {
-            let errors: Vec<f32> = d.levels.iter().map(|l| l.error).collect();
             let mut shown: Vec<(u32, u8)> = d
                 .placements
                 .as_chunks::<INSTANCE_SIZE>()
@@ -1867,7 +1872,12 @@ impl Batches {
                 .filter_map(|(i, p)| {
                     let rows = [0, 1, 2].map(|r| [f(&p[..], 16 * r), f(&p[..], 16 * r + 4), f(&p[..], 16 * r + 8), f(&p[..], 16 * r + 12)]);
                     placed_box_in_view(&rows, &d.bounds, vp).then(|| {
-                        let level = if errors.len() > 1 { level_for(&errors, placement_scale(&rows, &d.bounds, vp, size)) } else { 0 };
+                        let level = if d.levels.len() > 1 {
+                            let scale = placement_scale(&rows, &d.bounds, vp, size);
+                            level_for_iter(d.levels.iter().map(|l| l.error), scale)
+                        } else {
+                            0
+                        };
                         (i as u32, u8::try_from(level).unwrap_or(0))
                     })
                 })
@@ -4298,6 +4308,19 @@ mod tests {
         assert_eq!(samples_sent(super::AO_SAMPLES_MOVING), 8.0);
         assert_eq!(samples_sent(0), 1.0, "at least one sample");
         assert_eq!(samples_sent(1000), 32.0, "at most the shader's 32");
+    }
+
+    /// The streaming LOD chooser is allocation-free and gives the same answers as the
+    /// original slice-based search, including offscreen/infinite projection scales.
+    #[test]
+    fn streaming_lod_uses_identical_levels_without_temporary_allocations() {
+        let levels = [0.0, 0.04, 0.2, 2.0];
+        for scale in [0.0, 0.5, 3.0, 12.0, 1e10, f32::INFINITY, f32::NAN] {
+            let old = levels.iter().rposition(|error| *error * scale <= super::LOD_PX).unwrap_or(0);
+            let new = super::level_for_iter(levels.iter().copied(), scale);
+            assert_eq!(new, old, "camera scale {scale} must keep the same LOD");
+            assert_eq!(super::level_for(&levels, scale), old);
+        }
     }
 
     /// A frame with a fixed picture, and a key that names everything it shows.
