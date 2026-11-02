@@ -207,6 +207,7 @@ impl Document {
     }
 
     pub fn apply_configuration_with_trace(&mut self, row: &str) -> Result<Vec<RuleTrace>> {
+        self.configs.validate_layout()?;
         let mut rows = self.configs.rows.iter().filter(|r| r.name == row);
         let r = rows.next().cloned().ok_or_else(|| DocError::Unknown(format!("configuration `{row}`")))?;
         if rows.next().is_some() {
