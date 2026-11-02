@@ -1,0 +1,41 @@
+name: Arclet sheet-metal engineering
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'crates/doc/src/sheet.rs'
+      - 'crates/engine/src/cmd/sheet.rs'
+      - 'crates/engine/src/cmd/sheet_tests.rs'
+      - 'docs/arclet-sheet-metal-engineering.md'
+      - '.github/workflows/arclet-sheet-metal-engineering.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: arclet-sheet-metal-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sheet-metal:
+    name: Analytical bend / flat pattern / DXF verification
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Test Arclet rule, radius, bend and persistence regressions
+        run: cargo test --profile ci --locked -p solidcraft-doc -p solidcraft-engine --lib arclet_
+      - name: Existing analytic 90-degree K-factor oracle
+        run: cargo test --profile ci --locked -p solidcraft-engine --lib base_and_edge_flange_follow_the_k_factor
+      - name: Existing flat DXF roles and cutouts
+        run: cargo test --profile ci --locked -p solidcraft-engine --lib the_flat_pattern_is_on_layers_by_role_and_inner_contours_come_first
+      - name: Existing sheet metal solid and neutral-axis reference
+        run: cargo test --profile ci --locked -p solidcraft-doc --lib edge_flange_matches_fusion
+      - name: Clippy for document and engine
+        run: cargo clippy --profile ci --locked -p solidcraft-doc -p solidcraft-engine --lib -- -D warnings
