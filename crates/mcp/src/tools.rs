@@ -830,7 +830,29 @@ fn check_batch_guard(b: &mut dyn Backend, a: &Map<String, Value>, len: usize) ->
         ));
     };
     let expected = json!({"document_id": id, "revision": rev});
-    match exec(b, "document.revision", json!({})) {
+    let observed = exec(b, "document.revision", json!({}));
+    // A remote legacy app would simply ignore unknown guard fields and execute
+    // the commands. Negotiate support before ever sending a guarded mutation.
+    if !b.in_process() {
+        match b.call("control.capabilities", json!({})) {
+            Ok(caps) if caps["atomic_batch_guards"] == true => {}
+            Ok(_) => return Some(batch_guard_error(
+                len,
+                "guard_unsupported",
+                "the connected desktop app does not advertise atomic batch guards; update the app before editing with if_revision".into(),
+                expected,
+                Value::Null,
+            )),
+            Err(e) => return Some(batch_guard_error(
+                len,
+                "guard_unsupported",
+                format!("cannot confirm atomic batch guard support on the connected desktop app: {e}"),
+                expected,
+                Value::Null,
+            )),
+        }
+    }
+    match observed {
         Ok(actual) if actual["document_id"].as_str() == Some(id) && actual["revision"].as_u64() == Some(rev) => None,
         Ok(actual) => Some(batch_guard_error(
             len,
@@ -940,6 +962,16 @@ fn batch(b: &mut dyn Backend, a: &Map<String, Value>) -> Value {
         o.insert("timings".into(), Value::Bool(true));
         o.insert("profile".into(), Value::Bool(profile));
     }
+    let guarded = a.contains_key("if_document_id") || a.contains_key("if_revision");
+    if guarded && !b.in_process() && params.to_string().len() + 64 * 1024 > solidcraft_engine::MAX_LINE {
+        return batch_guard_error(
+            steps.len(),
+            "atomic_batch_unavailable",
+            "guarded batch is too large for one desktop request; split it into smaller inspected batches".into(),
+            json!({"document_id": a.get("if_document_id"), "revision": a.get("if_revision")}),
+            Value::Null,
+        );
+    }
     if params.to_string().len() + 64 * 1024 <= solidcraft_engine::MAX_LINE {
         match b.call("engine.batch", params) {
             Ok(mut r) => {
@@ -954,7 +986,17 @@ fn batch(b: &mut dyn Backend, a: &Map<String, Value>) -> Value {
                 return batch_reply(&r, steps.len(), rollback, verbose, &narrow);
             }
             // Older apps and the headless session, or the app wants the steps one by one.
-            Err(e) if e.starts_with("unknown method") || e.starts_with("engine.batch unavailable") => {}
+            Err(e) if e.starts_with("unknown method") || e.starts_with("engine.batch unavailable") => {
+                if guarded && !b.in_process() {
+                    return batch_guard_error(
+                        steps.len(),
+                        "atomic_batch_unavailable",
+                        format!("the desktop app refused the atomic batch ({e}); no steps were retried"),
+                        json!({"document_id": a.get("if_document_id"), "revision": a.get("if_revision")}),
+                        Value::Null,
+                    );
+                }
+            }
             // Never sent: no app to send it to. Or sent and still running (it was not cancelled):
             // the `pending` tool gets its result.
             Err(e) if e.starts_with(crate::backend::NOT_RUNNING) || e.starts_with(STILL_RUNNING) => {
@@ -967,10 +1009,18 @@ fn batch(b: &mut dyn Backend, a: &Map<String, Value>) -> Value {
             }
         }
     }
-    // An older app may lack engine.batch: check again before falling back to steps.
-    // In headless mode the backend is serialized; in an older bridged app a second
-    // client could still race a step, so guarded calls require a current desktop build
-    // for atomic cross-client protection.
+    // A guarded remote request must run as one queued desktop batch; never degrade
+    // into stepwise edits (another client could edit between those steps).
+    if guarded && !b.in_process() {
+        return batch_guard_error(
+            steps.len(),
+            "atomic_batch_unavailable",
+            "atomic batch execution was unavailable; no steps were retried".into(),
+            json!({"document_id": a.get("if_document_id"), "revision": a.get("if_revision")}),
+            Value::Null,
+        );
+    }
+    // A headless session can fall back to serialized steps with checkpoint rollback.
     if let Some(refusal) = check_batch_guard(b, a, steps.len()) {
         return refusal;
     }
