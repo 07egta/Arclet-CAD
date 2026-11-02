@@ -35,7 +35,7 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("mesh.manufacturing_check", "Manufacturing Mesh Check", manufacturing::check)
         .icon("inspect")
         .noundo()
-        .params("body?: named solid or mesh; weld_tolerance_mm?: number (default export weld: max(body_size*1e-6, 1e-7) mm); chord_mm?: B-rep tessellation tolerance (default size*0.00005, min 0.0001); nozzle_diameter_mm?: number (default 0.4); overhang_deg?: number (default 45); bed_size_mm?: [width,depth,height] (optional). Reports manifold/orientation/duplicate/invalid checks, bounded potential self-intersections, bounds, volume, bed fit, overhang screening, build-plate contact and thin-feature warning. No wall-thickness certification, no printer compatibility guarantee."),
+        .params("body?: named solid or mesh; weld_tolerance_mm?: number (default export weld: max(body_size*1e-6, 1e-7) mm); chord_mm?: B-rep tessellation tolerance (default standard STL/3MF: max(size*0.0002, 0.001) mm); nozzle_diameter_mm?: number (default 0.4); overhang_deg?: number (default 45); bed_size_mm?: [width,depth,height] (optional). Reports manifold/orientation/duplicate/invalid checks, bounded potential self-intersections, bounds, volume, bed fit, overhang screening, build-plate contact and thin-feature warning. No wall-thickness certification, no printer compatibility guarantee."),
 ];
 
 /// The mesh body to inspect: `body`, else the one selected body.
