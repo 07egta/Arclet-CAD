@@ -1,7 +1,7 @@
 //! A Single hole placed by distances from reference edges (#37): up to two straight edges of the
 //! face it is drilled into, each with the distance of the hole's centre from that edge's line,
-//! measured in the face's plane. The edges are found again by their persistent names, else by
-//! their stored points, so the hole follows them when the part changes.
+//! measured in the face's plane. Named edges are resolved by identity, never silently replaced
+//! by another nearby edge. Unnamed historical picks retain their legacy geometric fallback.
 
 use solidcraft_geom::{Mesh, Vec3};
 
@@ -90,8 +90,8 @@ impl ReferenceFrame {
 
 /// The reference frame of a hole placed at `at` (on the surface), drilled along `dir` (into the
 /// material), from its reference edges: a point on each edge and, when it has one, the edge's
-/// persistent name. A fresh pick (`exact`) must lie on its edge; a stored one is found by its
-/// name, else the edge nearest its point. The face is the flat face under `at` that faces the
+/// persistent name. A fresh pick (`exact`) must lie on its edge; a stored named edge must
+/// retain that identity, while an unnamed historical pick can still use its stored point. The face is the flat face under `at` that faces the
 /// drill, else the one the edges border.
 pub fn reference_frame(st: &ModelState, at: Vec3, dir: Vec3, edges: &[(Vec3, Option<&str>)], exact: bool) -> Result<ReferenceFrame> {
     if edges.len() > MAX_HOLE_REFERENCES {
@@ -175,32 +175,35 @@ fn to_polyline(p: Vec3, e: &[Vec3]) -> f64 {
     e.windows(2).map(|w| p.dist_to_segment(w[0], w[1])).fold(f64::INFINITY, f64::min)
 }
 
-/// Reference edge `k` (its ends, and its index in the mesh), found by `name`, else by the edge
-/// nearest `p`: one that runs through `p` for a fresh pick, within a quarter of the body for a
-/// stored one. It must be straight.
+/// Find a reference edge by identity when a name is stored. A removed semantic reference
+/// must fail instead of silently relocating a hole to the nearest unrelated edge.
+/// Older unnamed references retain the legacy point-based recovery.
 fn find_edge(b: &ModelBody, m: &Mesh, k: usize, p: Vec3, name: Option<&str>, exact: bool) -> Result<(Vec3, Vec3, usize)> {
     let size = b.body.size().max(1e-9);
-    let by_name = name.filter(|n| !n.is_empty()).and_then(|n| crate::naming::locate_edge(b, n, p).ok()).map(|hit| hit.edge);
-    let i = match by_name {
-        Some(i) => i,
-        None => {
-            let reach = if exact { (size * 1e-2).max(1e-3) } else { size * 0.25 };
-            m.edges
-                .iter()
-                .enumerate()
-                .map(|(i, e)| (to_polyline(p, e), i))
-                .filter(|(d, _)| d.is_finite())
-                .min_by(|a, b| a.0.total_cmp(&b.0))
-                .filter(|(d, _)| *d <= reach)
-                .map(|(_, i)| i)
-                .ok_or_else(|| {
-                    DocError::Invalid(if exact {
-                        format!("reference edge {}: no edge at [{}, {}, {}]", k + 1, p.x, p.y, p.z)
-                    } else {
-                        format!("reference edge {} no longer exists", k + 1)
-                    })
-                })?
-        }
+    let i = if let Some(name) = name.filter(|n| !n.is_empty()) {
+        crate::naming::locate_edge(b, name, p)
+            .map_err(|_| {
+                DocError::Invalid(format!("reference edge {} `{name}` no longer exists; reselect the edge instead of moving the hole to a nearby one", k + 1))
+            })?
+            .edge
+    } else {
+        // Backwards compatibility for references that predate persistent names.
+        let reach = if exact { (size * 1e-2).max(1e-3) } else { size * 0.25 };
+        m.edges
+            .iter()
+            .enumerate()
+            .map(|(i, e)| (to_polyline(p, e), i))
+            .filter(|(d, _)| d.is_finite())
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .filter(|(d, _)| *d <= reach)
+            .map(|(_, i)| i)
+            .ok_or_else(|| {
+                DocError::Invalid(if exact {
+                    format!("reference edge {}: no edge at [{}, {}, {}]", k + 1, p.x, p.y, p.z)
+                } else {
+                    format!("reference edge {} no longer exists", k + 1)
+                })
+            })?
     };
     let e = m.edges.get(i).ok_or_else(|| DocError::Invalid(format!("reference edge {} no longer exists", k + 1)))?;
     let (Some(a), Some(z)) = (e.first().copied(), e.last().copied()) else {
