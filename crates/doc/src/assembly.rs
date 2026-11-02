@@ -465,6 +465,30 @@ impl Document {
         out
     }
 
+    /// Validated per-instance world frames for interference/clearance consumers.
+    ///
+    /// Unlike the legacy best-effort body_frames_with_source, this reports bad
+    /// hierarchy links, non-rigid transforms and expansion overflow as errors.
+    /// No Boolean, collision or contact result is implied by a frame alone.
+    pub fn body_frames_checked(&self, st: &crate::ModelState) -> Result<Vec<(String, String, u64, Vec<u64>, Mat)>> {
+        let placements = self.placements_checked()?;
+        let names = WorldNames::new(self, st);
+        let owners = self.model_body_components(st);
+        let mut by_component: HashMap<u64, Vec<&crate::ModelBody>> = HashMap::new();
+        for (body, owner) in st.bodies.iter().zip(&owners) {
+            by_component.entry(*owner).or_default().push(body);
+        }
+        let mut out = Vec::new();
+        for (component, path, matrix) in placements {
+            for body in by_component.get(&component).into_iter().flatten() {
+                let world_name = names.name(&body.name, component, &path);
+                let world = self.model_body_offset(body).map_or(matrix, |offset| mat_mul(&matrix, offset));
+                out.push((world_name, body.definition_name().to_string(), component, path.clone(), world));
+            }
+        }
+        Ok(out)
+    }
+
     /// Computed placement name. Source names retain priority; ambiguous labels use full IDs.
     /// Resolves label ambiguity with bounded dynamic counts instead of expanding all placements.
     /// To name many placed bodies, make one [`WorldNames`] and ask it for each.
