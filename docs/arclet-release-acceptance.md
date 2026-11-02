@@ -77,7 +77,8 @@ tested by a Rust integration test. Treat either failure as FAIL, not PASS.
 
 After merging the workflow into main and completing interactive Windows and
 browser checklists, manually dispatch the workflow from main with both
-create_draft and acceptance_approved selected, and include a reference
+create_draft, acceptance_approved and license_notices_reviewed selected,
+and include a reference
 to the recorded acceptance evidence. The workflow rechecks all gates from
 that exact commit. Success may create an UNPUBLISHED DRAFT Release under
 a unique arclet-v...-rc... tag. Publication is a separate human step.

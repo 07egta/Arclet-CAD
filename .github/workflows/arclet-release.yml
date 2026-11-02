@@ -18,6 +18,10 @@ on:
         description: "Human Windows AND browser acceptance performed and reviewed"
         type: boolean
         default: false
+      license_notices_reviewed:
+        description: "Human review completed for third-party licenses and packaged notices"
+        type: boolean
+        default: false
       acceptance_record_url:
         description: "URL of the human acceptance record (required for draft)"
         type: string
@@ -27,7 +31,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: arclet-release-${{ github.workflow }}-${{ github.ref }}
+  # A push and the PR for the same Arclet branch share the same cancellation group.
+  group: arclet-release-${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
   # Cancel superseded branch/PR builds; never cancel a manually approved draft.
   cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 
@@ -176,6 +181,7 @@ jobs:
       github.ref == 'refs/heads/main' &&
       inputs.create_draft == true &&
       inputs.acceptance_approved == true &&
+      inputs.license_notices_reviewed == true &&
       inputs.acceptance_record_url != ''
     runs-on: ubuntu-latest
     timeout-minutes: 10
