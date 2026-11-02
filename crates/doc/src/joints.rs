@@ -2627,4 +2627,26 @@ mod tests {
         assert!(doc.validate_mechanism().unwrap_err().to_string().contains("removed occurrence"));
     }
 
+
+    #[test]
+    fn arclet_checked_solve_never_commits_an_unmet_closed_constraint() {
+        let (doc, occurrence) = arclet_mechanism(JointKind::Slider, vec![3.0], Vec3::Z);
+        let state = ModelState::default();
+        let solution = doc.solve_mechanism_checked(&state).unwrap();
+        assert!((solution.world.get(&occurrence).unwrap()[3][2] - 3.0).abs() < 1e-9);
+        let before = doc.clone();
+
+        let mut conflicted = doc;
+        conflicted.assembly.joints.push(arclet_joint(
+            1001, "Incompatible rigid mate", JointKind::Rigid,
+            arclet_point_origin(0, Vec3::new(25.0, 0.0, 0.0), Vec3::Z),
+            arclet_point_origin(occurrence, Vec3::ZERO, Vec3::Z),
+            vec![],
+        ));
+        let unchanged = conflicted.clone();
+        assert!(conflicted.solve_mechanism_checked(&state).is_err());
+        assert_eq!(conflicted, unchanged, "failed solve must not move any document or joint");
+        assert_ne!(conflicted, before, "the extra constraint remains available for repair");
+    }
+
 }
