@@ -52,6 +52,42 @@ fn rhino_box_imports_as_a_solid() {
 
 /// Only FreeCAD and Rhino contents are read: STEP text, garbage, a bad ZIP and empty input are
 /// refused with a message, as are ACIS, ShapeManager and commercial formats whatever their bytes.
+/// 3DM is not a native document format. Reopen the imported B-rep from an .sc
+/// container and re-export STEP, then independently parse that STEP again.
+#[test]
+fn rhino_import_persists_as_a_measured_brep_and_reexports_step() {
+    let imported = crate::step_import_feature(BLOCK_3DM, "original.3dm").unwrap();
+    assert_eq!(imported.import.bodies.len(), 1);
+    let mut document = solidcraft_doc::Document::new("3DM file exchange");
+    document.add_feature(imported.kind, None).unwrap();
+    let saved = crate::write_design_container(&document).unwrap();
+    let reopened = crate::read_design(&saved).unwrap();
+    assert_eq!(reopened, document);
+    let mut model = solidcraft_doc::Model::new();
+    model.evaluate(&reopened);
+    assert!(model.results.iter().all(|r| r.error.is_none()));
+    let state = model.state();
+    assert_eq!(state.bodies.len(), 1);
+    let body = &state.bodies[0].body;
+    let volume = solidcraft_kernel::measure(body).unwrap().volume;
+    assert!((volume - 6000.0).abs() < 1e-6, "3DM volume changed: {volume}");
+    let mesh = crate::export_mesh(body).unwrap();
+    assert!(!mesh.positions.is_empty());
+    for (axis, size) in [10.0, 20.0, 30.0].into_iter().enumerate() {
+        let vals = mesh.positions.iter().map(|v| [v.x, v.y, v.z][axis]);
+        let lo = vals.clone().fold(f64::INFINITY, f64::min);
+        let hi = vals.fold(f64::NEG_INFINITY, f64::max);
+        assert!(lo.abs() < 0.01 && (hi - size).abs() < 0.01, "3DM dimension {axis}: {lo}..{hi}");
+    }
+    let step = crate::export(&state, &[], crate::Format::Step, "from-rhino").unwrap();
+    let back = crate::step_import_feature(&step, "from-rhino.step").unwrap();
+    assert_eq!(back.import.bodies.len(), 1);
+    let volume = solidcraft_kernel::measure(&back.import.bodies[0].body).unwrap().volume;
+    assert!((volume - 6000.0).abs() < 1e-6, "STEP re-export volume {volume}");
+    // The presence of a 3DM reader does not imply a Rhino 3DM writer.
+    assert!(crate::Format::from_name("from-rhino.3dm").is_err());
+}
+
 #[test]
 fn other_contents_are_refused() {
     let step = STEP_TEXT;

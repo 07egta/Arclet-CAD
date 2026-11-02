@@ -143,7 +143,7 @@ jobs:
           s1=${PIPESTATUS[0]}
           cargo test --profile ci --locked -p solidcraft-engine --lib -- --skip robustness --skip hostile_params 2>&1 | tee test2.log
           s2=${PIPESTATUS[0]}
-          cargo test --profile ci --locked -p meltcad 2>&1 | tee test3.log
+          cargo test --profile ci --locked -p meltcad -p solidcraft-io 2>&1 | tee test3.log
           s3=${PIPESTATUS[0]}
           # Show what failed as annotations, so the result can be read without the full log.
           grep -hE "^test .* FAILED|panicked at|^error(\[|:)" test1.log test2.log test3.log | head -30 | while read -r line; do echo "::error::$line"; done
