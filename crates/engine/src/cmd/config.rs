@@ -408,11 +408,17 @@ const MAX_SWEEP_AXES: usize = 12;
 
 /// Check exactly what activation would rebuild, but never touch the source session.
 /// All variants start from the same source rather than inheriting a preceding variant's
-/// parameter values, suppressions, materials, or feature history.
-fn checked_configuration(s: &Session, name: &str, cmd: &str) -> Result<(Session, Vec<RuleTrace>, Value)> {
+/// parameter values, suppressions, materials, or feature history. Full checks also perform
+/// sketch settlement, since a rebuild alone may miss orientation or quantity-pattern errors.
+fn checked_configuration(s: &Session, name: &str, cmd: &str, check_sketches: bool) -> Result<(Session, Vec<RuleTrace>, Value)> {
     let mut trial = s.scratch();
     let trace = trial.doc_mut().apply_configuration_with_trace(name).map_err(|e| bad(cmd, e.to_string()))?;
-    trial.refresh();
+    if check_sketches {
+        let solved = s.solved_sketches();
+        trial.settle_value_edit(&solved).map_err(|e| bad(cmd, format!("configuration `{name}`: {e}")))?;
+    } else {
+        trial.refresh();
+    }
     let new_errors: Vec<String> = trial
         .model
         .results
@@ -438,7 +444,7 @@ fn checked_configuration(s: &Session, name: &str, cmd: &str) -> Result<(Session,
 fn activate(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "config.activate";
     let r = str_(p, "row").ok_or_else(|| bad(cmd, "`row` is required"))?.to_string();
-    let (trial, trace, styles) = checked_configuration(s, &r, cmd)?;
+    let (trial, trace, styles) = checked_configuration(s, &r, cmd, false)?;
     let solved = s.solved_sketches();
     s.doc = trial.doc;
     s.settle_value_edit(&solved)?;
@@ -467,7 +473,7 @@ fn validate(s: &mut Session, p: &Value) -> Result<Value> {
     let mut failures = 0_usize;
     let mut rows = Vec::with_capacity(s.doc.configs.rows.len());
     for row in &s.doc.configs.rows {
-        match checked_configuration(s, &row.name, cmd) {
+        match checked_configuration(s, &row.name, cmd, true) {
             Ok((trial, trace, styles)) => {
                 if details {
                     rows.push(json!({"name":row.name,"valid":true,"parameters":trial.doc.param_rows(),"trace":trace,"styles":styles}));
@@ -580,7 +586,7 @@ fn sweep(s: &mut Session, p: &Value) -> Result<Value> {
     let mut candidate = s.scratch();
     candidate.doc_mut().configs.rows.extend(generated.iter().cloned());
     for row in &generated {
-        checked_configuration(&candidate, &row.name, cmd).map_err(|error| bad(cmd, format!("sweep row `{}`: {error}", row.name)))?;
+        checked_configuration(&candidate, &row.name, cmd, true).map_err(|error| bad(cmd, format!("sweep row `{}`: {error}", row.name)))?;
     }
     let preview = bool_(p, "preview").unwrap_or(false);
     let columns: Vec<String> = s.doc.configs.columns.iter().map(|c| s.doc.config_key(c)).collect();
