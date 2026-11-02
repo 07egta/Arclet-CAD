@@ -21,5 +21,28 @@
     "arclet.status.snap.quad": "Quad",
     "arclet.status.snap.tan": "Tan",
     "arclet.status.units": "Units"
+  },
+  "ja": {
+    "arclet.status.component": "コンポーネント",
+    "arclet.status.gumball": "ギズモ",
+    "arclet.status.grid_snap": "グリッドスナップ",
+    "arclet.status.not_available": "まだ使えません",
+    "arclet.status.open_sketch": "グリッドスナップを使うにはスケッチを開いてください",
+    "arclet.status.ortho": "直交",
+    "arclet.status.planar": "平面",
+    "arclet.status.plane": "平面",
+    "arclet.status.root": "ルート",
+    "arclet.status.selected": "選択",
+    "arclet.status.snap.cen": "中心",
+    "arclet.status.snap.end": "端点",
+    "arclet.status.snap.int": "交点",
+    "arclet.status.snap.knot": "ノット",
+    "arclet.status.snap.mid": "中点",
+    "arclet.status.snap.near": "近接点",
+    "arclet.status.snap.perp": "垂点",
+    "arclet.status.snap.point": "点",
+    "arclet.status.snap.quad": "四分点",
+    "arclet.status.snap.tan": "接点",
+    "arclet.status.units": "単位"
   }
 }

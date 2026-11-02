@@ -4,5 +4,11 @@
     "arclet.cmd.failed": "Error: {error}",
     "arclet.cmd.repeated": "Repeat: {id}",
     "arclet.cmd.started": "Started: {id}"
+  },
+  "ja": {
+    "arclet.cmd.entered": "コマンド: {text}",
+    "arclet.cmd.failed": "エラー: {error}",
+    "arclet.cmd.repeated": "繰り返し: {id}",
+    "arclet.cmd.started": "開始: {id}"
   }
 }

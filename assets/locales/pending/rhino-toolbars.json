@@ -23,6 +23,26 @@
     "arclet.toolbar.trim_path": "Trim along path"
   },
   "ja": {
-    "arclet.perspective": "パース表示"
+    "arclet.perspective": "パース表示",
+    "arclet.layout": "レイアウト",
+    "arclet.toolbar.center_of_mass": "重心",
+    "arclet.toolbar.circle_three_point": "3点円",
+    "arclet.toolbar.circle_two_point": "2点円",
+    "arclet.toolbar.circle_two_tangent": "2接線円",
+    "arclet.toolbar.clearance": "クリアランス",
+    "arclet.toolbar.line3d": "3D 直線",
+    "arclet.toolbar.midline": "中点線",
+    "arclet.toolbar.minimum_radius": "最小半径",
+    "arclet.toolbar.rect_center": "中心矩形",
+    "arclet.toolbar.rect_rounded": "角丸矩形",
+    "arclet.toolbar.sketch_fillet": "スケッチのフィレット",
+    "arclet.toolbar.split_body": "ボディを分割",
+    "arclet.toolbar.split_face": "面を分割",
+    "arclet.toolbar.surface_loft": "サーフェスロフト",
+    "arclet.toolbar.surface_offset": "サーフェスをオフセット",
+    "arclet.toolbar.surface_sweep": "サーフェススイープ",
+    "arclet.toolbar.surface_thicken": "サーフェスを厚み付け",
+    "arclet.toolbar.surface_trim": "サーフェスをトリム",
+    "arclet.toolbar.trim_path": "パスに沿ってトリム"
   }
 }

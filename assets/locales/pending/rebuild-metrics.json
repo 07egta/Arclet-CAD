@@ -5,5 +5,12 @@
     "curve_quality.curvature_none": "No measurable curvature samples",
     "curve_quality.mean": "Mean deviation",
     "curve_quality.rms_deviation": "RMS deviation"
+  },
+  "ja": {
+    "curve_quality.control_counts": "制御点（元 → 再構築後）",
+    "curve_quality.curvature_change": "最大曲率変化 (1/mm)",
+    "curve_quality.curvature_none": "測定できる曲率サンプルがありません",
+    "curve_quality.mean": "平均偏差",
+    "curve_quality.rms_deviation": "RMS 偏差"
   }
 }
