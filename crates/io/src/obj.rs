@@ -28,6 +28,10 @@ pub fn read_obj(bytes: &[u8], default_name: &str) -> Result<(Vec<MeshObject>, Ve
     let mut bad_lines = 0usize;
     let mut triangles = 0usize;
     let mut named_by_o = false;
+    let mut skipped_materials = false;
+    let mut skipped_uvs = false;
+    let mut skipped_normals = false;
+    let mut skipped_vertex_colors = false;
     for line in text.lines() {
         let line = line.split('#').next().unwrap_or("").trim();
         let mut it = line.split_whitespace();
@@ -35,7 +39,10 @@ pub fn read_obj(bytes: &[u8], default_name: &str) -> Result<(Vec<MeshObject>, Ve
             Some("v") => {
                 let c: Vec<f64> = it.take(3).filter_map(|x| x.parse::<f64>().ok()).collect();
                 match c[..] {
-                    [x, y, z] if x.is_finite() && y.is_finite() && z.is_finite() => verts.push(Vec3::new(x, y, z)),
+                    [x, y, z] if x.is_finite() && y.is_finite() && z.is_finite() => {
+                        verts.push(Vec3::new(x, y, z));
+                        skipped_vertex_colors |= it.next().is_some();
+                    },
                     _ => {
                         // Keep the numbering: later faces count vertices by position.
                         verts.push(Vec3::new(f64::NAN, f64::NAN, f64::NAN));
@@ -100,11 +107,26 @@ pub fn read_obj(bytes: &[u8], default_name: &str) -> Result<(Vec<MeshObject>, Ve
                     bad_lines += 1;
                 }
             }
+            Some("mtllib" | "usemtl") => skipped_materials = true,
+            Some("vt") => skipped_uvs = true,
+            Some("vn") => skipped_normals = true,
             _ => {}
         }
     }
     if bad_lines > 0 {
         warnings.push(format!("{bad_lines} vertex or face line(s) could not be read and were left out"));
+    }
+    if skipped_materials {
+        warnings.push("OBJ material references were not imported (MTL files are not resolved)".into());
+    }
+    if skipped_uvs {
+        warnings.push("OBJ texture coordinates were not imported".into());
+    }
+    if skipped_normals {
+        warnings.push("OBJ source normals were not imported; surface normals will be regenerated".into());
+    }
+    if skipped_vertex_colors {
+        warnings.push("OBJ vertex colours were not imported".into());
     }
     let mut out = Vec::new();
     for (name, tris) in objects {
@@ -151,6 +173,16 @@ mod tests {
         assert_eq!(objs[0].positions.len(), 8);
         assert_eq!(objs[1].name, "Tri");
         assert_eq!(objs[1].triangles.len(), 1);
+    }
+
+    #[test]
+    fn obj_warns_when_exchange_loses_materials_uvs_normals_or_vertex_colours() {
+        let src = b"mtllib colours.mtl\no Part\nv 0 0 0 1 0 0\nv 1 0 0\nv 0 1 0\nvt 0 0\nvn 0 0 1\nusemtl Red\nf 1/1/1 2/1/1 3/1/1\n";
+        let (_, warnings) = read_obj(src, "x").unwrap();
+        assert_eq!(warnings.len(), 4, "{warnings:?}");
+        for word in ["material", "texture", "normals", "colours"] {
+            assert!(warnings.iter().any(|s| s.contains(word)), "{word}: {warnings:?}");
+        }
     }
 
     #[test]
