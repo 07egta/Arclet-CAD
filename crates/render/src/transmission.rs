@@ -283,6 +283,16 @@ mod shadow_tests {
         let trans = colored.medium.attenuation(10.0).unwrap();
         assert!(trans.y > trans.z && trans.z > trans.x);
         assert!(OpticalFinish::ScatteringPolymer.data().unwrap().medium.subsurface().unwrap().active());
+        // Independent 65-digit Python decimal.Decimal exponentials:
+        // exp(-[0.018, 0.003, 0.010] * 12mm). This is an oracle for the
+        // specified material *data*, not for a fully raytraced image.
+        let expected = [0.8057353018734797, 0.964640293483123, 0.8869204367171575];
+        let measured = colored.medium.attenuation(12.0).unwrap();
+        for (actual, oracle) in [measured.x, measured.y, measured.z].into_iter().zip(expected) {
+            assert!((actual - oracle).abs() <= 1e-15, "{actual} != {oracle}");
+        }
+        assert!((OpticalFinish::ScatteringPolymer.data().unwrap().medium.subsurface().unwrap().survival(10.0).unwrap()
+            - 0.0301973834223185).abs() < 1e-15);
     }
 
     #[test]
