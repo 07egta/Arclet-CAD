@@ -74,6 +74,37 @@ pub struct MotionStudy {
     pub keys: Vec<StudyKey>,
 }
 
+impl MotionStudy {
+    /// Validate an existing study before animating or exporting poses. The old
+    /// JSON representation and the interpolation of valid keys stay unchanged.
+    pub fn validate(&self, assembly: &crate::joints::Assembly) -> crate::Result<()> {
+        use crate::DocError;
+        if self.steps == 0 || self.steps > 100_000 || self.keys.len() > 10_000 {
+            return Err(DocError::Invalid(format!("motion study '{}' has invalid duration or key count", self.name)));
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for key in &self.keys {
+            let valid_port = assembly
+                .joints
+                .iter()
+                .any(|joint| joint.id == key.joint && key.index < joint.kind.dofs().len());
+            if !valid_port || !seen.insert((key.joint, key.index)) || key.points.is_empty() || key.points.len() > 100_001 {
+                return Err(DocError::Invalid(format!("motion study '{}' has an invalid or duplicate joint key", self.name)));
+            }
+            let mut prev = None;
+            for &(step, value) in &key.points {
+                if !step.is_finite() || !value.is_finite() || !(0.0..=self.steps as f64).contains(&step)
+                    || prev.is_some_and(|last| step <= last)
+                {
+                    return Err(DocError::Invalid(format!("motion study '{}' has unsorted, out-of-range or non-finite keys", self.name)));
+                }
+                prev = Some(step);
+            }
+        }
+        Ok(())
+    }
+}
+
 /// An exploded view: occurrences moved apart (shown only; the design keeps its placements).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ExplodedView {
