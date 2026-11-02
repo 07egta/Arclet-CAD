@@ -75,6 +75,27 @@ fn face_tris(m: &Mesh, f: usize) -> Vec<[Vec3; 3]> {
     m.triangles.iter().zip(&m.tri_face).filter(|(_, tf)| **tf as usize == f).filter_map(|(t, _)| m.tri(t)).collect()
 }
 
+/// Principal-curvature magnitudes of the *underlying analytic surface*, not of its
+/// trimmed boundary. A sphere's two curvatures are 1/r; a cylinder has 0 and 1/r.
+/// For general and unsupported NURBS surfaces no numerical value is fabricated.
+fn analytic_curvature(surface: solidcraft_kernel::FaceSurface) -> Option<Value> {
+    use solidcraft_kernel::FaceSurface;
+    let (small, large, kind) = match surface {
+        FaceSurface::Plane { .. } => (0.0, 0.0, "plane"),
+        FaceSurface::Cylinder { radius, .. } if radius.is_finite() && radius > 0.0 => (0.0, 1.0 / radius, "cylinder"),
+        FaceSurface::Sphere { radius, .. } if radius.is_finite() && radius > 0.0 => (1.0 / radius, 1.0 / radius, "sphere"),
+        _ => return None,
+    };
+    Some(json!({
+        "surface": kind,
+        "method": "analytic_surface",
+        "principal_magnitudes_per_mm": [small, large],
+        "gaussian_curvature_per_mm2": small * large,
+        "mean_curvature_magnitude_per_mm": (small + large) / 2.0,
+        "signed_curvature_available": false,
+    }))
+}
+
 /// A described item: its geometry, direction (planar face normal, straight edge direction),
 /// description and exact shape.
 struct Item {
@@ -190,6 +211,7 @@ fn sketch_curve(ss: &solidcraft_doc::SolvedSketch, id: &str) -> Option<Item> {
         Shape::Line { a, b } => {
             json["length_mm"] = json!(a.dist(b));
             json["length_method"] = json!("analytic_line");
+            json["length_exact"] = json!(true);
             (b - a).normalized()
         }
         _ => {
@@ -201,6 +223,7 @@ fn sketch_curve(ss: &solidcraft_doc::SolvedSketch, id: &str) -> Option<Item> {
             };
             json["length_mm"] = json!(length);
             json["length_method"] = json!("analytic_arc");
+            json["length_exact"] = json!(true);
             add_round(&mut json, &shape);
             None
         }
@@ -304,7 +327,9 @@ fn describe(s: &Session, sel: &Sel) -> Option<Item> {
                     _ => len,
                 };
                 let mut json = json!({"type": "edge", "length_mm": length,
-                    "length_method": if kernel_exact { "analytic_circle" } else { "sampled_polyline" }});
+                    "length_method": if kernel_exact { "analytic_circle" } else { "sampled_polyline" },
+                    "length_exact": kernel_exact,
+                    "length_error_bound_mm": null});
                 add_round(&mut json, &shape);
                 return Some(Item { geo: Geo::Points(points), dir: None, json, shape, slot: None });
             }
@@ -320,7 +345,9 @@ fn describe(s: &Session, sel: &Sel) -> Option<Item> {
                 _ => len,
             };
             let mut json = json!({"type": "edge", "length_mm": length,
-                "length_method": if kernel_exact { "analytic_arc" } else { "sampled_polyline" }});
+                "length_method": if kernel_exact { "analytic_arc" } else if straight.is_some() { "sampled_straight_edge" } else { "sampled_polyline" },
+                "length_exact": kernel_exact || straight.is_some(),
+                "length_error_bound_mm": null});
             add_round(&mut json, &shape);
             Some(Item { geo: Geo::Points(densify(pts)), dir: straight, json, shape, slot: None })
         }
@@ -332,9 +359,14 @@ fn describe(s: &Session, sel: &Sel) -> Option<Item> {
             let area: f64 = tris.iter().map(|[a, b, c]| (*b - *a).cross(*c - *a).len() * 0.5).sum();
             let normals: Vec<UnitVec3> = tris.iter().filter_map(|[a, b, c]| (*b - *a).cross(*c - *a).unit()).collect();
             let planar = normals.first().copied().filter(|n0| normals.iter().all(|n| n.dot(*n0) > 1.0 - 1e-6));
-            let mut json = json!({"type": "face", "area_mm2": area, "planar": planar.is_some()});
+            let mut json = json!({"type": "face", "area_mm2": area, "planar": planar.is_some(),
+                "area_method": "triangulated_face", "area_exact": false, "area_error_bound_mm2": null});
             let verts: Vec<Vec3> = tris.iter().flat_map(|t| t.iter().copied()).collect();
-            let shape = match solidcraft_kernel::face_surface(&b.body, *index) {
+            let surface = solidcraft_kernel::face_surface(&b.body, *index);
+            if let Some(curvature) = surface.and_then(analytic_curvature) {
+                json["curvature"] = curvature;
+            }
+            let shape = match surface {
                 Some(solidcraft_kernel::FaceSurface::Cylinder { origin, axis, radius }) => {
                     super::measure_shape::cylinder(origin, axis, radius, &verts).unwrap_or(Shape::Other)
                 }
@@ -371,7 +403,7 @@ fn describe(s: &Session, sel: &Sel) -> Option<Item> {
             };
             plain(Geo::Tris(tris), None, json!({"type": "body", "name": name, "closed": closed,
                 "volume_mm3": volume, "area_mm2": area, "measurement_method": "fine_tessellation",
-                "error_bound_mm": null, "error": error}))
+                "exact": false, "volume_error_bound_mm3": null, "area_error_bound_mm2": null, "error": error}))
         }
         Sel::SketchCurve { id, sketch } => sketch_curve(sketch_of(s, &st, *sketch, |sk| sk.curve_index(id).is_some())?, id),
         Sel::ExternalSketchCurve { sketch, id } => sketch_curve(sketch_of(s, &st, Some(*sketch), |_| true)?, id),
@@ -633,6 +665,7 @@ pub(crate) fn measure_items(s: &Session, items: &Value) -> Result<Value> {
             out["min"] = json!(d);
             out["min_method"] = json!(min_method);
             out["min_exact"] = json!(min_method != "sampled_geometry");
+            out["min_witness_exact"] = json!(analytic_min.is_some());
             if min_method == "sampled_geometry" {
                 // Sampling and surface faceting have no certified global error bound.
                 out["min_error_bound_mm"] = Value::Null;
@@ -645,6 +678,7 @@ pub(crate) fn measure_items(s: &Session, items: &Value) -> Result<Value> {
             out["max_delta"] = json!(q - p);
             out["max_method"] = json!(max_method);
             out["max_exact"] = json!(max_method == "analytic_linear");
+            out["max_witness_exact"] = json!(analytic_max.is_some());
             if max_method == "sampled_geometry" {
                 out["max_error_bound_mm"] = Value::Null;
             }
@@ -731,6 +765,21 @@ mod inspection_tests {
         let other = Shape::Line { a: Vec3::new(0.0, 4.0, 3.0), b: Vec3::new(10.0, 4.0, 3.0) };
         let (x, y) = exact_linear_closest(line, other).unwrap();
         assert_close_mm(x.dist(y), 5.0, 1e-12);
+    }
+
+    #[test]
+    fn plane_sphere_and_cylinder_curvatures_follow_analytic_formulas() {
+        use solidcraft_kernel::FaceSurface;
+        let plane = analytic_curvature(FaceSurface::Plane { normal: UnitVec3::Z, point: Vec3::ZERO }).unwrap();
+        assert_eq!(plane["principal_magnitudes_per_mm"], json!([0.0, 0.0]));
+        let sphere = analytic_curvature(FaceSurface::Sphere { center: Vec3::ZERO, radius: 5.0 }).unwrap();
+        assert_eq!(sphere["method"], "analytic_surface");
+        assert!((sphere["principal_magnitudes_per_mm"][0].as_f64().unwrap() - 0.2).abs() < 1e-12);
+        assert!((sphere["gaussian_curvature_per_mm2"].as_f64().unwrap() - 0.04).abs() < 1e-12);
+        let cylinder = analytic_curvature(FaceSurface::Cylinder { origin: Vec3::ZERO, axis: UnitVec3::Z, radius: 4.0 }).unwrap();
+        assert_eq!(cylinder["principal_magnitudes_per_mm"], json!([0.0, 0.25]));
+        assert_eq!(cylinder["mean_curvature_magnitude_per_mm"], 0.125);
+        assert!(analytic_curvature(FaceSurface::Sphere { center: Vec3::ZERO, radius: 0.0 }).is_none());
     }
 
     #[test]
