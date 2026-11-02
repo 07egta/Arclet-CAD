@@ -41,7 +41,9 @@ pub fn read_obj(bytes: &[u8], default_name: &str) -> Result<(Vec<MeshObject>, Ve
                 match c[..] {
                     [x, y, z] if x.is_finite() && y.is_finite() && z.is_finite() => {
                         verts.push(Vec3::new(x, y, z));
-                        skipped_vertex_colors |= it.next().is_some();
+                        // A single extra OBJ vertex field can be homogeneous w; at least
+                        // three additional values denote the common RGB(A) extension.
+                        skipped_vertex_colors |= it.count() >= 3;
                     },
                     _ => {
                         // Keep the numbering: later faces count vertices by position.
