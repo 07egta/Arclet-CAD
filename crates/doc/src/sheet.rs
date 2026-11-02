@@ -2571,6 +2571,18 @@ impl SheetBody {
         if edges.is_empty() || edges.len() > 1000 {
             return Err(DocError::Invalid("pick 1…1000 edges".into()));
         }
+        // Unlike the rule radius, an edge flange can carry its own radius
+        // expression. Check it before modifying the base or existing panels:
+        // negative/NaN radii otherwise contaminate the bend zone and flat DXF.
+        if !radius.is_finite() || !(0.0..=1e7).contains(&radius) {
+            return Err(DocError::Invalid("the flange bend radius must be finite and between 0 and 10,000,000 mm".into()));
+        }
+        if !self.t.is_finite() || self.t <= 0.0 || !self.k.is_finite() || !(0.0..=1.0).contains(&self.k) {
+            return Err(DocError::Invalid("the sheet thickness or K-factor is invalid".into()));
+        }
+        if relief.size.is_some_and(|size| !size.is_finite() || size < 0.0 || size > 1e7) {
+            return Err(DocError::Invalid("the corner relief size must be finite and non-negative".into()));
+        }
         // With several edges a message says which one it is about.
         let on = |k: usize| if edges.len() > 1 { format!("edge {}: ", k + 1) } else { String::new() };
         // Each edge's setback and leg (the panel past the bend) follow its own angle and height.
