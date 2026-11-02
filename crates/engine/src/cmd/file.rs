@@ -1710,6 +1710,52 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
+    /// Even after an explicit discard decision, a failed Open cannot destroy
+    /// the document: replacement happens only after the file parses.
+    #[test]
+    fn damaged_open_with_discard_confirmed_keeps_original_document() {
+        let dir = name_dir("reliable-damaged-open");
+        let invalid = dir.join("damaged.sc");
+        std::fs::write(&invalid, [0, 1, 2, 3, 0, 255]).unwrap();
+        let mut s = Session::default();
+        s.execute("solid.box", &json!({"length": 10, "width": 10, "height": 10})).unwrap();
+        let previous = s.doc.clone();
+        let history = s.undo.len();
+        assert!(s.execute("doc.open", &json!({"path": invalid, "discard": true})).is_err());
+        assert!(std::sync::Arc::ptr_eq(&s.doc, &previous));
+        assert_eq!(s.undo.len(), history);
+        assert!(s.path.is_none() && s.is_dirty());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A structurally unreopenable JSON design must never replace a last
+    /// known-good version, even when serialisation itself succeeded.
+    #[test]
+    fn unreopenable_json_save_keeps_prior_file_and_dirty_state() {
+        let dir = name_dir("reliable-invalid-format-save");
+        let path = dir.join("part.json");
+        let mut s = Session::default();
+        s.execute("solid.box", &json!({"length": 10, "width": 10, "height": 10})).unwrap();
+        s.execute("file.save_as", &json!({"path": path})).unwrap();
+        let existing = std::fs::read(&path).unwrap();
+        let original_format = s.doc.format.clone();
+        s.execute("solid.sphere", &json!({"diameter": 4})).unwrap();
+        s.doc_mut().format = "solidcraft/999999".into();
+        let undo = s.undo.len();
+        let error = s.execute("file.save", &json!({})).unwrap_err().to_string();
+        assert!(error.contains("cannot be reopened"), "{error}");
+        assert_eq!(std::fs::read(&path).unwrap(), existing, "the last good version must stay intact");
+        assert!(s.is_dirty());
+        assert_eq!(s.undo.len(), undo);
+        assert_eq!(s.doc.features.len(), 2);
+        // Repairing the unsupported version permits a normal retry.
+        s.doc_mut().format = original_format;
+        s.execute("file.save", &json!({})).unwrap();
+        assert!(!s.is_dirty());
+        assert_eq!(solidcraft_io::read_design(&std::fs::read(&path).unwrap()).unwrap().features.len(), 2);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     /// A different Save As target is not an implicit request to overwrite it.
     /// Failed publication preserves both files, the live document and its undo stack.
     #[test]
