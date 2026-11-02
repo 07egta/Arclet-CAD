@@ -2456,7 +2456,7 @@ fn guarded_ai_batch_refuses_legacy_remote_without_capabilities() {
         fn call(&mut self, method: &str, p: Value) -> Result<Value, String> {
             match method {
                 "engine.execute" if p["command"] == "document.revision" => Ok(json!({"document_id":"old","revision":7})),
-                "control.capabilities" => Err("unknown method \`control.capabilities\`".into()),
+                "control.capabilities" => Err("unknown method control.capabilities".into()),
                 "engine.batch" => {
                     self.writes += 1;
                     Err("an old app must not receive guarded mutations".into())
