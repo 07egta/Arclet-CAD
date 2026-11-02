@@ -4432,6 +4432,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "solidcraft-manifold-cpp"
+version = "0.26.0"
+dependencies = [
+ "cc",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "solidcraft-mcp"
 version = "0.26.0"
 dependencies = [

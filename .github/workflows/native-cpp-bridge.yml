@@ -1,0 +1,68 @@
+name: Arclet native C++ bridge
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'crates/manifold-cpp/**'
+      - 'crates/polyclip-cpp/**'
+      - 'Cargo.lock'
+      - 'xtask/src/layers.rs'
+      - '.github/workflows/native-cpp-bridge.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    name: Native FFI (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    steps:
+      - name: Checkout Arclet
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Checkout Clipper2 at audited revision
+        uses: actions/checkout@v4
+        with:
+          repository: AngusJohnson/Clipper2
+          ref: 4be4655694d7e15e76ac6bfe9024fa534eed3428
+          path: native-deps/Clipper2
+          persist-credentials: false
+      - name: Checkout Manifold at audited revision
+        uses: actions/checkout@v4
+        with:
+          repository: elalish/manifold
+          ref: 0209eae1b279735c966bb490d0ab91926fe27c69
+          path: native-deps/manifold
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Run pure Rust tests and unavailable fallback
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked -p solidcraft-polyclip-cpp
+          cargo test --locked -p solidcraft-manifold-cpp
+      - name: Compile and test native C++ backends
+        shell: bash
+        env:
+          CLIPPER2_SRC: ${{ github.workspace }}/native-deps/Clipper2/CPP/Clipper2Lib
+          MANIFOLD_SRC: ${{ github.workspace }}/native-deps/manifold
+        run: |
+          set -euo pipefail
+          cargo test --locked -p solidcraft-polyclip-cpp --features clipper2
+          cargo test --locked -p solidcraft-manifold-cpp --features manifold
+      - name: Compare native vs Rust convex polygon timings
+        shell: bash
+        env:
+          CLIPPER2_SRC: ${{ github.workspace }}/native-deps/Clipper2/CPP/Clipper2Lib
+        run: |
+          set -euo pipefail
+          cargo test --release --locked -p solidcraft-polyclip-cpp --features clipper2 time_native_and_rust_convex_intersection -- --ignored --nocapture

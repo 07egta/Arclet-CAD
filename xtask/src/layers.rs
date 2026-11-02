@@ -56,6 +56,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("gpu", Class::Layer(5)),
     ("mcp", Class::Layer(5)),
     // optional C++ polygon spike; depends on no workspace crate and is in no default build
+    ("manifold-cpp", Class::Standalone),
     ("polyclip-cpp", Class::Standalone),
     ("testkit", Class::Testkit),
     // apps and tooling
