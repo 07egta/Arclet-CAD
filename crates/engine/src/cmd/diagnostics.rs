@@ -8,6 +8,9 @@ use crate::params::{bad, str_};
 use crate::{EngineError, Result, Session, crash};
 
 pub static COMMANDS: &[CommandSpec] = &[
+    CommandSpec::new("diagnostics.brep_topology", "B-rep Topology Audit", brep_topology)
+        .icon("inspect").noundo()
+        .params("body: name → exact B-rep edge incidence, winding, seam and non-manifold counts; structural audit only, not self-intersection certification"),
     CommandSpec::new("diagnostics.crash_reports", "Crash Reports", list).icon("bug_report").noundo().params(
         "limit?: number (default 20). Lists this computer's crash reports, newest first: {dir, reports: [{id, kind, time, message, \
          command, count, version, path, replayable}]}. kind: command_panic | panic | kernel_panic_recovered | unclean_exit. \
@@ -28,6 +31,23 @@ pub static COMMANDS: &[CommandSpec] = &[
          at the next start). Only when the SOLIDCRAFT_CRASH_TEST environment variable is set",
     ),
 ];
+
+fn brep_topology(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "diagnostics.brep_topology";
+    let name = str_(p, "body").ok_or_else(|| bad(cmd, "`body` must name a model body"))?;
+    let state = s.world_state();
+    let body = state.body(name).ok_or_else(|| bad(cmd, format!("no body `{name}`")))?;
+    if body.body.is_mesh() {
+        return Err(bad(cmd, "mesh geometry is not exact B-rep; use mesh diagnostics instead"));
+    }
+    let report = solidcraft_kernel::audit_native_topology(&body.body).map_err(|e| bad(cmd, e.to_string()))?;
+    Ok(json!({
+        "body": name,
+        "geometry_type": "brep",
+        "scope": "topological incidence only; geometric self-intersections and manifold embedding unverified",
+        "audit": report,
+    }))
+}
 
 fn dir(cmd: &str) -> Result<std::path::PathBuf> {
     crash::default_dir().ok_or_else(|| bad(cmd, "no crash folder on this system"))
