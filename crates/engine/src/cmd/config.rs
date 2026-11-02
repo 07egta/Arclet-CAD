@@ -3,11 +3,16 @@
 
 use serde_json::{Value, json};
 use solidcraft_doc::DEFAULT_MATERIAL;
-use solidcraft_doc::config::{Column, ConfigRow, MAX_COLUMNS, MAX_ROWS};
+use solidcraft_doc::config::{Column, ConfigRow, MAX_COLUMNS, MAX_ROWS, RuleTrace};
 
 use super::CommandSpec;
 use crate::params::{bad, bool_, str_, string_list};
+use crate::schema::config::{SweepParams, SweepResult, ValidateParams, ValidateResult};
+use crate::schema::{TypedContract, output_schema_for};
 use crate::{Result, Session};
+
+const SWEEP_CONTRACT: TypedContract<SweepParams> = TypedContract::new();
+const VALIDATE_CONTRACT: TypedContract<ValidateParams> = TypedContract::new();
 
 pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("config.configure", "Configure", configure).at("SOLID", "CONFIGURE").icon("params").params(
@@ -24,6 +29,15 @@ pub static COMMANDS: &[CommandSpec] = &[
     ),
     CommandSpec::new("config.activate", "Activate Configuration", activate).icon("activate").params("row: name — sets its parameter values and suppressions"),
     CommandSpec::new("config.preview", "Preview Configuration", preview).icon("eye").noundo().params("row: name — validates a rebuild without changing the design or history"),
+
+    CommandSpec::new("config.sweep", "Configuration Sweep", crate::checked!("config.sweep", sweep))
+        .icon("configuration_table").contract(&SWEEP_CONTRACT).output(output_schema_for::<SweepResult>).params(
+        "prefix?: name; from?: existing row (defaults to active row); axes: {column key or parameter name: [expressions...]}; preview?: bool — atomically generate and validate up to 128 configurations",
+    ),
+    CommandSpec::new("config.validate", "Validate Configurations", crate::checked!("config.validate", validate))
+        .icon("configuration_table").noundo().contract(&VALIDATE_CONTRACT).output(output_schema_for::<ValidateResult>).params(
+        "details?: bool — independently rebuild every configuration row and report all errors without modifying the design",
+    ),
     CommandSpec::new("config.rule", "Configuration Rule", rule).icon("configuration_table").params(
         "rule?: {id,name,enabled,condition,effect}; rules?: [rule…] (added or replaced together, then the rows checked once); id? + delete?; id? + index? (ordered move)",
     ),
@@ -395,12 +409,23 @@ fn rule(s: &mut Session, p: &Value) -> Result<Value> {
     show(s, p)
 }
 
-fn activate(s: &mut Session, p: &Value) -> Result<Value> {
-    let cmd = "config.activate";
-    let r = str_(p, "row").ok_or_else(|| bad(cmd, "`row` is required"))?.to_string();
+
+const MAX_SWEEP_VARIANTS: usize = 128;
+const MAX_SWEEP_AXES: usize = 12;
+
+/// Check exactly what activation would rebuild, but never touch the source session.
+/// All variants start from the same source rather than inheriting a preceding variant's
+/// parameter values, suppressions, materials, or feature history. Full checks also perform
+/// sketch settlement, since a rebuild alone may miss orientation or quantity-pattern errors.
+fn checked_configuration(s: &Session, name: &str, cmd: &str, check_sketches: bool) -> Result<(Session, Vec<RuleTrace>, Value)> {
     let mut trial = s.scratch();
-    let trace = trial.doc_mut().apply_configuration_with_trace(&r).map_err(|e| bad(cmd, e.to_string()))?;
-    trial.refresh();
+    let trace = trial.doc_mut().apply_configuration_with_trace(name).map_err(|e| bad(cmd, e.to_string()))?;
+    if check_sketches {
+        let solved = s.solved_sketches();
+        trial.settle_value_edit(&solved).map_err(|e| bad(cmd, format!("configuration `{name}`: {e}")))?;
+    } else {
+        trial.refresh();
+    }
     let new_errors: Vec<String> = trial
         .model
         .results
@@ -414,9 +439,19 @@ fn activate(s: &mut Session, p: &Value) -> Result<Value> {
         })
         .collect();
     if !new_errors.is_empty() {
-        return Err(bad(cmd, format!("configuration `{r}` would fail to rebuild: {}", new_errors.join("; "))));
+        return Err(bad(cmd, format!("configuration `{name}` would fail to rebuild: {}", new_errors.join("; "))));
     }
-    let styles = trial.doc.configuration_style_status(&trial.model.state()).map_err(|error| bad(cmd, format!("configuration `{r}`: {error}")))?;
+    let styles = trial
+        .doc
+        .configuration_style_status(&trial.model.state())
+        .map_err(|error| bad(cmd, format!("configuration `{name}`: {error}")))?;
+    Ok((trial, trace, json!(styles)))
+}
+
+fn activate(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "config.activate";
+    let r = str_(p, "row").ok_or_else(|| bad(cmd, "`row` is required"))?.to_string();
+    let (trial, trace, styles) = checked_configuration(s, &r, cmd, false)?;
     let solved = s.solved_sketches();
     s.doc = trial.doc;
     s.settle_value_edit(&solved)?;
@@ -424,7 +459,7 @@ fn activate(s: &mut Session, p: &Value) -> Result<Value> {
     let mut out = show(s, p)?;
     out["errors"] = json!(errors);
     out["trace"] = json!(trace);
-    out["styles"] = json!(styles);
+    out["styles"] = styles;
     Ok(out)
 }
 
@@ -434,6 +469,146 @@ fn preview(s: &mut Session, p: &Value) -> Result<Value> {
     out["preview"] = json!(true);
     out["parameters"] = json!(trial.doc.param_rows());
     Ok(out)
+}
+
+/// Validate every row, including ones whose expression is currently unselectable.
+/// A bad row does not hide errors in the remaining rows. This is a read-only command.
+fn validate(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "config.validate";
+    s.doc.configs.validate_layout().map_err(|e| bad(cmd, e.to_string()))?;
+    let details = bool_(p, "details").unwrap_or(false);
+    let mut failures = 0_usize;
+    let mut rows = Vec::with_capacity(s.doc.configs.rows.len());
+    for row in &s.doc.configs.rows {
+        match checked_configuration(s, &row.name, cmd, true) {
+            Ok((trial, trace, styles)) => {
+                if details {
+                    rows.push(json!({"name":row.name,"valid":true,"parameters":trial.doc.param_rows(),"trace":trace,"styles":styles}));
+                } else {
+                    rows.push(json!({"name":row.name,"valid":true}));
+                }
+            }
+            Err(error) => {
+                failures += 1;
+                rows.push(json!({"name":row.name,"valid":false,"error":error.to_string()}));
+            }
+        }
+    }
+    Ok(json!({
+        "valid": failures == 0,
+        "checked": rows.len(),
+        "failed": failures,
+        "rows": rows,
+    }))
+}
+
+/// A bounded Cartesian sweep of configured columns. Every candidate is checked against
+/// exactly the same base design, so invalid geometry or bad rules reject the whole edit.
+fn sweep(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "config.sweep";
+    s.doc.configs.validate_layout().map_err(|e| bad(cmd, e.to_string()))?;
+    let prefix = str_(p, "prefix").unwrap_or("Variant").trim();
+    if prefix.is_empty() || prefix.len() > 122 {
+        return Err(bad(cmd, "prefix must be 1..122 bytes"));
+    }
+    let axes = p.get("axes").and_then(Value::as_object).ok_or_else(|| bad(cmd, "`axes` must be a map of configuration columns to value lists"))?;
+    if axes.is_empty() || axes.len() > MAX_SWEEP_AXES {
+        return Err(bad(cmd, "sweep requires 1..12 axes"));
+    }
+    let mut count = 1_usize;
+    let mut parsed = Vec::with_capacity(axes.len());
+    let mut used_columns = std::collections::BTreeSet::new();
+    for (key, values) in axes {
+        let column = s
+            .doc
+            .configs
+            .columns
+            .iter()
+            .position(|column| s.doc.config_key(column) == *key || matches!(column, Column::Param(name) if name == key))
+            .ok_or_else(|| bad(cmd, format!("`{key}` is not a configured column")))?;
+        if !used_columns.insert(column) {
+            return Err(bad(cmd, format!("multiple axes target the same configuration column: `{key}`")));
+        }
+        let list = values.as_array().filter(|v| !v.is_empty()).ok_or_else(|| bad(cmd, format!("`{key}` needs a nonempty value list")))?;
+        count = count.checked_mul(list.len()).filter(|n| *n <= MAX_SWEEP_VARIANTS).ok_or_else(|| {
+            bad(cmd, format!("sweep exceeds the {MAX_SWEEP_VARIANTS}-variant limit"))
+        })?;
+        let mut options = Vec::with_capacity(list.len());
+        for value in list {
+            let text = match value {
+                Value::String(text) => text.clone(),
+                Value::Number(value) => value.to_string(),
+                Value::Bool(value) if matches!(s.doc.configs.columns.get(column), Some(Column::Suppress(_))) => value.to_string(),
+                Value::Object(_) if matches!(s.doc.configs.columns.get(column),
+                    Some(Column::Appearance(_) | Column::ComponentAppearance(_) | Column::FaceAppearance(_))) => {
+                    serde_json::to_string(value).map_err(|error| bad(cmd, error.to_string()))?
+                }
+                _ => return Err(bad(cmd, format!("invalid sweep value for `{key}`"))),
+            };
+            if text.len() > 4096 || (text.trim().is_empty() && !matches!(s.doc.configs.columns.get(column),
+                Some(Column::Appearance(_) | Column::ComponentAppearance(_) | Column::FaceAppearance(_)))) {
+                return Err(bad(cmd, format!("empty or oversized sweep value for `{key}`")));
+            }
+            if options.contains(&text) {
+                return Err(bad(cmd, format!("duplicate sweep value for `{key}`")));
+            }
+            options.push(text);
+        }
+        parsed.push((column, options));
+    }
+    let from = str_(p, "from").or(s.doc.configs.active.as_deref());
+    let base: Vec<String> = match from {
+        Some(name) => s
+            .doc
+            .configs
+            .rows
+            .iter()
+            .find(|row| row.name == name)
+            .ok_or_else(|| bad(cmd, format!("no source row `{name}`")))?
+            .cells
+            .clone(),
+        None => s.doc.configs.columns.iter().map(|column| s.doc.config_current(column).unwrap_or_default()).collect(),
+    };
+    if s.doc.configs.rows.len().checked_add(count).is_none_or(|n| n > MAX_ROWS) {
+        return Err(bad(cmd, "sweep would exceed the configuration row limit"));
+    }
+    let mut names = std::collections::BTreeSet::new();
+    let mut generated = Vec::with_capacity(count);
+    for i in 0..count {
+        let name = format!("{prefix}-{:03}", i + 1);
+        if name.len() > 128 || !names.insert(name.clone()) || s.doc.configs.rows.iter().any(|row| row.name == name) {
+            return Err(bad(cmd, format!("configuration row `{name}` already exists or is too long")));
+        }
+        let mut cells = base.clone();
+        let mut index = i;
+        for (column, values) in parsed.iter().rev() {
+            let choice = index % values.len();
+            index /= values.len();
+            let Some(cell) = cells.get_mut(*column) else {
+                return Err(bad(cmd, format!("sweep column {} is outside the configuration table", *column)));
+            };
+            *cell = values[choice].clone();
+        }
+        generated.push(ConfigRow { name, cells });
+    }
+    let mut candidate = s.scratch();
+    candidate.doc_mut().configs.rows.extend(generated.iter().cloned());
+    for row in &generated {
+        checked_configuration(&candidate, &row.name, cmd, true).map_err(|error| bad(cmd, format!("sweep row `{}`: {error}", row.name)))?;
+    }
+    let preview = bool_(p, "preview").unwrap_or(false);
+    let columns: Vec<String> = s.doc.configs.columns.iter().map(|c| s.doc.config_key(c)).collect();
+    let rows: Vec<Value> = generated
+        .iter()
+        .map(|row| {
+            json!({"name":row.name,"values":columns.iter().zip(&row.cells)
+                .map(|(key, value)| (key.clone(), json!(value))).collect::<serde_json::Map<_, _>>()})
+        })
+        .collect();
+    if !preview {
+        s.doc_mut().configs.rows.extend(generated);
+    }
+    Ok(json!({"preview":preview,"count":count,"rows":rows}))
 }
 
 #[cfg(test)]
@@ -713,6 +888,143 @@ mod tests {
         s.doc_mut().delete_feature(id).unwrap();
         assert!(s.doc.configs.columns.is_empty());
         assert!(s.doc.configs.rows.iter().all(|row| row.cells.is_empty()));
+    }
+
+
+    #[test]
+    fn configuration_validation_reports_every_invalid_row_without_mutating_the_model() {
+        let mut s = Session::default();
+        run(&mut s, "parameters.add", json!({"name":"width","expression":"40 cm","unit":"mm"}));
+        run(&mut s, "parameters.add", json!({"name":"height","expression":"80 cm","unit":"mm"}));
+        run(&mut s, "solid.box", json!({"length":"width","width":"height","height":10}));
+        run(&mut s, "config.configure", json!({"params":["width","height"]}));
+        run(&mut s, "config.row", json!({"name":"Inches","values":{"width":"20 in","height":"1 m"}}));
+        run(&mut s, "config.row", json!({"name":"Cycle","values":{"width":"height","height":"width"}}));
+        run(&mut s, "config.row", json!({"name":"Wrong unit","values":{"width":"30 deg"}}));
+        run(&mut s, "config.row", json!({"name":"Invalid expression","values":{"height":"1/0"}}));
+        run(&mut s, "config.row", json!({"name":"Invalid geometry","values":{"width":"0 mm"}}));
+        let before = s.doc.clone();
+        let revision = s.revision;
+        let result = run(&mut s, "config.validate", json!({"details":true}));
+        assert_eq!(result["checked"], 6, "{result}");
+        assert_eq!(result["failed"], 4, "{result}");
+        assert_eq!(result["valid"], false);
+        assert_eq!(result["rows"][0]["valid"], true);
+        assert_eq!(result["rows"][1]["valid"], true);
+        assert!(result["rows"][1]["parameters"].is_array());
+        for i in 2..=5 {
+            assert_eq!(result["rows"][i]["valid"], false, "{result}");
+            assert!(result["rows"][i]["error"].as_str().is_some_and(|error| !error.is_empty()));
+        }
+        assert_eq!(s.doc, before);
+        assert_eq!(s.revision, revision);
+        assert!((volume(&mut s) - 3_200_000.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn configuration_sweep_is_cartesian_deterministic_and_rolled_back_on_failure() {
+        let mut s = Session::default();
+        run(&mut s, "parameters.add", json!({"name":"width","expression":"40 cm","unit":"mm"}));
+        run(&mut s, "parameters.add", json!({"name":"height","expression":"80 cm","unit":"mm"}));
+        run(&mut s, "parameters.add", json!({"name":"seat_height","expression":"height/2","unit":"mm"}));
+        run(&mut s, "parameters.add", json!({"name":"back_angle","expression":"15 deg","unit":"deg"}));
+        run(&mut s, "parameters.add", json!({"name":"leg_width","expression":"1 in","unit":"mm"}));
+        run(&mut s, "solid.box", json!({"length":"width","width":"height","height":10}));
+        run(&mut s, "config.configure", json!({"params":["width","height","back_angle"]}));
+        let request = json!({
+            "prefix":"Chair",
+            "axes":{"width":["40 cm","20 in"],"height":["0.8 m","90 cm"],"back_angle":["15 deg"]},
+            "preview":true
+        });
+        let before = s.doc.clone();
+        let revision = s.revision;
+        let preview = run(&mut s, "config.sweep", request.clone());
+        assert_eq!(preview["count"], 4);
+        assert_eq!(preview["preview"], true);
+        assert_eq!(s.doc, before);
+        assert_eq!(s.revision, revision);
+        let mut persist = request;
+        persist["preview"] = json!(false);
+        let generated = run(&mut s, "config.sweep", persist);
+        assert_eq!(generated["rows"][0]["name"], "Chair-001");
+        assert_eq!(generated["rows"][3]["name"], "Chair-004");
+        assert_eq!(run(&mut s, "config.validate", json!({}))["checked"], 5);
+
+        run(&mut s, "config.activate", json!({"row":"Chair-004"}));
+        let wide = s.doc.param_values().0;
+        assert!((wide["width"].v - 508.0).abs() < 1e-9);
+        assert!((wide["height"].v - 900.0).abs() < 1e-9);
+        assert!((wide["seat_height"].v - 450.0).abs() < 1e-9);
+        assert!((wide["leg_width"].v - 25.4).abs() < 1e-9);
+        let volume_wide = volume(&mut s);
+        assert!((volume_wide - 4_572_000.0).abs() < 1e-6);
+        run(&mut s, "config.activate", json!({"row":"Chair-001"}));
+        assert!((s.doc.param_values().0["width"].v - 400.0).abs() < 1e-9);
+        run(&mut s, "config.activate", json!({"row":"Chair-004"}));
+        assert_eq!(s.doc.param_values().0, wide, "a switch must not inherit values from the preceding variant");
+        assert!((volume(&mut s) - volume_wide).abs() < 1e-6);
+        assert!(s.doc.configuration_matches());
+
+        let before = s.doc.clone();
+        assert!(s.execute("config.sweep", &json!({"prefix":"Bad","axes":{"width":["0 mm"]}})).is_err());
+        assert_eq!(s.doc, before, "invalid rebuild must reject every new sweep row");
+        assert!(s.execute("config.sweep", &json!({"prefix":"Chair","axes":{"width":["10 mm"]}})).is_err());
+        assert_eq!(s.doc, before, "colliding names cannot change existing rows");
+        assert!(s.execute("config.sweep", &json!({"prefix":"Aliased","axes":{"width":["10 mm"],"param:width":["20 mm"]}})).is_err());
+        assert_eq!(s.doc, before, "aliases of one column cannot create overlapping axes");
+        assert!(s.execute("config.sweep", &json!({"prefix":"Malformed","axes":{"width":["10 mm","10 mm"]}})).is_err());
+        assert_eq!(s.doc, before, "duplicate sweep values must be rejected");
+        let widths: Vec<String> = (1..=17).map(|n| format!("{n} cm")).collect();
+        let heights: Vec<String> = (1..=8).map(|n| format!("{n} cm")).collect();
+        assert!(s.execute("config.sweep", &json!({"prefix":"Overflow","axes":{"width":widths,"height":heights}})).is_err());
+        assert_eq!(s.doc, before);
+    }
+
+
+    #[test]
+    fn many_configuration_rows_validate_deterministically_without_changing_the_active_design() {
+        let mut s = Session::default();
+        run(&mut s, "parameters.add", json!({"name":"width","expression":"40 cm","unit":"mm"}));
+        run(&mut s, "parameters.add", json!({"name":"height","expression":"80 cm","unit":"mm"}));
+        run(&mut s, "solid.box", json!({"length":"width","width":"height","height":10}));
+        run(&mut s, "config.configure", json!({"params":["width","height"]}));
+        let widths: Vec<String> = (1..=8).map(|n| format!("{} cm", n * 5)).collect();
+        let heights: Vec<String> = (1..=8).map(|n| format!("{} cm", n * 10)).collect();
+        let sweep = run(&mut s, "config.sweep", json!({"prefix":"Batch","axes":{"width":widths,"height":heights}}));
+        assert_eq!(sweep["count"], 64);
+        let original = s.doc.clone();
+        let revision = s.revision;
+        let first = run(&mut s, "config.validate", json!({}));
+        assert_eq!(first["checked"], 65);
+        assert_eq!(first["failed"], 0, "{first}");
+        assert!(first["valid"].as_bool() == Some(true));
+        assert_eq!(first, run(&mut s, "config.validate", json!({})), "the same table must report identical results");
+        assert_eq!(s.doc, original, "bulk validation must never modify any saved row or the active design");
+        assert_eq!(s.revision, revision);
+    }
+
+    #[test]
+    fn configuration_sweep_varies_materials_and_feature_suppression_independently() {
+        let mut s = Session::default();
+        run(&mut s, "solid.box", json!({"length":10,"width":10,"height":10,"body_name":"Chair"}));
+        run(&mut s, "solid.box", json!({"length":2,"width":2,"height":10,"body_name":"Leg"}));
+        let leg = s.doc.features.last().map(|f| f.name.clone()).unwrap_or_default();
+        let body = s.model.state().bodies.first().map(|b| b.name.clone()).unwrap_or_default();
+        run(&mut s, "config.configure", json!({"features":[leg],"materials":[body]}));
+        let suppression = format!("suppress:{leg}");
+        let material = format!("material:{body}");
+        let result = run(&mut s, "config.sweep", json!({
+            "prefix":"Finish",
+            "axes":{suppression.clone():[false,true],material.clone():["steel","Aluminum"]}
+        }));
+        assert_eq!(result["count"], 4, "{result}");
+        assert_eq!(run(&mut s, "config.validate", json!({}))["failed"], 0);
+        run(&mut s, "config.activate", json!({"row":"Finish-004"}));
+        assert!(s.doc.features.last().is_some_and(|f| f.suppressed));
+        assert_eq!(s.doc.materials.get(&body).map(String::as_str), Some("Aluminum"));
+        run(&mut s, "config.activate", json!({"row":"Finish-001"}));
+        assert!(!s.doc.features.last().is_some_and(|f| f.suppressed));
+        assert_eq!(s.doc.materials.get(&body).map(String::as_str), Some("Steel"));
     }
 
     #[test]
