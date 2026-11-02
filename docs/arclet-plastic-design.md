@@ -46,6 +46,7 @@ Arcletの既存樹脂形状フィーチャを改善する。UI全体・B-repカ�
 | 抜き勾配付き中空Rest | 20×10、壁厚1、高さ6、勾配2°で成立。高さ16では壁が消失するため拒否。負の勾配でも開口消失を拒否 | `plastic_preflight_rejects_bad_boss_and_rest_without_mutation` |
 | 上下ケース | ケース、Shell、複数スタンドオフ、コネクタ穴、スナップ、蓋、ねじ穴 | `examples/acceptance/sensor_enclosure.json` |
 | 再計算・再読み込み | ボスの直径変更後の体積、JSON設計の保存相当往復後の再評価 | `plastic_audit_tracks_parametric_boss_wall_and_roundtrip` |
+| Bossの移動と根元フィレット | Bossを10 mm移動して重心移動・体積不変を検査。根元R=1→2 mmの再計算とJSON再読み込みを検査 | `boss_position_and_root_fillet_remain_editable_after_reload` |
 | 失敗時の原状維持 | 負の穴深さ・フィレット・小数リブ数・中空開口で旧モデルを維持 | `plastic_preflight_rejects_bad_boss_and_rest_without_mutation` |
 
 診断の呼び出し例：
