@@ -31,6 +31,7 @@ mod ply;
 pub use ply::{ply_counts, read_ply_mesh};
 mod point_cloud;
 pub use point_cloud::{CloudFile, DEFAULT_MAX_POINTS, MAX_POINT_CLOUD_BYTES, is_ply_path, is_point_cloud_path, read_point_cloud};
+pub mod rhino3dm;
 pub mod safe_write;
 mod sketch2d;
 mod svg;
