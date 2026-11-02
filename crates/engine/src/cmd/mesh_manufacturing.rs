@@ -565,6 +565,15 @@ mod tests {
         assert_eq!(result["units"], "millimeter");
         assert_eq!(result["source"], "brep_tessellation");
         assert_eq!(result["topology"]["closed"], true, "{result}");
+        // Independently construct the actual default STL/3MF export mesh:
+        // candidate vertex and triangle counts must match, not just the box.
+        let state = s.world_state();
+        let solid = &state.body("Cube20").unwrap().body;
+        let export_mesh = solidcraft_io::export_mesh(solid).unwrap();
+        let eps = (solid.size() * 1e-6).max(1e-7);
+        let (vertices, triangles) = solidcraft_io::weld(&export_mesh.positions, &export_mesh.triangles, eps);
+        assert_eq!(result["candidate_mesh_vertices"], vertices.len(), "{result}");
+        assert_eq!(result["candidate_mesh_triangles"], triangles.len(), "{result}");
         assert_eq!(result["bed_fit"]["fits_current_xy_orientation"], true);
         assert_eq!(result["manufacturing_certified"], false);
         for bad in [json!(-0.2), json!(0.0), json!("0.4"), Value::Null, json!(100.0)] {
