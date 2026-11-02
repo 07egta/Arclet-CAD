@@ -4,7 +4,7 @@
 //! insertion APIs keep their behavior. A failed or cancelled update cannot
 //! replace the last complete evaluation.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 use crate::{Evaluation, Graph, GraphError, MAX_RETAINED_WEIGHT, NodeId, Tree, component, output_weight};
 
@@ -26,6 +26,8 @@ pub struct IncrementalStats {
 pub struct IncrementalEvaluator {
     previous: Option<Graph>,
     result: Evaluation,
+    /// Retained resource weight immediately before each node in the last run.
+    retained_before: HashMap<NodeId, usize>,
 }
 
 impl IncrementalEvaluator {
@@ -42,6 +44,7 @@ impl IncrementalEvaluator {
     pub fn clear(&mut self) {
         self.previous = None;
         self.result = Evaluation::default();
+        self.retained_before.clear();
     }
 
     /// Incrementally evaluate a graph. Cancellation preserves the old result.
@@ -73,11 +76,13 @@ impl IncrementalEvaluator {
         let mut changed = BTreeSet::new();
         let mut stats = IncrementalStats::default();
         let mut retained = 0usize;
+        let mut retained_before = HashMap::with_capacity(graph.nodes.len());
 
         for id in order {
             if obsolete() {
                 return Err(GraphError::Cancelled);
             }
+            retained_before.insert(id, retained);
             let Some(node) = graph.nodes.get(&id) else {
                 return Err(GraphError::NoNode);
             };
@@ -87,7 +92,11 @@ impl IncrementalEvaluator {
             let previous_node = self.previous.as_ref().and_then(|old| old.nodes.get(&id));
             let input_changed = previous_node.is_none_or(|old| old.component != node.component || old.inputs != node.inputs);
             let parent_changed = node.inputs.iter().filter_map(|socket| socket.wire).any(|wire| changed.contains(&wire.from));
-            let mut needs_run = input_changed || parent_changed;
+            // The per-node work budget is the *remaining* global budget.
+            // A preceding independent edit may change that budget even if
+            // this node and all its own ancestors were untouched.
+            let budget_changed = self.retained_before.get(&id) != Some(&retained);
+            let mut needs_run = input_changed || parent_changed || budget_changed;
 
             // Reuse a node only when *all* output sockets are present, or its
             // earlier execution failed. Never reuse partial/evicted output.
@@ -148,6 +157,7 @@ impl IncrementalEvaluator {
         // Publish atomically: failed work has not mutated the previous snapshot.
         self.previous = Some(graph.clone());
         self.result = next;
+        self.retained_before = retained_before;
         Ok(stats)
     }
 }
