@@ -13,7 +13,8 @@ permissions:
 
 concurrency:
   group: arclet-viewport-bench-${{ github.ref }}
-  cancel-in-progress: true
+  # Keep pre-change baseline runs intact when the optimized branch advances.
+  cancel-in-progress: false
 
 jobs:
   mesa-software:
