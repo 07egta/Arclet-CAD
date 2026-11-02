@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - 'feat/arclet-brep-robustness'
     paths:
       - 'crates/kernel/**'
       - '.github/workflows/arclet-brep-regressions.yml'
