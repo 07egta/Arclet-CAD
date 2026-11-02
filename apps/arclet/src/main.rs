@@ -3,6 +3,8 @@
 mod app;
 mod classic_look;
 mod cmdline;
+#[cfg(not(target_arch = "wasm32"))]
+mod diagnostics;
 mod commands;
 mod panels;
 mod platform;
@@ -24,6 +26,8 @@ fn screenshot_window_size(value: &str) -> Option<[f32; 2]> {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn main() -> eframe::Result {
+    diagnostics::init();
+    log::info!("Starting Arclet CAD {}", env!("CARGO_PKG_VERSION"));
     let initial_size = std::env::var("ARCLET_WINDOW_SIZE")
         .ok()
         .and_then(|value| screenshot_window_size(&value))
@@ -44,7 +48,12 @@ fn main() -> eframe::Result {
         // selection and WGPU_BACKEND override remain available without a second renderer.
         ..Default::default()
     };
-    eframe::run_native("Arclet CAD", options, Box::new(|cc| Ok(Box::new(app::ArcletApp::new(cc)))))
+    let result = eframe::run_native("Arclet CAD", options, Box::new(|cc| Ok(Box::new(app::ArcletApp::new(cc)))));
+    if let Err(error) = &result {
+        log::error!("Arclet GUI / GPU initialization failed: {error:?}. Try updating the graphics driver or setting WGPU_BACKEND=gl.");
+    }
+    log::logger().flush();
+    result
 }
 
 #[cfg(target_arch = "wasm32")]
