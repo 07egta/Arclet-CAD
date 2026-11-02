@@ -443,6 +443,27 @@ mod smart_snap_tests {
     }
 
     #[test]
+    fn analytically_intersects_skewed_circle_planes_and_crossing_segment() {
+        let xy = circle("xy", Vec3::ZERO, 1.0);
+        let xz = SnapObject::new("xz", SnapGeometry::Circle {
+            center: Vec3::ZERO, radius: 1.0,
+            normal: Vec3::Y, x_axis: Vec3::X,
+        });
+        let result = query_snaps(&[xy.clone(), xz], &query(1.0, 0.0)).unwrap();
+        assert!(result.candidates.iter().any(|c| c.kind == SnapKind::Intersection
+            && c.accuracy == SnapAccuracy::Analytic
+            && (c.at - Vec3::X).len() < 1e-12), "{result:?}");
+        // A segment normal to the circle's plane still meets the circle
+        // at one exact point; merely checking coplanarity would miss it.
+        let piercing = segment(
+            "pierce", Vec3::new(1.0, 0.0, -1.0), Vec3::new(1.0, 0.0, 1.0),
+        );
+        let result = query_snaps(&[xy, piercing], &query(1.0, 0.0)).unwrap();
+        assert!(result.candidates.iter().any(|c| c.kind == SnapKind::Intersection
+            && (c.at - Vec3::X).len() < 1e-12), "{result:?}");
+    }
+
+    #[test]
     fn depth_clipping_and_geometry_budget_do_not_leak_invalid_points() {
         let mut q = query(0.0, 0.0);
         let items = [SnapObject::new("behind", SnapGeometry::Anchor {
