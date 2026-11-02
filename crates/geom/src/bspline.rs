@@ -1180,6 +1180,56 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn rational_surface_jet_matches_independent_exact_fraction_oracle() {
+        // Expected results were generated independently with Python's exact
+        // fractions.Fraction arithmetic: Cox-de Boor basis derivatives and the
+        // rational quotient rule, without calling any SolidCraft code.
+        // Degrees [2,2], a nonuniform internal u knot, and positive unequal weights.
+        let u_knots = vec![0.0, 0.0, 0.0, 1.0 / 3.0, 1.0, 1.0, 1.0];
+        let v_knots = vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+        let mut points = Vec::new();
+        let mut weights = Vec::new();
+        for j in 0..3 {
+            for i in 0..4 {
+                points.push(Vec3::new(
+                    (3 * i + 2 * j) as f64 / 7.0 - 1.0 / 7.0,
+                    (i * i + j + 2) as f64 / 5.0,
+                    ((i + 1) * (j + 2)) as f64 / 11.0,
+                ));
+                weights.push((2 * i + j + 3) as f64 / 4.0);
+            }
+        }
+        let patch = NurbsSurface::new([2, 2], [u_knots, v_knots], &points, &weights).unwrap();
+        let jet = patch.jet(2.0 / 5.0, 3.0 / 7.0).unwrap();
+        let expected = [
+            (jet.point, Vec3::new(0.78656355354247631, 1.1211493424608179, 0.67830530125612087)),
+            (jet.du, Vec3::new(0.95786110815155945, 1.5203490822121051, 0.59199064842709026)),
+            (jet.dv, Vec3::new(0.56739557963381171, 0.38965761255881776, 0.46211353816836215)),
+            (jet.duu, Vec3::new(0.58133527146482356, 3.2063753210225108, 0.34634312901589087)),
+            (jet.duv, Vec3::new(-0.01453311381580278, -0.034905862971809844, 0.4069431806690737)),
+            (jet.dvv, Vec3::new(-0.16576452773742598, -0.11161019654575237, -0.13980467300213142)),
+        ];
+        for (actual, oracle) in expected {
+            assert_vector_near(actual, oracle, 4.0);
+        }
+
+        // Knot insertion changes only the control net, not the parameterization
+        // or the analytic surface jets. These sampled tests are not a global
+        // maximum-error guarantee.
+        let refined = patch.insert_knot(Dir::S, 0.6).unwrap().insert_knot(Dir::T, 0.2).unwrap();
+        for (u, v) in [(0.1, 0.15), (0.4, 0.3), (0.8, 0.9)] {
+            let a = patch.jet(u, v).unwrap();
+            let b = refined.jet(u, v).unwrap();
+            for (original, after) in [
+                (a.point, b.point), (a.du, b.du), (a.dv, b.dv),
+                (a.duu, b.duu), (a.duv, b.duv), (a.dvv, b.dvv),
+            ] {
+                assert_vector_near(after, original, 4.0);
+            }
+        }
+    }
+
+    #[test]
     fn surface_jet_rejects_unrepresentable_second_derivatives_without_breaking_eval() {
         // A tiny but representable parameter domain produces finite points
         // while individual basis second derivatives overflow f64.
