@@ -5,7 +5,8 @@ on:
     branches: [main]
     paths:
       - 'apps/arclet/**'
-      - 'assets/styles/ui/themes/classic.json'
+      - 'assets/styles/ui/themes/arclet-industrial.json'
+      - 'attribution/pending/arclet-industrial-theme.md'
       - 'assets/locales/pending/arclet-ultimate-ui-polish.json'
       - 'docs/arclet-ui-polish.md'
       - '.github/workflows/arclet-visual-review.yml'
