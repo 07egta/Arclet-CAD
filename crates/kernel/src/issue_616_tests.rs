@@ -125,9 +125,12 @@ fn empty_retry_rejects_ball_whose_box_covers_the_target() {
     let target = bx([0., 0., 0.], [2., 2., 2.]);
     let tool = sphere(Vec3::new(1., 1., 1.), 1.5).unwrap();
     let target_volume = volume(&target);
-    assert!(target.tessellate(0.01).unwrap().bounds().min.x >= tool.tessellate(0.01).unwrap().bounds().min.x);
+    let target_box = target.tessellate(0.01).unwrap().bounds();
+    let tool_box = tool.tessellate(0.01).unwrap().bounds();
+    assert!(target_box.min.x >= tool_box.min.x && target_box.min.y >= tool_box.min.y && target_box.min.z >= tool_box.min.z);
+    assert!(target_box.max.x <= tool_box.max.x && target_box.max.y <= tool_box.max.y && target_box.max.z <= tool_box.max.z);
     let error = crate::boolean_guard::check_retry(&target, &tool, BoolOp::Cut, None).unwrap_err();
-    assert!(error.to_string().contains("outside the tool"), "{error}");
+    assert!(error.to_string().contains("refused"), "{error}");
     // The failed retry took the target by shared reference and did not mutate it.
     assert!((volume(&target) - target_volume).abs() < 1e-10);
     assert!(target.validity().is_empty(), "{:?}", target.validity());
