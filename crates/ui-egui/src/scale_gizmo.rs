@@ -53,7 +53,7 @@ fn from_origin(d: &Dialog) -> Option<Vec3> {
 
 /// The bounded set of bodies selected by this dialog (never every body).
 /// Edits use the model state before the edited feature as the source.
-fn selected_centre(app: &SolveApp, d: &Dialog) -> Option<Vec3> {
+pub(crate) fn selected_centre(app: &SolveApp, d: &Dialog) -> Option<Vec3> {
     let state = match d.editing {
         Some((id, _)) => app.session.model.state_before(id),
         None => app.session.model.state(),
@@ -89,11 +89,6 @@ fn current_factors(app: &SolveApp, d: &Dialog) -> Option<[f64; 3]> {
         None => [base; 3],
     };
     factors.iter().all(|v| v.is_finite() && (MIN_FACTOR..=MAX_FACTOR).contains(v)).then_some(factors)
-}
-
-/// User-authored axis factors, not a new persistent document data structure.
-pub(crate) fn numeric_factors(app: &SolveApp, d: &Dialog) -> Option<[f64; 3]> {
-    current_factors(app, d)
 }
 
 fn axis_screens(proj: &Proj, pivot: Vec3) -> Option<(Pos2, [(Pos2, Pos2); 3])> {
@@ -297,16 +292,6 @@ pub(crate) fn show(app: &SolveApp, d: &mut Dialog, ui: &mut egui::Ui, painter: &
         ui.data_mut(|data| data.insert_temp(id, state));
         ui.ctx().request_repaint();
     }
-    true
-}
-
-/// A selection-centred pivot is installed only if a handle is dragged or the
-/// user explicitly requests it; merely opening a scale dialog does not change
-/// the previous command's world-origin default.
-pub(crate) fn choose_pivot(app: &SolveApp, d: &mut Dialog, centre_of_selection: bool) -> bool {
-    let pivot = if centre_of_selection { selected_centre(app, d) } else { Some(Vec3::ZERO) };
-    let Some(pivot) = pivot else { return false };
-    d.extra.insert("origin".into(), json!([pivot.x, pivot.y, pivot.z]));
     true
 }
 
