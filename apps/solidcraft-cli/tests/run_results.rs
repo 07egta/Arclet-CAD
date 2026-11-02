@@ -667,3 +667,29 @@ fn render_setup_overrides_obey_shared_validation_before_host_initialization() {
         assert!(!out.exists());
     }
 }
+
+#[test]
+fn ai_automation_recipe_replays_from_a_clean_process_and_roundtrips_through_stl() {
+    let dir = Scratch::new();
+    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/ai-automation-tube.json");
+    let volume = std::f64::consts::PI * 2700.0;
+    let mut results = Vec::new();
+    for i in 0..2 {
+        let design = dir.0.join(format!("tube-{i}.sc"));
+        let stl = dir.0.join(format!("tube-{i}.stl"));
+        let built = cli().arg("run").arg(&script).arg("--save").arg(&design).arg("--out").arg(&stl).output().unwrap();
+        assert!(built.status.success(), "run {i}: {}", String::from_utf8_lossy(&built.stderr));
+        assert!(design.is_file(), "run {i} did not save the document");
+        let bytes = std::fs::read(&stl).unwrap();
+        assert!(bytes.len() >= 84, "run {i} did not write a binary STL");
+        let triangles = u32::from_le_bytes(bytes[80..84].try_into().unwrap()) as usize;
+        assert!(triangles >= 12, "run {i} STL has no solid geometry");
+        assert_eq!(bytes.len(), 84 + 50 * triangles, "run {i} STL records are incomplete");
+        let inspected = json_output(cli().arg("eval").arg(&design).output().unwrap());
+        assert_eq!(inspected["body_count"], 1, "{inspected}");
+        let measured = inspected["total"]["volume_mm3"].as_f64().unwrap();
+        assert!((measured - volume).abs() / volume < 1e-4, "{measured} vs {volume}");
+        results.push(inspected["total"]["volume_mm3"].clone());
+    }
+    assert_eq!(results[0], results[1], "two clean CLI runs must have the same calculated volume");
+}

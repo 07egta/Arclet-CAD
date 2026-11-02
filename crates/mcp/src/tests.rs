@@ -2371,3 +2371,213 @@ fn plain_headless_adds_no_notice() {
     let r = raw_tool(&mut s, "list_commands", json!({}));
     assert_eq!(r["result"]["content"].as_array().unwrap().len(), 1);
 }
+
+/// The new state snapshot is opt-in and carries a token, without changing the
+/// command and inspection tools that older MCP clients rely on.
+#[test]
+fn ai_state_snapshot_exposes_revision_and_optional_inventories() {
+    let mut s = server();
+    let brief = tool(&mut s, "inspect_state", json!({}));
+    assert!(brief["document_id"].as_str().is_some_and(|s| !s.is_empty()), "{brief}");
+    assert!(brief["revision"].as_u64().is_some(), "{brief}");
+    assert_eq!(brief["design"]["name"], "Untitled", "{brief}");
+    assert!(brief["design"]["selection"].is_array(), "{brief}");
+    assert!(brief["design"]["timeline"].is_array(), "{brief}");
+    assert!(brief.get("commands").is_none(), "{brief}");
+    assert!(brief.get("feature_inputs").is_none(), "{brief}");
+
+    let full = tool(&mut s, "inspect_state", json!({"commands": true, "feature_inputs": true}));
+    assert_eq!(full["document_id"], brief["document_id"], "{full}");
+    assert_eq!(full["revision"], brief["revision"], "{full}");
+    assert!(full["commands"].as_array().is_some_and(|cs| cs.iter().any(|c| c["id"] == "solid.extrude")), "{full}");
+    assert!(full.get("feature_inputs").is_some(), "{full}");
+
+    let advertised = call(&mut s, 50, "tools/list", json!({}));
+    let inspect = advertised["result"]["tools"].as_array().unwrap().iter().find(|x| x["name"] == "inspect_state").unwrap();
+    assert_eq!(inspect["annotations"]["readOnlyHint"], true, "{inspect}");
+    let batch = advertised["result"]["tools"].as_array().unwrap().iter().find(|x| x["name"] == "batch").unwrap();
+    assert_eq!(batch["inputSchema"]["properties"]["if_revision"]["type"], "integer", "{batch}");
+}
+
+/// A stale AI must not overwrite another agent's work. The failure is structured
+/// and includes exactly which expected and actual revision caused the refusal.
+#[test]
+fn guarded_ai_batch_refuses_stale_state_without_mutating() {
+    let mut s = server();
+    let before = tool(&mut s, "inspect_state", json!({}));
+    let steps = json!([{"command":"solid.box","params":{"length":10,"width":10,"height":10}}]);
+    let args = json!({
+        "commands": steps,
+        "if_document_id": before["document_id"],
+        "if_revision": before["revision"],
+    });
+    let first = tool(&mut s, "batch", args.clone());
+    assert_eq!(first["ok"], true, "{first}");
+    assert_eq!(tool(&mut s, "measure", json!({}))["body_count"], 1);
+
+    let stale = raw_tool(&mut s, "batch", args);
+    assert_eq!(stale["result"]["isError"], true, "{stale}");
+    assert_eq!(stale["result"]["structuredContent"]["failed"]["code"], "stale_state", "{stale}");
+    assert_eq!(stale["result"]["structuredContent"]["completed"], 0, "{stale}");
+    assert_eq!(stale["result"]["structuredContent"]["applied"], json!([]), "{stale}");
+    assert_eq!(stale["result"]["structuredContent"]["not_run"], json!([0]), "{stale}");
+    assert_eq!(tool(&mut s, "measure", json!({}))["body_count"], 1);
+
+    let after = tool(&mut s, "inspect_state", json!({}));
+    assert_ne!(after["revision"], before["revision"]);
+    // Selection does not change geometry and must not spuriously stale an edit.
+    tool(&mut s, "execute", json!({"command":"select.set","params":{"items":[{"type":"body","name":"Body1"}]}}));
+    let selected = tool(&mut s, "inspect_state", json!({}));
+    assert_eq!(selected["document_id"], after["document_id"]);
+    assert_eq!(selected["revision"], after["revision"]);
+    assert!(selected["design"]["selection"].as_array().is_some_and(|s| !s.is_empty()));
+    tool(&mut s, "new_design", json!({"name":"Another design"}));
+    let replaced = raw_tool(
+        &mut s,
+        "batch",
+        json!({
+            "commands":[{"command":"solid.box","params":{"length":5,"width":5,"height":5}}],
+            "if_document_id":after["document_id"],"if_revision":after["revision"]
+        }),
+    );
+    assert_eq!(replaced["result"]["structuredContent"]["failed"]["code"], "stale_state", "{replaced}");
+    assert_eq!(tool(&mut s, "measure", json!({}))["body_count"], 0);
+
+    let invalid =
+        raw_tool(&mut s, "batch", json!({"commands":[{"command":"solid.box","params":{"length":1,"width":1,"height":1}}],"if_document_id":"x"}));
+    assert_eq!(invalid["result"]["structuredContent"]["failed"]["code"], "invalid_precondition", "{invalid}");
+    assert_eq!(tool(&mut s, "measure", json!({}))["body_count"], 0);
+}
+
+/// Old desktop builds must never run a guarded batch by ignoring the guard
+/// parameters. The MCP bridge refuses them before sending any write command.
+#[test]
+fn guarded_ai_batch_refuses_legacy_remote_without_capabilities() {
+    struct OldDesktop {
+        writes: usize,
+    }
+    impl crate::backend::Backend for OldDesktop {
+        fn call(&mut self, method: &str, p: Value) -> Result<Value, String> {
+            match method {
+                "engine.execute" if p["command"] == "document.revision" => Ok(json!({"document_id":"old","revision":7})),
+                "control.capabilities" => Err("unknown method control.capabilities".into()),
+                "engine.batch" => {
+                    self.writes += 1;
+                    Err("an old app must not receive guarded mutations".into())
+                }
+                other => {
+                    self.writes += 1;
+                    Err(format!("unexpected write or method: {other}"))
+                }
+            }
+        }
+        fn has_ui(&self) -> bool {
+            true
+        }
+        fn describe(&self) -> String {
+            "legacy desktop test backend".into()
+        }
+    }
+    let mut b = OldDesktop { writes: 0 };
+    let result = crate::tools::call_tool(
+        &mut b,
+        "batch",
+        &json!({
+            "commands":[{"command":"solid.box","params":{"length":10,"width":10,"height":10}}],
+            "if_document_id":"old","if_revision":7
+        }),
+    );
+    assert_eq!(result["isError"], true, "{result}");
+    assert_eq!(result["structuredContent"]["failed"]["code"], "guard_unsupported", "{result}");
+    assert_eq!(b.writes, 0, "legacy app must receive no commands");
+}
+
+/// End-to-end headless agent workflow: make a circular sketch, extrude a
+/// parametric body, resize it, cut a through hole, measure, save, reload in
+/// another independent MCP session and verify the binary STL output.
+#[test]
+fn ai_headless_circle_extrude_resize_hole_save_reload_and_stl() {
+    let mut s = server();
+    tool(&mut s, "new_design", json!({"name":"AI Tube"}));
+    let token = tool(&mut s, "inspect_state", json!({}));
+    let create = json!([
+        {"command":"parameters.add","params":{"name":"H","expression":"12 mm"}},
+        {"command":"sketch.create","params":{"plane":"XY"}},
+        {"command":"sketch.circle.center","params":{"center":[0,0],"radius":12}},
+        {"command":"sketch.finish"},
+        {"command":"solid.extrude","params":{"distance":"H"}},
+    ]);
+    let built = tool(
+        &mut s,
+        "batch",
+        json!({
+            "commands":create,"if_document_id":token["document_id"],"if_revision":token["revision"]
+        }),
+    );
+    assert_eq!(built["ok"], true, "{built}");
+    let initial = volume(&mut s);
+    assert!(rel(initial, std::f64::consts::PI * 12.0 * 12.0 * 12.0) < 1e-4, "{initial}");
+
+    let token = tool(&mut s, "inspect_state", json!({}));
+    let changed = tool(
+        &mut s,
+        "batch",
+        json!({
+            "if_document_id":token["document_id"],"if_revision":token["revision"],
+            "commands":[
+                {"command":"parameters.change","params":{"name":"H","expression":"20 mm"}},
+                {"command":"sketch.create","params":{"plane":"XY"}},
+                {"command":"sketch.circle.center","params":{"center":[0,0],"radius":3}},
+                {"command":"sketch.finish"},
+                {"command":"solid.extrude","params":{"distance":"H","operation":"cut"}}
+            ]
+        }),
+    );
+    assert_eq!(changed["ok"], true, "{changed}");
+    let expected = std::f64::consts::PI * (12.0 * 12.0 - 3.0 * 3.0) * 20.0;
+    let before = tool(&mut s, "measure", json!({}));
+    assert!(rel(before["total"]["volume_mm3"].as_f64().unwrap(), expected) < 1e-4, "{before}");
+    assert_eq!(before["body_count"], 1, "{before}");
+    let state = tool(&mut s, "inspect_state", json!({}));
+    assert!(state["design"]["timeline"].as_array().unwrap().iter().all(|f| f["error"].is_null()), "{state}");
+
+    let dir = std::env::temp_dir().join(format!("solidcraft-mcp-ai-automation-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let design = dir.join("tube.sc");
+    tool(&mut s, "save", json!({"path":design.to_string_lossy()}));
+    assert!(std::fs::metadata(&design).unwrap().len() > 100);
+
+    let mut reopened = server();
+    tool(&mut reopened, "open", json!({"path":design.to_string_lossy()}));
+    let after = tool(&mut reopened, "measure", json!({}));
+    assert_eq!(after["body_count"], before["body_count"], "{after}");
+    assert!(rel(after["total"]["volume_mm3"].as_f64().unwrap(), expected) < 1e-4, "{after}");
+    let state = tool(&mut reopened, "inspect_state", json!({}));
+    assert!(state["design"]["timeline"].as_array().unwrap().iter().all(|f| f["error"].is_null()), "{state}");
+
+    let stl = dir.join("tube.stl");
+    tool(&mut reopened, "export", json!({"path":stl.to_string_lossy(),"format":"stl"}));
+    let bytes = std::fs::read(&stl).unwrap();
+    assert!(bytes.len() >= 84, "STL too small: {}", bytes.len());
+    let count = u32::from_le_bytes(bytes[80..84].try_into().unwrap()) as usize;
+    assert!(count >= 12, "STL has too few triangles: {count}");
+    assert_eq!(bytes.len(), 84 + 50 * count, "binary STL triangle records are incomplete");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn ai_command_errors_are_structured_and_shell_execution_is_not_exposed() {
+    let mut s = server();
+    let unexpected = raw_tool(
+        &mut s,
+        "execute",
+        json!({
+            "command":"shell.execute", "params":{"program":"sh","args":["-c","echo unexpected"]}
+        }),
+    );
+    assert_eq!(unexpected["result"]["isError"], true, "{unexpected}");
+    assert_eq!(unexpected["result"]["structuredContent"]["error"]["code"], "unknown_command", "{unexpected}");
+    assert_eq!(unexpected["result"]["structuredContent"]["error"]["next_action"], "list_commands", "{unexpected}");
+    assert!(unexpected["result"]["content"][0]["text"].as_str().unwrap().contains("unknown command"), "{unexpected}");
+    assert_eq!(tool(&mut s, "measure", json!({}))["body_count"], 0);
+}
