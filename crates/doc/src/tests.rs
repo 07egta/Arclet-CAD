@@ -775,3 +775,37 @@ fn assembly_checked_expansion_handles_many_instances_and_reports_excess_depth() 
     }
     assert!(too_deep.placements_checked().is_err(), "silent truncation must not count as a valid expansion");
 }
+
+
+#[test]
+fn assembly_checked_body_frames_follow_shared_definition_edits() {
+    let (mut doc, _) = plate_doc();
+    let component = doc.add_component(Some("Shared panel"), 0).unwrap();
+    let first = doc.occurrence_of(component).unwrap().id;
+    let second = doc.add_occurrence(
+        component, 0, rigid(Vec3::new(60.0, 0.0, 0.0), Vec3::ZERO, Vec3::Z, 0.0),
+    ).unwrap();
+    doc.body_components.insert("Body1".into(), component);
+    let mut model = Model::new();
+    model.evaluate(&doc);
+    let state = model.state();
+    assert_eq!(state.bodies.len(), 1, "one definition must back both instances");
+    let frames = doc.body_frames_checked(&state).unwrap();
+    assert_eq!(frames.len(), 2);
+    assert!(frames.iter().all(|(_, definition, comp, _, _)| definition == "Body1" && *comp == component));
+    let first_frame = frames.iter().find(|(_, _, _, path, _)| path.as_slice() == [first]).unwrap();
+    let second_frame = frames.iter().find(|(_, _, _, path, _)| path.as_slice() == [second]).unwrap();
+    assert_eq!(apply_point(&first_frame.4, Vec3::ZERO), Vec3::ZERO);
+    assert_eq!(apply_point(&second_frame.4, Vec3::ZERO), Vec3::new(60.0, 0.0, 0.0));
+    assert_eq!(frames, doc.body_frames_with_source(&state));
+    assert!(rel(measure(&state.bodies[0].body).unwrap().volume, 24_000.0) < 1e-9);
+
+    doc.set_param("width", "50 mm", None, None).unwrap();
+    model.evaluate(&doc);
+    let edited = model.state();
+    assert_eq!(edited.bodies.len(), 1);
+    assert!(rel(measure(&edited.bodies[0].body).unwrap().volume, 30_000.0) < 1e-9);
+    assert_eq!(doc.body_frames_checked(&edited).unwrap(), frames, "the geometry changes in its definition; instance transforms stay stable");
+    let loaded = Document::from_json(&doc.to_json()).unwrap();
+    assert_eq!(loaded.body_frames_checked(&edited).unwrap(), frames);
+}
