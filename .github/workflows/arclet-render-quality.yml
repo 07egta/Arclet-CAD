@@ -1,0 +1,51 @@
+name: Arclet render material quality
+
+on:
+  pull_request:
+    paths:
+      - 'crates/render/**'
+      - '.github/workflows/arclet-render-quality.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A new PR revision supersedes only older image-evidence runs for this PR;
+# unrelated missions keep their independent Actions jobs.
+concurrency:
+  group: premium-render-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  render-quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Verify renderer formatting (reported separately)
+        continue-on-error: true
+        run: cargo fmt --manifest-path crates/render/Cargo.toml -- --check
+      - name: Generate six real renderer PNGs and image quality report
+        run: cargo run --locked -p solidcraft-render --example premium_product_gallery -- arclet-render-evidence
+      - name: Verify original renderer and PBR numerical tests
+        run: cargo test --locked -p solidcraft-render --lib
+      - name: Verify CPU ray-trace and dielectric tests
+        env:
+          ARCLET_RENDER_OPTICAL_EVIDENCE: ${{ github.workspace }}/arclet-render-optical-evidence
+        run: cargo test --locked -p solidcraft-render --lib --features raytrace-cpu
+      - name: Check renderer with Clippy
+        run: cargo clippy --locked -p solidcraft-render --all-targets --features raytrace-cpu -- -D warnings
+      - name: Attach raw images and measured receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: arclet-premium-render-quality
+          path: |
+            arclet-render-evidence/
+            arclet-render-optical-evidence/
+          if-no-files-found: ignore
+          retention-days: 14
