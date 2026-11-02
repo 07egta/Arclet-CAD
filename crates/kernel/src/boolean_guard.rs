@@ -135,7 +135,20 @@ fn bad(op: BoolOp, what: String) -> KernelError {
 /// Check the result of a Boolean that needed a retry (see the module docs). `result` is `None`
 /// for an empty result.
 pub(crate) fn check_retry(a: &Body, b: &Body, op: BoolOp, result: Option<&Body>) -> Result<()> {
-    if op == BoolOp::Intersect || a.is_mesh() || b.is_mesh() {
+    if a.is_mesh() || b.is_mesh() {
+        return Ok(());
+    }
+    // A closed shell alone is not enough: a face may be unmeshable, or the
+    // orientation/volume may be invalid. Refuse it *before* accepting any retry.
+    if let Some(body) = result {
+        let issues = crate::guard("validate boolean retry", || Ok(body.validity()))?;
+        if let Some(first) = issues.first() {
+            return Err(bad(op, format!("invalid result: {first}")));
+        }
+    }
+    // Intersection's surface-locality rules differ from those of a cut or join.
+    // Its nonempty retry result still has to pass the B-rep validity test above.
+    if op == BoolOp::Intersect {
         return Ok(());
     }
     let Some(r) = result else {
