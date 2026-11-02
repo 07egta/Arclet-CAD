@@ -11,7 +11,7 @@ use solidcraft_geom::drawing_view::technical::{
 };
 use solidcraft_geom::drawing_view::ViewFrame;
 use solidcraft_geom::hlr::{self, Placement, Prepared};
-use solidcraft_geom::mesh::Aabb3;
+use solidcraft_geom::Aabb3;
 
 use super::{Drawing, Units};
 use crate::{DocError, Result};
