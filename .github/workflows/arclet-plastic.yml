@@ -1,0 +1,42 @@
+name: Arclet plastic design
+
+on:
+  pull_request:
+    paths:
+      - "crates/doc/src/plastic.rs"
+      - "crates/doc/src/eval_more.rs"
+      - "crates/engine/src/cmd/plastic.rs"
+      - "docs/arclet-plastic-design.md"
+      - ".github/workflows/arclet-plastic.yml"
+  push:
+    branches: [main]
+    paths:
+      - "crates/doc/src/plastic.rs"
+      - "crates/doc/src/eval_more.rs"
+      - "crates/engine/src/cmd/plastic.rs"
+      - ".github/workflows/arclet-plastic.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  plastic-regressions:
+    name: Plastic feature tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Linux native build requirements
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev mesa-vulkan-drivers
+      - name: Plastic document rules
+        run: cargo test --profile ci --locked -p solidcraft-doc --lib plastic
+      - name: Plastic engine and sensor enclosure
+        run: cargo test --profile ci --locked -p solidcraft-engine --lib cmd::plastic::tests
