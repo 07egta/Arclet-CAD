@@ -203,6 +203,7 @@ fn body_quality(b: &solidcraft_doc::ModelBody, measured: &Value, min_edge_mm: f6
     } else if measured["inertia"]["error"].is_string() {
         not_checked.push("mass_inertia_tensor_unavailable");
     }
+    let verdict = if !issues.is_empty() { "invalid" } else if !short_edges.is_empty() { "short_edge_warning" } else { "passed_available_checks" };
     json!({
         "body": b.name,
         "passed_available_checks": issues.is_empty(),
@@ -214,7 +215,7 @@ fn body_quality(b: &solidcraft_doc::ModelBody, measured: &Value, min_edge_mm: f6
         "crossed_planar_face_boundaries": crossed_planar_loops,
         "crossed_planar_face_boundaries_error": crossing_error,
         "self_intersection_method": "planar_boundary_loop_crossings_only",
-        "verdict": if !issues.is_empty() { "invalid" } else if !short_edges.is_empty() { "short_edge_warning" } else { "passed_available_checks" },
+        "verdict": verdict,
         "edge_inspection_error": edge_error,
         "minimum_bbox_dimension_mm": minimum_bbox_dimension_mm,
         "minimum_bbox_dimension_is_wall_thickness": false,
