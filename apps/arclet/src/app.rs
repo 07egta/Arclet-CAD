@@ -1102,7 +1102,11 @@ mod tests {
     fn boolean_command_aliases_seed_the_live_dialog_and_repeat_the_same_operation() {
         use solidcraft_ui_egui::dialogs::Kind;
 
-        for (name, expected) in [("BooleanUnion", 1), ("BooleanDifference", 2), ("BooleanIntersection", 3)] {
+        for (name, expected, expected_command) in [
+            ("BooleanUnion", 1, "join"),
+            ("BooleanDifference", 2, "cut"),
+            ("BooleanIntersection", 3, "intersect"),
+        ] {
             let mut app = ArcletApp::with_services(Default::default());
             app.command = name.into();
             app.run_command_text();
@@ -1113,6 +1117,23 @@ mod tests {
                 other => panic!("{name}: unexpected dialog {other:?}"),
             };
             assert_eq!(operation, expected, "{name} opened with the wrong Boolean operation");
+
+            // The dialog's confirmed command must carry the same operation to the engine.
+            // Selection names are enough to test the command payload independently of the
+            // Boolean kernel and geometry (covered by its separate reference suite).
+            {
+                let dialog = app.cad.dialog.as_mut().expect("Combine dialog");
+                dialog.inputs[0].items.push(solidcraft_engine::Sel::Body { name: "Target".into() });
+                dialog.inputs[1].items.push(solidcraft_engine::Sel::Body { name: "Tool".into() });
+            }
+            let payload = solidcraft_ui_egui::dialogs::apply_commands(
+                &app.cad,
+                app.cad.dialog.as_ref().expect("filled Combine dialog"),
+            )
+            .expect("a fully selected Combine dialog should emit an engine command");
+            assert_eq!(payload.len(), 1);
+            assert_eq!(payload[0].0, "solid.combine");
+            assert_eq!(payload[0].1["operation"], json!(expected_command));
 
             // The last command recorded by the shared UI is `solid.combine` (not the alias).
             // Reopening it via the empty Enter shortcut must not silently change a cut to join.
