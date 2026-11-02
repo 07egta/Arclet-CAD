@@ -485,8 +485,24 @@ impl Document {
             angle_display: AngleDisplay::parse(&r.angle_display)
                 .ok_or_else(|| DocError::Invalid(format!("unknown bend angle display `{}` (bend or included)", r.angle_display)))?,
         };
-        if !(0.0..=1.0).contains(&v.k_factor) || v.bend_radius < 0.0 {
-            return Err(DocError::Invalid("the K-factor must be 0…1 and the bend radius positive".into()));
+        if !v.k_factor.is_finite() || !(0.0..=1.0).contains(&v.k_factor) {
+            return Err(DocError::Invalid("the K-factor must be finite and between 0 and 1".into()));
+        }
+        // These are lengths, not optional switches. An unchecked NaN radius can
+        // otherwise pass a '< 0' guard and contaminate the neutral-axis length,
+        // resulting in unusable solids and DXF coordinates. Zero is supported
+        // where a hem, gap or relief is intentionally omitted.
+        for (name, length) in [
+            ("bend radius", v.bend_radius),
+            ("bend relief width", v.relief_width),
+            ("bend relief depth", v.relief_depth),
+            ("corner relief", v.corner_relief),
+            ("hem gap", v.hem_gap),
+            ("flange gap", v.gap),
+        ] {
+            if !length.is_finite() || !(0.0..=1e7).contains(&length) {
+                return Err(DocError::Invalid(format!("the sheet {name} must be finite and between 0 and 10,000,000 mm")));
+            }
         }
         Ok(v)
     }
