@@ -1983,3 +1983,119 @@ fn a_changed_length_dimension_keeps_its_first_point() {
     run(&mut s, "parameters.change", json!({"name": width, "expression": "60 mm"}));
     assert!((at(&s, "p1").x + 30.0).abs() < 1e-6 && (at(&s, "p2").x - 30.0).abs() < 1e-6, "{:?} {:?}", at(&s, "p1"), at(&s, "p2"));
 }
+
+
+// ---------------------------------------------------------------------------------------------
+// Arclet modeling tools: real multi-command workflows and hostile input.
+
+#[test]
+fn modeling_polyline_break_join_and_extrude_are_one_editable_workflow() {
+    let mut s = new_sketch();
+    let poly = run(
+        &mut s,
+        "sketch.polyline",
+        json!({"points": [[0,0], [30,0], [30,20], [0,20]], "closed": true}),
+    );
+    assert_eq!(curve_ids(&poly).len(), 4, "a polyline creates four exact line segments");
+    assert_eq!(sketch(&s).curves.len(), 4);
+    let split = run(&mut s, "sketch.break", json!({"curve": "l1", "points": [[15,0]]}));
+    assert_eq!(curve_ids(&split).len(), 2, "{split}");
+    let all: Vec<String> = sketch(&s).curves.iter().map(|c| c.id.clone()).collect();
+    assert_eq!(all.len(), 5);
+    let joined = run(&mut s, "sketch.join", json!({"curves": all}));
+    assert_eq!(joined["closed"], true, "{joined}");
+    assert_eq!(joined["curves"].as_array().map(Vec::len), Some(5));
+
+    run(&mut s, "sketch.finish", json!({}));
+    run(&mut s, "solid.extrude", json!({"distance": 3, "body_name": "PolyPlate"}));
+    let inspected = run(&mut s, "document.inspect", json!({"measure": true}));
+    let body = inspected["bodies"].as_array().and_then(|v| v.first()).cloned().unwrap_or_default();
+    assert!(body["volume_mm3"].as_f64().unwrap_or(0.0) > 1500.0, "{body}");
+    run(&mut s, "edit.undo", json!({}));
+    run(&mut s, "edit.redo", json!({}));
+    let inspected = run(&mut s, "document.inspect", json!({"measure": true}));
+    assert!(inspected["bodies"].as_array().is_some_and(|a| !a.is_empty()));
+}
+
+#[test]
+fn modeling_join_ties_tolerant_ends_preserves_sources_and_refuses_branches() {
+    let mut s = new_sketch();
+    run(&mut s, "sketch.line", json!({"points": [[0,0], [10,0]], "connect": false}));
+    run(&mut s, "sketch.line", json!({"points": [[10,0], [10,10]], "connect": false}));
+    let curves_before = sketch(&s).curves;
+    let constraints_before = sketch(&s).constraints.len();
+    let joined = run(&mut s, "sketch.join", json!({"curves": ["l2", "l1"]}));
+    assert_eq!(joined["closed"], false);
+    assert_eq!(joined["curves"].as_array().map(Vec::len), Some(2));
+    assert_eq!(joined["constraints"].as_array().map(Vec::len), Some(1), "{joined}");
+    assert_eq!(sketch(&s).curves, curves_before, "join must not approximate or replace source curves");
+    assert_eq!(sketch(&s).constraints.len(), constraints_before + 1);
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(sketch(&s).constraints.len(), constraints_before);
+    run(&mut s, "edit.redo", json!({}));
+    assert_eq!(sketch(&s).constraints.len(), constraints_before + 1);
+
+    let before = sketch(&s);
+    assert!(s.execute("sketch.join", &json!({"curves": ["l1", "l1"]})).is_err());
+    assert!(s.execute("sketch.join", &json!({"curves": ["l1", "not-found"]})).is_err());
+    assert!(s.execute("sketch.join", &json!({"curves": ["l1", "l2"], "tolerance": -1})).is_err());
+    assert_eq!(sketch(&s), before, "errors must be atomic");
+
+    run(&mut s, "sketch.line", json!({"points": [[10,0], [20,0]], "connect": false}));
+    let before = sketch(&s);
+    assert!(s.execute("sketch.join", &json!({"curves": ["l1", "l2", "l3"]})).is_err());
+    assert_eq!(sketch(&s), before, "branch detection must not mutate the document");
+}
+
+#[test]
+fn modeling_spiral_is_editable_and_helix_requires_3d_sketch() {
+    let mut s = new_sketch();
+    let spiral = run(
+        &mut s, "sketch.spiral",
+        json!({"center": [2,3], "start_radius": 2, "end_radius": 7, "turns": 1.5, "samples_per_turn": 16}),
+    );
+    assert_eq!(spiral["samples"], 25);
+    let curve = spiral["curve"].as_str().expect("spiral curve id").to_string();
+    let before = sketch(&s);
+    let ci = before.curve_index(&curve).expect("spiral stored");
+    assert!(matches!(before.curves[ci].kind, solidcraft_sketch::CurveKind::Spline { control: false, periodic: false, .. }));
+    run(&mut s, "edit.undo", json!({}));
+    assert!(sketch(&s).curve_index(&curve).is_none());
+    run(&mut s, "edit.redo", json!({}));
+    assert!(sketch(&s).curve_index(&curve).is_some());
+
+    let snapshot = sketch(&s);
+    assert!(s.execute("sketch.spiral", &json!({"center": [0,0], "start_radius": 5, "end_radius": 5, "turns": 1})).is_err());
+    assert!(s.execute("sketch.spiral", &json!({"center": [0,0], "start_radius": 0, "end_radius": 2, "turns": 100, "samples_per_turn": 64})).is_err());
+    assert!(s.execute("sketch.spiral", &json!({"center": [0,0], "start_radius": 0, "end_radius": 2, "turns": 1, "unexpected": true})).is_err());
+    assert_eq!(sketch(&s), snapshot);
+
+    let helix = json!({"center": [0,0,0], "axis": [0,0,1], "radius": 5, "turns": 2, "height": 20, "samples_per_turn": 16});
+    assert!(s.execute("sketch.helix", &helix).is_err(), "3D sketch mode is required");
+    run(&mut s, "sketch.options", json!({"sketch_3d": true}));
+    let out = run(&mut s, "sketch.helix", helix);
+    assert_eq!(out["samples"], 33, "{out}");
+    let id = out["curve"].as_str().expect("helix id");
+    let sk = sketch(&s);
+    let wire = &sk.wires[sk.wire_index(id).expect("3D wire")];
+    assert_eq!(wire.fit.len(), 33);
+    assert!((wire.fit.first().expect("first").z - 0.0).abs() < 1e-8);
+    assert!((wire.fit.last().expect("last").z - 20.0).abs() < 1e-8);
+    assert!(s.execute("sketch.helix", &json!({"center": [0,0,0], "axis": [0,0,0], "radius": 5, "turns": 1, "height": 10})).is_err());
+    assert!(s.execute("sketch.helix", &json!({"center": [0,0,0], "axis": [0,0,1], "radius": 5, "turns": 1, "height": 0})).is_err());
+}
+
+#[test]
+fn modeling_contracts_refuse_unknown_or_malformed_inputs_in_strict_mode() {
+    let mut s = new_sketch();
+    s.param_check = crate::schema::ParamCheck::Strict;
+    for (cmd, p) in [
+        ("sketch.polyline", json!({"points": [[0,0],[10,0]], "clsoed": true})),
+        ("sketch.join", json!({"curves": ["l1","l2"], "tolerence": 0.001})),
+        ("sketch.spiral", json!({"center": [0,0], "start_radius": 1, "end_radius": 2, "turns": "many"})),
+        ("sketch.helix", json!({"center": [0,0,0], "axis": [0,0,1], "radius": 2, "turns": 1, "height": 5, "typo": 3})),
+    ] {
+        assert!(s.execute(cmd, &p).is_err(), "{cmd} accepted malformed input: {p}");
+    }
+    assert!(sketch(&s).curves.is_empty());
+}
