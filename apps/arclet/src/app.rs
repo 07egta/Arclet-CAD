@@ -16,6 +16,16 @@ use solidcraft_ui_egui::{Services, SolveApp};
 use crate::{classic_look, cmdline, commands, panels, platform};
 
 const PREFS_KEY: &str = "arclet.workspace.v1";
+
+/// Limit the expanded overflow menu on short laptop windows. The user can scroll
+/// to every real command instead of having the last commands clipped by the screen.
+fn overflow_menu_max_height(screen_height: f32) -> f32 {
+    if !screen_height.is_finite() {
+        return 480.0;
+    }
+    (screen_height - 104.0).clamp(180.0, 620.0)
+}
+
 const CURVES: &[(&str, &str)] = &[
     ("arclet.line", "sketch.line"),
     ("arclet.circle", "sketch.circle.center"),
@@ -455,14 +465,19 @@ impl ArcletApp {
             // engine command through tool_items, with the same labels and ids.
             ui_kit::Menu::button(ui, tr("arclet.menu.more"), |ui| {
                 ui.set_max_width(330.0);
-                ui.collapsing(tr("arclet.menu.curve"), |ui| self.tool_items(ui, &[CURVES, CURVE_SHAPES, CURVE_EDITS, CURVE_TOOLS]));
-                ui.collapsing(tr("arclet.menu.surface"), |ui| self.tool_items(ui, &[SURFACES, SURFACE_MORE]));
-                ui.collapsing(tr("arclet.menu.solid"), |ui| self.tool_items(ui, &[SOLIDS, SOLID_MORE, SOLID_PATTERNS]));
-                ui.collapsing(tr("arclet.menu.mesh"), |ui| self.tool_items(ui, &[MESH_TOOLS]));
-                ui.collapsing(tr("arclet.menu.transform"), |ui| self.tool_items(ui, &[TRANSFORMS]));
-                ui.collapsing(tr("arclet.menu.analyze"), |ui| self.tool_items(ui, &[ANALYSIS, ANALYZE_MORE]));
-                ui.collapsing(tr("arclet.menu.render"), |ui| self.tool_items(ui, &[RENDER_TOOLS]));
-                ui.collapsing(tr("arclet.menu.tools"), |ui| self.tools_menu_actions(ui));
+                egui::ScrollArea::vertical()
+                    .id_salt("arclet_more_commands")
+                    .max_height(overflow_menu_max_height(ui.ctx().content_rect().height()))
+                    .show(ui, |ui| {
+                        ui.collapsing(tr("arclet.menu.curve"), |ui| self.tool_items(ui, &[CURVES, CURVE_SHAPES, CURVE_EDITS, CURVE_TOOLS]));
+                        ui.collapsing(tr("arclet.menu.surface"), |ui| self.tool_items(ui, &[SURFACES, SURFACE_MORE]));
+                        ui.collapsing(tr("arclet.menu.solid"), |ui| self.tool_items(ui, &[SOLIDS, SOLID_MORE, SOLID_PATTERNS]));
+                        ui.collapsing(tr("arclet.menu.mesh"), |ui| self.tool_items(ui, &[MESH_TOOLS]));
+                        ui.collapsing(tr("arclet.menu.transform"), |ui| self.tool_items(ui, &[TRANSFORMS]));
+                        ui.collapsing(tr("arclet.menu.analyze"), |ui| self.tool_items(ui, &[ANALYSIS, ANALYZE_MORE]));
+                        ui.collapsing(tr("arclet.menu.render"), |ui| self.tool_items(ui, &[RENDER_TOOLS]));
+                        ui.collapsing(tr("arclet.menu.tools"), |ui| self.tools_menu_actions(ui));
+                    });
             });
         } else {
             self.tool_menu(ui, "arclet.menu.curve", &[CURVES, CURVE_SHAPES, CURVE_EDITS, CURVE_TOOLS]);
@@ -595,7 +610,7 @@ impl ArcletApp {
                     ui.label(RichText::new(error).color(tokens.error));
                 }
                 let invalid = self.command_error.is_some();
-                match cmdline::show(ui, &mut self.cmdline, &mut self.command, &mut self.command_focus, invalid) {
+                match cmdline::show(ui, &mut self.cmdline, &mut self.command, &mut self.command_focus, invalid, &self.cad.session.doc.units) {
                     cmdline::Action::Nothing => {}
                     cmdline::Action::Run => self.run_command_text(),
                     cmdline::Action::Suggested { id, label } => {
@@ -1008,6 +1023,14 @@ mod tests {
         frames.press_escape();
         assert!(frames.app.command.is_empty(), "Escape clears a partially entered command");
         assert!(frames.app.command_error.is_none());
+    }
+
+    #[test]
+    fn compact_overflow_height_preserves_a_scrollable_command_list() {
+        assert_eq!(overflow_menu_max_height(600.0), 496.0);
+        assert_eq!(overflow_menu_max_height(900.0), 620.0);
+        assert_eq!(overflow_menu_max_height(f32::NAN), 480.0);
+        assert_eq!(overflow_menu_max_height(200.0), 180.0);
     }
 
     #[test]

@@ -61,3 +61,8 @@ path and the explicit `ARCLET_WINDOW_SIZE` capture override. Download the
 to the committed baseline. The baseline does not show a narrow-window run.
 Capture availability by itself is not visual verification; check the images
 manually for legibility, clipping and focus states before marking PR ready.
+
+The narrow-screen More menu has a height-bounded scroll area, so commands
+remain reachable even with a small window. The command prompt displays the
+current design's unit string instead of a fixed `mm` suffix. The capture job
+uploads the already-committed baseline alongside two real post-change captures.
