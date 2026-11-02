@@ -93,6 +93,19 @@ const DETACHED: usize = 2;
 pub struct PreviewState {
     /// Key of the commands whose result (or error) is shown.
     shown_key: Option<u64>,
+    /// Compatibility context of the scene currently shown. Different selections, document
+    /// revisions and feature modes may not inherit its ghosts or hidden bodies.
+    shown_stream_key: Option<u64>,
+    /// Exact request (including document identity) received by the UI in this generation.
+    requested_key: Option<u64>,
+    /// Incremented for each distinct input request, including a drag returning to an old value.
+    pub request_generation: u64,
+    requested_at: f64,
+    /// Input receipt to presentation of the *exact* requested result, not a GPU frame metric.
+    pub input_to_preview_ms: f64,
+    /// Completed jobs rejected because their input or generation became obsolete.
+    pub discarded_jobs: u64,
+    running_cancelled: bool,
     running: Option<(u64, Receiver<Job>)>,
     /// Asks the running job to stop between features once it is obsolete.
     running_progress: Option<Arc<Progress>>,
@@ -157,6 +170,9 @@ impl PreviewState {
         self.detach();
         self.running_tool = false;
         self.running_stream_key = None;
+        self.shown_stream_key = None;
+        self.requested_key = None;
+        self.running_cancelled = false;
         self.shown_key = None;
         self.error = None;
         self.applied = None;
@@ -167,6 +183,9 @@ impl PreviewState {
         self.busy = false;
         self.rolled_back = false;
         self.hide_scene();
+        // A closed dialog still owns receivers until the worker ends; do not retain a
+        // completed job (and its potentially large mesh) until another dialog opens.
+        self.detached.retain(|rx| matches!(rx.try_recv(), Err(TryRecvError::Empty)));
     }
 
     /// Drop the preview of a design that leaves the window. Its scene goes too: the viewport
@@ -186,9 +205,14 @@ impl PreviewState {
         self.key = self.key.wrapping_add(1);
     }
 
-    fn apply(&mut self, key: u64, job: Job) {
+    fn apply(&mut self, key: u64, context: Option<u64>, job: Job) {
         self.shown_key = Some(key);
-        self.ms = crate::now_ms() - self.started;
+        self.shown_stream_key = context;
+        let now = crate::now_ms();
+        self.ms = (now - self.started).max(0.0);
+        if self.requested_key == Some(key) {
+            self.input_to_preview_ms = (now - self.requested_at).max(0.0);
+        }
         match job {
             Ok(b) => {
                 self.sketches = b.sketches;
@@ -216,13 +240,31 @@ impl PreviewState {
         }
     }
 
-    /// Errors validate only the current inputs. Keep the last good geometry while
-    /// computing new inputs, but never let an obsolete result block their Apply.
+    /// Only matching inputs (or a verified value-only stream from the same feature
+    /// context) may paint. A new selection or document first restores the original
+    /// bodies, then cancels its old worker. Never show an unrelated tool just because
+    /// that tool's computation happened to succeed.
     fn poll(&mut self, key: u64, stream_key: Option<u64>) {
+        if self.requested_key != Some(key) {
+            self.requested_key = Some(key);
+            self.request_generation = self.request_generation.wrapping_add(1);
+            self.requested_at = crate::now_ms();
+        }
         if self.shown_key != Some(key) {
             self.sketches.clear();
             self.error = None;
             self.curve_quality = None;
+            // Continuous distance/radius/pose edits can retain the previous useful
+            // shape. A different setup (or a non-streaming Loft/Sweep input change)
+            // cannot: stale body replacements would hide the newly selected model.
+            if stream_key.is_none() || self.shown_stream_key != stream_key {
+                self.hide_scene();
+                self.shown_key = None;
+                self.shown_stream_key = None;
+                self.applied = None;
+                self.stopped = None;
+                self.tapered.clear();
+            }
         }
         if let Some((k, rx)) = &self.running {
             let k = *k;
@@ -233,30 +275,39 @@ impl PreviewState {
             };
             if let Some(job) = job {
                 self.running = None;
+                self.running_progress = None;
+                let compatible = self.running_stream_key.take();
                 let good = matches!(&job, Ok(b) if b.error.is_none());
-                let intermediate = good && (self.running_tool || stream_key.is_some() && self.running_stream_key == stream_key);
-                self.running_stream_key = None;
+                // An exact result is always valid unless we already cancelled it;
+                // intermediate success is valid only for the same selection, extent
+                // mode, document, component and colours. Never stream old errors.
+                let admissible = !self.running_cancelled
+                    && (k == key || good && compatible.is_some() && compatible == stream_key);
                 self.running_tool = false;
-                // A held slider, a dragged arrow or an animation may advance faster than the
-                // worker. Show completed joint/distance results from the same setup, and tools built for
-                // inputs since changed, then compute the latest. Errors still require an exact
-                // key.
-                if k == key || intermediate {
-                    self.apply(k, job);
+                self.running_cancelled = false;
+                if admissible {
+                    self.apply(k, compatible, job);
+                } else {
+                    self.discarded_jobs = self.discarded_jobs.saturating_add(1);
                 }
             }
         }
-        // A detached job's result is never shown: drop it once it is done.
+        // Detached workers can finish out of order. Their results must never
+        // become scenes; receiving and dropping also releases their meshes.
         self.detached.retain(|rx| matches!(rx.try_recv(), Err(TryRecvError::Empty)));
-        // The inputs moved to another setup (another selection, for the features whose distance,
-        // radius or pose streams) while a job runs: its result could only be dropped, so stop
-        // waiting for it and let the current inputs start now (#7167). A tool, or a value
-        // streaming within one setup, still shows each finished result; inputs that don't stream
-        // wait as before. At most `DETACHED` jobs are left behind; while they run, the next
-        // obsolete one is waited for as before.
-        let other_setup = !self.running_tool && stream_key.is_some() && self.running_stream_key.is_some() && self.running_stream_key != stream_key;
-        if self.running.as_ref().is_some_and(|(k, _)| *k != key) && other_setup && self.detached.len() < DETACHED {
-            self.detach();
+        let other_setup = self.running.as_ref().is_some_and(|(k, _)| *k != key)
+            && (stream_key.is_none() || self.running_stream_key != stream_key);
+        if other_setup {
+            // Cancellation is important even when all detached-worker slots are
+            // occupied. In that case keep the receiver until its worker exits,
+            // without starting unbounded new kernel threads.
+            if let Some(progress) = &self.running_progress {
+                progress.cancel();
+            }
+            self.running_cancelled = true;
+            if self.detached.len() < DETACHED {
+                self.detach();
+            }
         }
     }
 
@@ -272,6 +323,7 @@ impl PreviewState {
         }
         self.running_tool = false;
         self.running_stream_key = None;
+        self.running_cancelled = false;
     }
 }
 
@@ -315,43 +367,73 @@ fn motion_key(cmds: &[(String, Value)], revision: u64, colors: Colors) -> Option
     Some(h.finish())
 }
 
-/// Tool previews already stream in `poll`. New-body extrusions, face offsets, fillets and
-/// chamfers instead build their full result; allow successful intermediate distances (a
-/// fillet's radii, a chamfer's distances and angle) only within the same setup. Preserve selections, feature identity, extent mode, revision and colours. The
-/// exact job key still ensures the latest distance is computed and errors never go stale.
+/// Only these value-only changes may show intermediate results. Selections,
+/// feature identities, directions, copy flags, axes, operands and extent modes
+/// remain in the hash. A changed Loft/Sweep rail is deliberately NOT compatible;
+/// its old job is cancelled and its old geometry hidden instead.
+fn streaming_fields(command: &str) -> Option<&'static [&'static str]> {
+    match command {
+        "solid.extrude" => Some(&["distance", "distance2", "to_offset"]),
+        "solid.revolve" => Some(&["angle"]),
+        "solid.offset_face" => Some(&["distance"]),
+        "solid.fillet" => Some(&["radius", "radius2", "mid"]),
+        "solid.chamfer" => Some(&["distance", "distance2", "angle"]),
+        "solid.move" => Some(&["translate", "angle"]),
+        _ => None,
+    }
+}
+
+/// A successful value-only result may be shown during the next drag tick. This
+/// includes tool-body previews of Join/Cut, but *only* if the tool's identity and
+/// all non-drag parameters match; older code admitted any successful tool.
 fn stream_key(cmds: &[(String, Value)], revision: u64, colors: Colors) -> Option<u64> {
     if let Some(key) = motion_key(cmds, revision, colors) {
         return Some(key);
     }
-    if cmds.is_empty() || as_new_body(cmds).is_some() {
+    // Avoid cloning a potentially huge Loft or Sweep input list just to find
+    // that it has no safe value-only streaming contract.
+    if cmds.is_empty() || !cmds.iter().all(|(id, params)| {
+        let command = if id == "timeline.redefine" {
+            params.get("command").and_then(Value::as_str)
+        } else {
+            Some(id.as_str())
+        };
+        command.and_then(streaming_fields).is_some()
+    }) {
         return None;
     }
     let mut setup = cmds.to_vec();
-    for (command, params) in &mut setup {
-        let (command, params) = if command == "timeline.redefine" {
+    for (id, params) in &mut setup {
+        let (command, params) = if id == "timeline.redefine" {
             let command = params.get("command")?.as_str()?.to_string();
             (command, params.get_mut("params")?)
         } else {
-            (command.clone(), params)
+            (id.clone(), params)
         };
-        let fields: &[&str] = match command.as_str() {
-            "solid.extrude" => &["distance", "distance2", "to_offset"],
-            "solid.offset_face" => &["distance"],
-            // A radius dragged or typed: each result shows while the next computes, rather than
-            // the preview holding still until the input stops changing.
-            "solid.fillet" => &["radius", "radius2", "mid"],
-            "solid.chamfer" => &["distance", "distance2", "angle"],
-            _ => return None,
-        };
+        let fields = streaming_fields(&command)?;
         let params = params.as_object_mut()?;
         for field in fields {
-            // Keep presence: changing extent mode must not reuse the old result.
+            // Preserve whether a field exists: adding a second distance or
+            // changing to a different extent mode must invalidate the result.
             if let Some(value) = params.get_mut(*field) {
                 *value = Value::Null;
             }
         }
     }
     Some(job_key(&setup, revision, colors))
+}
+
+/// The preview must be tied to a document instance, not just a revision counter:
+/// a newly opened tab can have the same revision as the tab it replaced. Include
+/// component and active occurrence, because world placement affects previews.
+fn session_key(session: &Session) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    session.uid.hash(&mut h);
+    session.revision.hash(&mut h);
+    session.active_component.hash(&mut h);
+    session.active_occurrence_path.hash(&mut h);
+    session.doc.marker.hash(&mut h);
+    h.finish()
 }
 
 /// Keep the preview in step with the open dialog: start a computation when its inputs changed,
@@ -374,12 +456,20 @@ pub fn update(app: &mut SolveApp, ctx: &egui::Context) {
     if app.dialog.as_ref().is_some_and(|d| matches!(d.kind, crate::dialogs::Kind::Assembly(crate::dialogs_assembly::Asm::Drive { .. }))) {
         colors.ghost = app.preferences.drive_joints_ghost;
     }
-    let key = job_key(&cmds, app.session.revision, colors);
-    let stream_key = stream_key(&cmds, app.session.revision, colors);
+    let source = session_key(&app.session);
+    let key = job_key(&cmds, source, colors);
+    let stream_key = stream_key(&cmds, source, colors);
     let tool = as_new_body(&cmds).is_some();
     let pv = &mut app.preview;
     pv.poll(key, stream_key);
     if pv.running.is_none() && pv.shown_key != Some(key) {
+        // Each detached slot represents a still-running kernel worker. Do not
+        // spawn an unbounded number of expensive preview jobs under fast input.
+        if pv.detached.len() >= DETACHED {
+            pv.busy = true;
+            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+            return;
+        }
         pv.started = crate::now_ms();
         pv.running_stream_key = stream_key;
         let mut straight = std::mem::take(&mut app.preview.straight);
@@ -391,7 +481,7 @@ pub fn update(app: &mut SolveApp, ctx: &egui::Context) {
             app.preview.moving = moving;
         }
         if let Some(job) = job {
-            app.preview.apply(key, job);
+            app.preview.apply(key, stream_key, job);
             app.preview.busy = false;
             return;
         }
@@ -418,7 +508,7 @@ fn job_key(cmds: &[(String, Value)], revision: u64, colors: Colors) -> u64 {
 /// field changed and before `update` has started the replacement worker.
 pub(crate) fn curve_quality<'a>(app: &'a SolveApp, commands: &[(String, Value)]) -> Option<&'a Value> {
     let colors = Colors::for_tool(&Tokens::get(), &app.ui.tab, true);
-    if app.preview.busy || app.preview.error.is_some() || app.preview.shown_key != Some(job_key(commands, app.session.revision, colors)) {
+    if app.preview.busy || app.preview.error.is_some() || app.preview.shown_key != Some(job_key(commands, session_key(&app.session), colors)) {
         return None;
     }
     app.preview.curve_quality.as_ref()
@@ -442,14 +532,14 @@ fn spawn(pv: &mut PreviewState, key: u64, scratch: Session, cmds: Vec<(String, V
             pv.running_progress = Some(progress);
             pv.running_tool = tool;
         }
-        Err(e) => pv.apply(key, Err(e.to_string())),
+        Err(e) => pv.apply(key, pv.running_stream_key, Err(e.to_string())),
     }
 }
 
 /// No threads on the web: compute right away.
 #[cfg(target_arch = "wasm32")]
 fn spawn(pv: &mut PreviewState, key: u64, scratch: Session, cmds: Vec<(String, Value)>, colors: Colors, tool: bool, _progress: Arc<Progress>) {
-    pv.apply(key, if tool { compute_tool(&scratch, &cmds, colors) } else { compute(&scratch, &cmds, colors) });
+    pv.apply(key, pv.running_stream_key, if tool { compute_tool(&scratch, &cmds, colors) } else { compute(&scratch, &cmds, colors) });
 }
 
 /// Evaluate the commands on the scratch session and build the preview scene.
@@ -991,16 +1081,16 @@ mod tests {
         pv.running = Some((1, rx));
         pv.poll(2, None);
         assert!(pv.error.is_none(), "the corrected inputs can Apply while their preview computes");
-        assert!(pv.running.is_some());
-        assert!(pv.active);
-        assert_eq!(pv.replaced, ["Turn"]);
-        assert_eq!(pv.key, 9, "the last good geometry stays visible");
+        assert!(pv.running.is_none() && pv.detached.len() == 1, "obsolete work is detached and cancelled");
+        assert!(!pv.active);
+        assert!(pv.replaced.is_empty(), "a new unstreamed input must restore the original scene");
+        assert_ne!(pv.key, 9, "obsolete geometry disappears before the new worker completes");
         tx.send(Err("unknown_angle".into())).unwrap();
         pv.poll(2, None);
         assert!(pv.error.is_none(), "a late obsolete result cannot disable Apply again");
         assert!(pv.running.is_none());
-        assert_eq!(pv.shown_key, Some(1));
-        assert_eq!(pv.key, 9);
+        assert!(pv.shown_key.is_none(), "obsolete preview is no longer treated as displayed");
+        assert_ne!(pv.key, 9);
 
         let (tx, rx) = std::sync::mpsc::channel();
         pv.running = Some((2, rx));
