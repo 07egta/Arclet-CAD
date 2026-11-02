@@ -199,14 +199,24 @@ fn crown_param(p: &Value, cmd: &str) -> Result<f64> {
 }
 
 /// One end of a blend: the body and the picks that chain its edges.
+/// Read a picked edge chain without dropping any invalid station. Discarding one
+/// point silently can reorder or shorten the chain and create an unintended
+/// Loft/Blend/Match surface that still looks plausible in the viewport.
+pub(super) fn edge_chain_points(value: Option<&Value>, cmd: &str, field: &str) -> Result<Vec<solidcraft_geom::Vec3>> {
+    let list = value.and_then(Value::as_array).ok_or_else(|| bad(cmd, format!("`{field}` must list 1…10000 edge points [x,y,z]")))?;
+    if list.is_empty() || list.len() > 10_000 {
+        return Err(bad(cmd, format!("`{field}` must list 1…10000 edge points [x,y,z]")));
+    }
+    list.iter()
+        .enumerate()
+        .map(|(i, point)| vec3(point).ok_or_else(|| bad(cmd, format!("`{field}[{i}]` must be a finite edge point [x,y,z]"))))
+        .collect()
+}
+
 fn blend_side(p: &Value, cmd: &str, key: &str) -> Result<BlendSide> {
     let side = p.get(key).ok_or_else(|| bad(cmd, format!("`{key}` must be {{body, edges}}")))?;
     let body = str_(side, "body").ok_or_else(|| bad(cmd, format!("`{key}.body` must name a body")))?;
-    let edges: Vec<solidcraft_geom::Vec3> =
-        side.get("edges").and_then(Value::as_array).map(|a| a.iter().filter_map(vec3).collect()).unwrap_or_default();
-    if edges.is_empty() || edges.len() > 10_000 {
-        return Err(bad(cmd, format!("`{key}.edges` must list 1 to 10000 points on the edges of a chain")));
-    }
+    let edges = edge_chain_points(side.get("edges"), cmd, &format!("{key}.edges"))?;
     Ok(BlendSide { body: BodyName(body.to_string()), edges: edges.into_iter().map(Position).collect() })
 }
 
@@ -384,11 +394,7 @@ fn surface_loft(s: &mut Session, p: &Value) -> Result<Value> {
         // A section is a chain of sketch curves, or an edge chain of a body whose face the end of
         // the loft repeats.
         if let Some(body) = str_(sec, "body") {
-            let edges: Vec<solidcraft_geom::Vec3> =
-                sec.get("edges").and_then(Value::as_array).map(|a| a.iter().filter_map(vec3).collect()).unwrap_or_default();
-            if edges.is_empty() || edges.len() > 10_000 {
-                return Err(bad(cmd, "`sections.edges` must list 1 to 10000 points on the edges of a chain"));
-            }
+            let edges = edge_chain_points(sec.get("edges"), cmd, "sections.edges")?;
             if sec.get("sketch").is_some() {
                 return Err(bad(cmd, "a section is either a sketch chain or a body edge chain"));
             }
