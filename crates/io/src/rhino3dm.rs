@@ -406,16 +406,16 @@ mod tests {
     #[test]
     fn too_many_records_are_refused() -> Result<(), Error> {
         let records: Vec<Vec<u8>> = (0..=MAX_CHUNKS).map(|_| short(0x10)).collect();
-        let bytes = file("8", &records);
+        let bytes = file("4", &records);
         assert!(matches!(list_chunks(&bytes), Err(Error::Invalid(_))));
-        let ok = file("8", &records[..MAX_CHUNKS]);
+        let ok = file("4", &records[..MAX_CHUNKS]);
         assert_eq!(list_chunks(&ok)?.chunks.len(), MAX_CHUNKS);
         Ok(())
     }
 
     #[test]
     fn every_truncation_of_a_valid_file_is_handled_without_panic() {
-        let bytes = file("8", &[record(1, b"hello"), short(0x20), record(3, b"0123456789")]);
+        let bytes = file("4", &[record(1, b"hello"), short(0x20), record(3, b"0123456789")]);
         assert!(list_chunks(&bytes).is_ok());
         for n in 0..bytes.len() {
             let _ = list_chunks(&bytes[..n]);
