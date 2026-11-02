@@ -67,17 +67,17 @@ fn register(_s: &mut Session, p: &Value) -> Result<Value> {
     // Registration also checks that the file is a real, loadable Arclet design.
     solidcraft_io::read_design(&bytes).map_err(|e| bad(cmd, format!("invalid component source design: {e}")))?;
     proposed.entries[0].sha256 = sha256_hex(&bytes);
-    let mut library = if solidcraft_io::vfs::exists(&req.path) {
-        load(&req.path, cmd)?
-    } else { proposed.clone() };
-    if library.entries.iter().any(|e| e.id == proposed.entries[0].id && e.version == req.version) {
-        return Err(bad(cmd, "this component ID and version already exist; publish a new version instead"));
-    }
-    if !solidcraft_io::vfs::exists(&req.path) {
-        library = proposed;
+    let existing = solidcraft_io::vfs::exists(&req.path);
+    let library = if existing {
+        let mut current = load(&req.path, cmd)?;
+        if current.entries.iter().any(|e| e.id == proposed.entries[0].id && e.version == req.version) {
+            return Err(bad(cmd, "this component ID and version already exist; publish a new version instead"));
+        }
+        current.entries.append(&mut proposed.entries);
+        current
     } else {
-        library.entries.push(proposed.entries.remove(0));
-    }
+        proposed
+    };
     library.validate().map_err(|e| bad(cmd, e.to_string()))?;
     let encoded = library.encode().map_err(|e| bad(cmd, e.to_string()))?;
     #[cfg(not(target_arch = "wasm32"))]
