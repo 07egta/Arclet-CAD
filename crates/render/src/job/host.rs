@@ -446,6 +446,28 @@ impl JobHandle {
         drop(data);
         self.status()
     }
+    /// Only retrieve a frame when the caller still owns this job AND the same
+    /// scene generation. A completed old render is a valid historical artifact,
+    /// but must not replace a newer model's image.
+    ///
+    /// The owner must still compare identity under its own publication lock:
+    /// a model can change after this method returns.
+    pub fn frame_for(&self, expected_job: JobId, expected_scene_generation: u64) -> Result<Option<Arc<RenderFrame>>> {
+        if self.0.id != expected_job || self.0.scene_generation != expected_scene_generation {
+            return Ok(None);
+        }
+        self.frame()
+    }
+
+    /// The same explicit stale-result guard for provisional, non-exportable
+    /// previews. Never promote a preview to a final frame.
+    pub fn preview_for(&self, expected_job: JobId, expected_scene_generation: u64) -> Result<Option<Arc<RenderPreview>>> {
+        if self.0.id != expected_job || self.0.scene_generation != expected_scene_generation {
+            return Ok(None);
+        }
+        self.preview()
+    }
+
     pub fn frame(&self) -> Result<Option<Arc<RenderFrame>>> {
         let data = self.0.data.lock().map_err(|_| JobError::new(ErrorCode::Internal, "render result lock poisoned"))?;
         let frame = data.frame.clone();

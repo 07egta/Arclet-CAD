@@ -85,6 +85,74 @@ impl Transmission {
     }
 }
 
+/// Reference optical looks for the *existing* dielectric transport path.
+/// These are original illustrative values, not calibrated absorption spectra.
+/// The caller still must certify a closed dielectric body and select the
+/// raytrace integrator; adding this data to a raster ProductMesh does not
+/// magically turn scalar alpha blending into Snell refraction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OpticalFinish {
+    ClearGlass,
+    BlueGreenGlass,
+    SmokedGlass,
+    ScatteringPolymer,
+}
+
+/// The renderer keeps opaque interface response and volumetric transport as
+/// separate types so physically transparent materials are not represented as
+/// an arbitrary RGBA opacity.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct OpticalFinishData {
+    pub interface: crate::surface::OpaqueSurface,
+    pub medium: Transmission,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OpticalFinishError {
+    Surface(SurfaceError),
+    Transmission(TransmissionError),
+}
+
+impl std::fmt::Display for OpticalFinishError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Surface(error) => write!(f, "{error}"),
+            Self::Transmission(error) => write!(f, "{error}"),
+        }
+    }
+}
+impl std::error::Error for OpticalFinishError {}
+
+impl OpticalFinish {
+    /// Returns validated linear-sRGB interface/medium data for an already
+    /// supported transport path, without changing a document, material
+    /// binding or output codec.
+    pub fn data(self) -> Result<OpticalFinishData, OpticalFinishError> {
+        let (base, roughness, ior, extinction, scattering) = match self {
+            Self::ClearGlass => (Vec3::new(1.0, 1.0, 1.0), 0.065, 1.50, Vec3::ZERO, None),
+            Self::BlueGreenGlass => (
+                Vec3::new(0.96, 1.0, 0.97), 0.085, 1.50,
+                Vec3::new(0.018, 0.003, 0.010), None,
+            ),
+            Self::SmokedGlass => (
+                Vec3::new(0.78, 0.79, 0.80), 0.12, 1.50,
+                Vec3::new(0.065, 0.058, 0.054), None,
+            ),
+            Self::ScatteringPolymer => (
+                Vec3::new(0.82, 0.88, 0.94), 0.56, 1.48,
+                Vec3::new(0.012, 0.008, 0.006),
+                Some(subsurface::Subsurface { scattering_per_mm: 0.35, anisotropy: 0.10 }),
+            ),
+        };
+        let interface = crate::surface::OpaqueSurface::new(base, 0.0, roughness, ior).map_err(OpticalFinishError::Surface)?;
+        let mut medium = Transmission::new(extinction, None).map_err(OpticalFinishError::Transmission)?;
+        if let Some(scattering) = scattering {
+            medium = medium.with_subsurface(scattering).map_err(OpticalFinishError::Transmission)?;
+        }
+        Ok(OpticalFinishData { interface, medium })
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Fresnel {
     pub s: f64,
@@ -185,6 +253,48 @@ pub fn solid_shadow(transmission: Transmission, distance_mm: f64, entry_cosine: 
 #[cfg(test)]
 mod shadow_tests {
     use super::*;
+    #[test]
+    fn optical_product_recipes_keep_interface_and_volume_physics_separate() {
+        for recipe in [
+            OpticalFinish::ClearGlass, OpticalFinish::BlueGreenGlass,
+            OpticalFinish::SmokedGlass, OpticalFinish::ScatteringPolymer,
+        ] {
+            let material = recipe.data().unwrap();
+            assert_eq!(material.interface.metallic(), 0.0);
+            assert!((1.0..=3.0).contains(&material.interface.dielectric_ior()));
+            let reflectance = material.interface.normal_reflectance();
+            let ior = material.interface.dielectric_ior();
+            let expected = ((ior - 1.0) / (ior + 1.0)).powi(2);
+            for f in [reflectance.x, reflectance.y, reflectance.z] {
+                assert!((f - expected).abs() < 1e-14);
+            }
+            // Beer--Lambert attenuation must compose in physical millimetres,
+            // not in sRGB display channels or scalar preview opacities.
+            let a = material.medium.attenuation(4.0).unwrap();
+            let b = material.medium.attenuation(6.0).unwrap();
+            let whole = material.medium.attenuation(10.0).unwrap();
+            for (reference, actual) in [(a.x * b.x, whole.x), (a.y * b.y, whole.y), (a.z * b.z, whole.z)] {
+                assert!((reference - actual).abs() < 1e-14);
+            }
+            assert_eq!(material.medium.subsurface().is_some(), recipe == OpticalFinish::ScatteringPolymer);
+        }
+        assert_eq!(OpticalFinish::ClearGlass.data().unwrap().medium.attenuation(100.0).unwrap(), Vec3::new(1.0, 1.0, 1.0));
+        let colored = OpticalFinish::BlueGreenGlass.data().unwrap();
+        let trans = colored.medium.attenuation(10.0).unwrap();
+        assert!(trans.y > trans.z && trans.z > trans.x);
+        assert!(OpticalFinish::ScatteringPolymer.data().unwrap().medium.subsurface().unwrap().active());
+        // Independent 65-digit Python decimal.Decimal exponentials:
+        // exp(-[0.018, 0.003, 0.010] * 12mm). This is an oracle for the
+        // specified material *data*, not for a fully raytraced image.
+        let expected = [0.8057353018734797, 0.964640293483123, 0.8869204367171575];
+        let measured = colored.medium.attenuation(12.0).unwrap();
+        for (actual, oracle) in [measured.x, measured.y, measured.z].into_iter().zip(expected) {
+            assert!((actual - oracle).abs() <= 1e-15, "{actual} != {oracle}");
+        }
+        assert!((OpticalFinish::ScatteringPolymer.data().unwrap().medium.subsurface().unwrap().survival(10.0).unwrap()
+            - 0.0301973834223185).abs() < 1e-15);
+    }
+
     #[test]
     fn defaults_and_reciprocal_solid_shadow_match_analytic_beer() {
         let sigma = Vec3::new(-0.5_f64.ln(), -0.8_f64.ln(), 0.0);

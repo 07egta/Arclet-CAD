@@ -1070,6 +1070,52 @@ fn optical_input(body_index: usize, body_name: &str, ior: f64) -> job::Dielectri
     }
 }
 
+#[test]
+fn true_dielectric_gallery_png_uses_tinted_volume_not_scalar_alpha() {
+    use crate::transmission::OpticalFinish;
+    let sheet = optical_sheet("Optical glass", 0.0, 5.0);
+    let scene = ProductScene { bounds: sheet.mesh.bounds(), meshes: vec![sheet] };
+    let render = |finish: OpticalFinish| -> (Vec<u8>, [u8; 4]) {
+        let material = finish.data().unwrap();
+        let extinction = material.medium.extinction();
+        let mut selection = optical_input(0, "Optical glass", material.interface.dielectric_ior());
+        selection.absorption_per_mm = [extinction.x, extinction.y, extinction.z];
+        selection.thickness_mm = 12.0;
+        let opts = RaytraceOptions {
+            dielectrics: vec![selection],
+            lights: Some(Vec::new()),
+            environment: Some(job::RaytraceEnvironmentOptions { color: [1.0; 3], intensity: 1.0 }),
+            shadows: false,
+            ..Default::default()
+        };
+        let mut camera = crate::Camera { distance: 35.0, ..Default::default() };
+        camera.set_view(crate::StandardView::Top);
+        let mut request = request();
+        request.camera = camera;
+        request.width = 12;
+        request.height = 12;
+        request.raytrace = Some(opts.clone());
+        let bytes = optical_png(ImageTask::new(scene.clone(), request, CancelToken::default(), opts).unwrap(), 4);
+        let image = ::image::load_from_memory(&bytes).unwrap().to_rgba8();
+        (bytes, image.get_pixel(6, 6).0)
+    };
+    let (clear_png, clear) = render(OpticalFinish::ClearGlass);
+    let (tinted_png, tinted) = render(OpticalFinish::BlueGreenGlass);
+    assert_eq!(clear[3], 255);
+    assert_eq!(tinted[3], 255);
+    assert_ne!(clear_png, tinted_png, "runtime dielectric absorption must change the actual completed PNG");
+    assert!(tinted[1] > tinted[0], "teal glass absorbs more red than green: {tinted:?}");
+    assert!(clear[0] > tinted[0], "clear and colored glass must not be equivalent: clear={clear:?}, tinted={tinted:?}");
+    // This uses the existing CPU raytrace optical branch; no attempt to pass
+    // its physical result off as the raster gallery's alpha-only container.
+    if let Some(path) = std::env::var_os("ARCLET_RENDER_OPTICAL_EVIDENCE") {
+        let dir = std::path::PathBuf::from(path);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("raytraced-clear-glass.png"), clear_png).unwrap();
+        std::fs::write(dir.join("raytraced-tinted-glass.png"), tinted_png).unwrap();
+    }
+}
+
 fn optical_png(mut task: ImageTask, quantum: usize) -> Vec<u8> {
     for _ in 0..2_000_000 {
         let before = task.work.used();
