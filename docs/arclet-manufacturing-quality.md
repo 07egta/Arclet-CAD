@@ -116,3 +116,27 @@ that a larger model is unprintable. Vertex-fan manifold classification also
 returns an explicitly incomplete result above 500,000 triangles rather than
 pretending to certify the topology. The underlying STL/3MF format limits are
 separate and much higher.
+
+
+## Independent numeric reference check (2026-11-02)
+
+A separate Python arithmetic check reproduced the triangle fixtures from their
+coordinate formulas, summed their oriented tetrahedral volumes, and counted
+undirected edge incidences. This **did run**, but it is **not a Rust execution,
+not a real 3MF/STL roundtrip, and not a physical print**.
+
+| Mesh fixture | Faces | Computed volume (mm³) | Analytic volume (mm³) | Relative discrepancy | Edge incidences |
+|---|---:|---:|---:|---:|---|
+| 20 mm cube | 12 | 8000.000000 | 8000.000000 | 0% | every edge twice |
+| cylinder, radius 5 mm, height 20 mm, 96 segments | 384 | 1569.675102 | 1570.796327 | 0.071379% | every edge twice |
+| annular plate, radii 10/3 mm, height 4 mm, 96 segments | 768 | 1142.723474 | 1143.539726 | 0.071379% | every edge twice |
+| thin open-top vase, outer radius 10 mm, wall/bottom 0.2 mm, 48 segments | 384 | 308.275717 | 309.157850 | 0.285334% | every edge twice |
+| sealed hollow case, 20 mm outer cube minus 16 mm inner cube | 24 | 3904.000000 | 3904.000000 | 0% | every edge twice |
+
+The circular examples use deliberately faceted geometry, so volume must be
+compared to the analytic source with an explicitly nonzero tolerance; the
+triangulation's volume deficit is expected at 48 or 96 segments.
+An f32 simulation also reproduced a **collapsed 1 mm edge** when translated to
+x=100,000,000 mm, motivating `export_coordinate_precision` screening for
+binary STL and default (untagged) 3MF. These reference figures cannot certify
+the Rust implementation until the dedicated CI job actually runs and passes.
