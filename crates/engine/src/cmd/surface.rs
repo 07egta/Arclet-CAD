@@ -1038,6 +1038,26 @@ mod tests {
         );
     }
 
+    #[test]
+    fn loft_and_blend_reject_malformed_edge_chains_without_editing_the_document() {
+        let mut s = Session::default();
+        run(&mut s, "solid.box", json!({"length":20, "width":20, "height":10, "body_name":"A"}));
+        run(&mut s, "solid.box", json!({"corner":[40,0,0], "length":20, "width":20, "height":10, "body_name":"B"}));
+        let original = s.doc.to_json();
+        for edges in [
+            json!([[20,5,10], null, [20,15,10]]),
+            json!([[20,5,10], [20,15]]),
+            json!([[20,5,10], "not a point"]),
+            json!({"point":[20,5,10]}),
+        ] {
+            let loft = json!({"sections":[{"body":"A","edges":edges},{"body":"B","edges":[[40,5,10]]}]});
+            assert!(s.execute("surface.loft", &loft).is_err(), "accepted malformed loft: {loft}");
+            let blend = json!({"from":{"body":"A","edges":edges},"to":{"body":"B","edges":[[40,5,10]]}});
+            assert!(s.execute("surface.blend", &blend).is_err(), "accepted malformed blend: {blend}");
+            assert_eq!(s.doc.to_json(), original, "invalid input changed the design");
+        }
+    }
+
     /// Each wall of a surface built from sketch curves is named after the curve it comes from,
     /// exactly (not from geometry): extrude, revolve, sweep and loft.
     #[test]
