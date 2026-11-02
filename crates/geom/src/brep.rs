@@ -370,7 +370,145 @@ fn surface(s: &Surface, depth: usize, budget: &mut Budget) -> Result<()> {
     }
 }
 
+/// An incidence-only audit of the portable B-rep topology. This is not a
+/// certificate of geometric closure, self-intersection freedom, or exact volume.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct SolidTopologyReport {
+    /// Every stored edge is used by two oppositely directed face-boundary uses,
+    /// with no disconnected topology. Geometric coincidence is *not* checked.
+    pub closed_by_edge_incidence: bool,
+    pub shells: Vec<ShellTopologyShell>,
+}
+
+/// Bounded per-shell counts; only the first few offending edge indices are
+/// returned, rather than allocating an unbounded diagnostic per edge use.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ShellTopologyShell {
+    pub shell_index: usize,
+    pub vertices: usize,
+    pub edges: usize,
+    pub faces: usize,
+    /// Exactly one oriented use, i.e. an open shell edge.
+    pub boundary_edges: usize,
+    /// Stored edges not referenced by any face loop.
+    pub unused_edges: usize,
+    /// More than two face-boundary uses.
+    pub nonmanifold_edges: usize,
+    /// Exactly two uses running the same way, rather than opposite ways.
+    pub orientation_conflicts: usize,
+    /// An edge reused across separate loops of the same face.
+    pub same_face_multi_loop_edges: usize,
+    /// Legitimate periodic seam candidate: twice in one face wire, in opposite directions.
+    pub seam_edges: usize,
+    /// Vertices that no face-boundary edge touches.
+    pub unused_vertices: usize,
+    /// Zero-based shell-local edge indices for the first 16 findings.
+    pub example_problem_edges: Vec<usize>,
+}
+
 impl Brep {
+    /// Inspect incidence, face winding and unused topology without changing or
+    /// repairing the body. Open face/surface B-reps remain valid for `validate()`.
+    /// Callers must not treat this as geometric watertightness certification.
+    pub fn audit_solid_topology(&self) -> Result<SolidTopologyReport> {
+        self.validate()?;
+        let mut result = SolidTopologyReport { closed_by_edge_incidence: true, shells: Vec::with_capacity(self.shells.len()) };
+        for (shell_index, shell) in self.shells.iter().enumerate() {
+            // Count each oriented use once, including a seam edge repeated in the
+            // same wire. Opposite seam uses are permitted; a third use is not.
+            let mut usage = vec![(0u32, None::<(usize, usize, bool)>, false); shell.edges.len()];
+            let mut visited = vec![false; shell.vertices.len()];
+            for (face_index, face) in shell.faces.iter().enumerate() {
+                for (wire_index, wire) in face.loops.iter().enumerate() {
+                    for use_ in wire {
+                        let Some((count, first, across_loops)) = usage.get_mut(use_.edge as usize) else {
+                            return Err(Invalid("edge reference"));
+                        };
+                        if *count == 0 {
+                            *first = Some((face_index, wire_index, use_.forward));
+                        } else if let Some((previous_face, previous_wire, _)) = *first {
+                            if previous_face == face_index && previous_wire != wire_index {
+                                *across_loops = true;
+                            }
+                        }
+                        *count += 1;
+                        if let Some(edge) = shell.edges.get(use_.edge as usize) {
+                            for &vertex in &edge.vertices {
+                                if let Some(slot) = visited.get_mut(vertex as usize) {
+                                    *slot = true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            let mut audit = ShellTopologyShell {
+                shell_index,
+                vertices: shell.vertices.len(),
+                edges: shell.edges.len(),
+                faces: shell.faces.len(),
+                boundary_edges: 0,
+                unused_edges: 0,
+                nonmanifold_edges: 0,
+                orientation_conflicts: 0,
+                same_face_multi_loop_edges: 0,
+                seam_edges: 0,
+                unused_vertices: visited.iter().filter(|&&used| !used).count(),
+                example_problem_edges: Vec::new(),
+            };
+            for (edge_index, (count, first, across_loops)) in usage.into_iter().enumerate() {
+                let bad = match count {
+                    0 => {
+                        audit.unused_edges += 1;
+                        true
+                    }
+                    1 => {
+                        audit.boundary_edges += 1;
+                        true
+                    }
+                    2 => {
+                        // Find the second use without storing all uses per edge.
+                        let second = shell.faces.iter().enumerate().flat_map(|(fi, f)| {
+                            f.loops.iter().enumerate().flat_map(move |(wi, wire)| {
+                                wire.iter().filter(move |u| u.edge as usize == edge_index).map(move |u| (fi, wi, u.forward))
+                            })
+                        }).nth(1);
+                        let (Some((first_face, first_wire, first_direction)), Some((last_face, last_wire, last_direction))) = (first, second) else {
+                            return Err(Invalid("edge incidence"));
+                        };
+                        if first_direction == last_direction {
+                            audit.orientation_conflicts += 1;
+                        }
+                        if across_loops || (first_face == last_face && first_wire != last_wire) {
+                            audit.same_face_multi_loop_edges += 1;
+                        } else if first_face == last_face {
+                            audit.seam_edges += 1;
+                        }
+                        first_direction == last_direction || first_face == last_face && first_wire != last_wire
+                    }
+                    _ => {
+                        audit.nonmanifold_edges += 1;
+                        true
+                    }
+                };
+                if bad && audit.example_problem_edges.len() < 16 {
+                    audit.example_problem_edges.push(edge_index);
+                }
+            }
+            if audit.boundary_edges != 0
+                || audit.unused_edges != 0
+                || audit.nonmanifold_edges != 0
+                || audit.orientation_conflicts != 0
+                || audit.same_face_multi_loop_edges != 0
+                || audit.unused_vertices != 0
+            {
+                result.closed_by_edge_incidence = false;
+            }
+            result.shells.push(audit);
+        }
+        Ok(result)
+    }
+
     /// Validate portable structure without calling a kernel or evaluating geometry.
     /// Does not certify watertightness, surface coincidence, or authoritative state.
     pub fn validate(&self) -> Result<()> {
