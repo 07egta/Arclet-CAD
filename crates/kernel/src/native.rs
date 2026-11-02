@@ -46,6 +46,17 @@ fn invalid(detail: impl std::fmt::Display) -> KernelError {
     KernelError::Invalid(format!("native B-rep: {detail}"))
 }
 
+/// Read-only incidence audit of the exact native B-rep. Unlike a tessellation
+/// inspection, this counts face boundary uses of stored edges. This does NOT
+/// certify geometric coincidence, valid Boolean results, or self-intersections.
+pub fn audit_native_topology(body: &Body) -> Result<solidcraft_geom::brep::SolidTopologyReport> {
+    body.require_brep("topology audit")?;
+    guard("audit native B-rep topology", || {
+        let saved = adapter::encode(&body.solid)?;
+        saved.audit_solid_topology().map_err(invalid)
+    })
+}
+
 /// Explicit topology, spatial geometry, construction certificates and history, exactly.
 /// Failure is a cache miss at the IO boundary, never a failed document save.
 pub fn encode_native_body(body: &Body) -> Result<Vec<u8>> {
