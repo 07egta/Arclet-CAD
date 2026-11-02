@@ -10,7 +10,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use solidcraft_slice::Tri;
 
-use crate::{DataType, Evaluation, Graph, GraphError, MAX_DOCUMENT_BYTES, MAX_NODES, NodeId, Value, output_type};
+use crate::{DataType, Graph, GraphError, IncrementalEvaluator, MAX_DOCUMENT_BYTES, MAX_NODES, NodeId, Value, output_type};
 
 const FORMAT: &str = "arclet.graph-workspace";
 const VERSION: u32 = 1;
@@ -107,8 +107,11 @@ impl GraphWorkspace {
     /// Resolve **all** configured solid outputs without modifying the model.
     /// An errored/missing/non-solid output rejects the entire snapshot so a
     /// host can validate the full set before starting a document transaction.
-    pub fn resolved_model_meshes(&self, evaluation: &Evaluation) -> Result<Vec<ModelMeshSnapshot>, GraphError> {
+    pub fn resolved_model_meshes(&self, evaluator: &IncrementalEvaluator) -> Result<Vec<ModelMeshSnapshot>, GraphError> {
         self.validate()?;
+        let evaluation = evaluator.current_for(&self.graph).ok_or_else(|| {
+            invalid("no completed evaluation matches this graph revision; recompute before updating the CAD model")
+        })?;
         let mut snapshots = Vec::with_capacity(self.model_links.len());
         for link in &self.model_links {
             let tree = evaluation.outputs.get(&(link.node, link.output)).ok_or_else(|| {
