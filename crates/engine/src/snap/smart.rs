@@ -83,7 +83,7 @@ impl SnapView {
         let q = [p.x, p.y, p.z, 1.0];
         let mut clip = [0.0; 4];
         for (row, out) in self.clip_from_world.iter().zip(&mut clip) {
-            *out = row.iter().zip(q).map(|(a, b)| a * b).sum();
+            *out = row.iter().zip(q).map(|(a, b)| *a * b).sum();
         }
         let w = clip[3];
         if !(w > 0.0 && w.is_finite()) {
@@ -372,7 +372,7 @@ pub fn query_snaps(objects: &[SnapObject], query: &SnapQuery) -> Result<SnapResu
         return Err(SnapError::Invalid("nonfinite coordinates, plane, angle or invalid settings"));
     }
     let mut out = Collector { query, candidates: Vec::new() };
-    let active: Vec<(&SnapObject, WorldGeometry)> = objects.iter()
+    let active: Vec<(&SnapObject, WorldGeometry<'_>)> = objects.iter()
         .filter(|o| (o.visible || settings.include_hidden) && (!o.locked || settings.include_locked))
         .filter_map(|o| Some((o, world_geometry(o)?))).collect();
 
@@ -418,11 +418,11 @@ pub fn query_snaps(objects: &[SnapObject], query: &SnapQuery) -> Result<SnapResu
 }
 
 #[derive(Clone)]
-enum WorldGeometry {
+enum WorldGeometry<'a> {
     Anchor(Vec3, SnapKind, SnapAccuracy),
     Segment(Vec3, Vec3, SnapAccuracy),
     Round(Round),
-    Nurbs(NurbsCurve, SnapTransform),
+    Nurbs(&'a NurbsCurve, SnapTransform),
     Polyline(Vec<Vec3>),
 }
 
@@ -463,7 +463,7 @@ impl Round {
     }
 }
 
-fn world_geometry(obj: &SnapObject) -> Option<WorldGeometry> {
+fn world_geometry(obj: &SnapObject) -> Option<WorldGeometry<'_>> {
     let tr = obj.transform;
     if !tr.valid() || obj.id.is_empty() || obj.id.len() > 512 {
         return None;
@@ -482,7 +482,7 @@ fn world_geometry(obj: &SnapObject) -> Option<WorldGeometry> {
             let world: Vec<Vec3> = points.iter().map(|p| tr.point(*p)).collect();
             world.iter().all(|p| p.is_finite()).then_some(WorldGeometry::Polyline(world))
         }
-        SnapGeometry::Nurbs(c) => Some(WorldGeometry::Nurbs(c.clone(), tr)),
+        SnapGeometry::Nurbs(c) => Some(WorldGeometry::Nurbs(c, tr)),
         SnapGeometry::Circle { center, normal, radius, x_axis } => {
             world_round(tr, *center, *normal, *radius, *x_axis, 0.0, std::f64::consts::TAU, true).map(WorldGeometry::Round)
         }
@@ -602,7 +602,7 @@ fn evaluated_nearest(mut at: impl FnMut(f64) -> Option<Vec3>, metric: impl Fn(Ve
     }
 }
 
-fn offer_shape(out: &mut Collector<'_>, id: &str, shape: &WorldGeometry) {
+fn offer_shape(out: &mut Collector<'_>, id: &str, shape: &WorldGeometry<'_>) {
     let query = out.query;
     let reference = query.inference.reference;
     match shape {
@@ -773,7 +773,7 @@ fn offer_inference(out: &mut Collector<'_>) {
 /// The following exact intersections require geometrically coplanar inputs.
 /// Skew 3D segments are not a visual intersection. Overlapping / coincident
 /// infinite solution families are intentionally omitted.
-fn intersections(a: &WorldGeometry, b: &WorldGeometry) -> Vec<(Vec3, SnapAccuracy)> {
+fn intersections(a: &WorldGeometry<'_>, b: &WorldGeometry<'_>) -> Vec<(Vec3, SnapAccuracy)> {
     let mut result = Vec::new();
     match (a, b) {
         (WorldGeometry::Segment(a0, a1, aa), WorldGeometry::Segment(b0, b1, ab)) => {
@@ -805,7 +805,7 @@ fn intersections(a: &WorldGeometry, b: &WorldGeometry) -> Vec<(Vec3, SnapAccurac
 /// A parameterization of exact line, round and rational-spline geometry.
 /// The spline is evaluated from its control net; sampled segments below only
 /// generate Newton seeds and are never returned as intersection positions.
-fn curve_point_and_tangent(shape: &WorldGeometry, fraction: f64) -> Option<(Vec3, Vec3)> {
+fn curve_point_and_tangent(shape: &WorldGeometry<'_>, fraction: f64) -> Option<(Vec3, Vec3)> {
     if !(0.0..=1.0).contains(&fraction) {
         return None;
     }
@@ -826,7 +826,7 @@ fn curve_point_and_tangent(shape: &WorldGeometry, fraction: f64) -> Option<(Vec3
     (point.is_finite() && tangent.is_finite()).then_some((point, tangent))
 }
 
-fn refine_curve_crossing(a: &WorldGeometry, b: &WorldGeometry, mut u: f64, mut v: f64, tol: f64) -> Option<Vec3> {
+fn refine_curve_crossing(a: &WorldGeometry<'_>, b: &WorldGeometry<'_>, mut u: f64, mut v: f64, tol: f64) -> Option<Vec3> {
     for _ in 0..22 {
         let (pa, da) = curve_point_and_tangent(a, u)?;
         let (pb, db) = curve_point_and_tangent(b, v)?;
@@ -862,12 +862,12 @@ fn refine_curve_crossing(a: &WorldGeometry, b: &WorldGeometry, mut u: f64, mut v
     (length(pa - pb) <= tol).then_some((pa + pb) * 0.5).filter(|p| p.is_finite())
 }
 
-fn numerical_curve_intersections(a: &WorldGeometry, b: &WorldGeometry) -> Vec<Vec3> {
+fn numerical_curve_intersections(a: &WorldGeometry<'_>, b: &WorldGeometry<'_>) -> Vec<Vec3> {
     const PIECES: usize = 48;
     // A bounded coarse search finds crossing chords. Refine each crossing
     // against the exact analytic tangent/point functions; near-tangencies or
     // oscillations between sample intervals may be missed.
-    let sample = |shape: &WorldGeometry| -> Vec<Option<Vec3>> {
+    let sample = |shape: &WorldGeometry<'_>| -> Vec<Option<Vec3>> {
         (0..=PIECES).map(|i| curve_point_and_tangent(shape, i as f64 / PIECES as f64).map(|x| x.0)).collect()
     };
     let pa = sample(a);
