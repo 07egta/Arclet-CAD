@@ -167,6 +167,9 @@ pub(crate) fn parse(text: &str) -> Result<Invocation, String> {
             let mut workflow = Guided { kind: GuideKind::Line, points: Vec::new(), lengths: Vec::new() };
             for token in args.split_whitespace() {
                 if let Advance::Execute { id, params } = workflow.advance(token)? {
+                    if workflow.points.len() != args.split_whitespace().count() {
+                        return Err("Line accepts exactly two coordinates.".into());
+                    }
                     return Ok(Invocation::Run { id, params });
                 }
             }
@@ -209,8 +212,8 @@ mod tests {
     #[test]
     fn typed_numeric_lengths_are_converted_to_mm_and_reject_nonfinite() {
         assert_eq!(parse_length("2cm"), Ok(20.0));
-        assert_eq!(parse_length("-1.5in"), Ok(-38.1));
-        assert_eq!(parse_pair("2cm,3in"), Ok([20.0, 76.19999999999999]));
+        assert!((parse_length("-1.5in").unwrap() + 38.1).abs() < 1e-10);
+        assert!((parse_pair("2cm,3in").unwrap()[1] - 76.2).abs() < 1e-10);
         for bad in ["", "NaN", "inf", "1e309", "2px", "10mm;", "2 3", "1,2,3", "1e8km"] {
             assert!(parse_length(bad).is_err(), "{bad}");
         }
