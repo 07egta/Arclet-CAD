@@ -351,9 +351,11 @@ pub(super) fn check(s: &mut Session, p: &Value) -> Result<Value> {
     let possible_support = orientation["possible_support_area_mm2"].as_f64().unwrap_or(0.0) > 0.0;
     let fails_bed = fit.as_ref().is_some_and(|v| v["fits_current_xy_orientation"] == false);
     let multi_shell = topology["connected_shells"].as_u64().is_some_and(|v| v > 1);
-    let verdict = if !topology_ok || serialization_loss || self_intersections > 0 { "invalid_mesh" }
+    // "Potential intersection" is a numerical screening hit, not a proved
+    // malformed solid. Require review without labeling the geometry invalid.
+    let verdict = if !topology_ok || serialization_loss { "invalid_mesh" }
         else if !checked_intersections { "inspection_incomplete" }
-        else if multi_shell || quantization_warning || thin_warning || possible_support || fails_bed || orientation["has_flat_bed_contact"] == false { "requires_review" }
+        else if self_intersections > 0 || multi_shell || quantization_warning || thin_warning || possible_support || fails_bed || orientation["has_flat_bed_contact"] == false { "requires_review" }
         else { "passed_limited_screening" };
     let mut blockers = Vec::new();
     let mut warnings = Vec::new();
