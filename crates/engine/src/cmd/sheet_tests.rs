@@ -5618,3 +5618,108 @@ fn an_unfolded_sheets_flat_face_is_named_after_its_base_at_every_size() {
         }
     }
 }
+
+
+
+#[test]
+fn arclet_sheet_rule_deletion_preserves_existing_flat_pattern_and_dxf() {
+    let mut session = Session::default();
+    run(&mut session, "sheet.manage_rules", json!({
+        "name":"Structural", "thickness":"1.5 mm", "k_factor":0.4, "bend_radius":"2 mm", "active":true,
+    }));
+    base(&mut session, 100.0, 60.0);
+    run(&mut session, "sheet.flange", json!({"edges":[[50,0,1.5]],"height":"20 mm","angle":"90 deg"}));
+    let original_doc = session.doc.to_json();
+    let original_flat = flat(&mut session);
+    let original_dxf = run(&mut session, "sheet.export_dxf", json!({}));
+    let error = session.execute("sheet.manage_rules", &json!({"name":"Structural","delete":true})).unwrap_err().to_string();
+    assert!(error.contains("used by feature"), "{error}");
+    assert_eq!(session.doc.to_json(), original_doc, "a rejected delete must preserve all feature references");
+    assert_eq!(flat(&mut session), original_flat);
+    assert_eq!(run(&mut session, "sheet.export_dxf", json!({})), original_dxf);
+
+    // Independent unused rules still delete normally; the active design is unchanged.
+    run(&mut session, "sheet.manage_rules", json!({"name":"Unused","active":false}));
+    run(&mut session, "sheet.manage_rules", json!({"name":"Unused","delete":true}));
+    assert_eq!(flat(&mut session), original_flat);
+    assert_eq!(run(&mut session, "sheet.export_dxf", json!({})), original_dxf);
+
+    // An explicit rule reference is also protected when a different rule is active.
+    let mut explicit = Session::default();
+    run(&mut explicit, "sheet.manage_rules", json!({"name":"Specified","thickness":"2 mm","active":true}));
+    run(&mut explicit, "sheet.manage_rules", json!({"name":"Alternative","thickness":"3 mm","active":true}));
+    run(&mut explicit, "sketch.create", json!({"plane":"XY","name":"RuleBase"}));
+    run(&mut explicit, "sketch.rectangle.two_point", json!({"p0":[0,0],"p1":[40,30]}));
+    run(&mut explicit, "sketch.finish", json!({}));
+    run(&mut explicit, "sheet.flange", json!({"sketch":"RuleBase","rule":"Specified"}));
+    let before = explicit.doc.to_json();
+    let error = explicit.execute("sheet.manage_rules", &json!({"name":"Specified","delete":true})).unwrap_err().to_string();
+    assert!(error.contains("used by feature"), "{error}");
+    assert_eq!(explicit.doc.to_json(), before);
+    assert_eq!(flat(&mut explicit)["thickness"], 2.0);
+}
+
+#[test]
+fn arclet_k_factor_and_radius_recompute_flats_and_dxf_after_save_reload() {
+    let mut session = Session::default();
+    run(&mut session, "sheet.manage_rules", json!({
+        "name":"Gauge","thickness":"2 mm","k_factor":"0.4","bend_radius":"1 mm","active":true,
+    }));
+    base(&mut session, 100.0, 60.0);
+    run(&mut session, "sheet.flange", json!({"edges":[[50,0,2]],"height":"20 mm","angle":"90 deg"}));
+    let before = flat(&mut session);
+    let before_dxf = run(&mut session, "sheet.export_dxf", json!({}));
+    let read_height = |flat: &Value| flat["flat_size_mm"][1].as_f64().unwrap_or(f64::NAN);
+    let read_ba = |flat: &Value| flat["bends"][0]["allowance"].as_f64().unwrap_or(f64::NAN);
+    let ba_before = FRAC_PI_2 * (1.0 + 0.4 * 2.0);
+    let want_before = 60.0 - 3.0 + ba_before + (20.0 - 3.0);
+    assert!((read_ba(&before) - ba_before).abs() < 1e-8);
+    assert!((read_height(&before) - want_before).abs() < 1e-6);
+
+    // Rule edits must recompute both the sheet's neutral-axis length and its
+    // DXF blank dimensions, without creating another sheet or changing bend IDs.
+    run(&mut session, "sheet.manage_rules", json!({"name":"Gauge","bend_radius":"3 mm","k_factor":"0.5"}));
+    let edited = flat(&mut session);
+    let edited_dxf = run(&mut session, "sheet.export_dxf", json!({}));
+    let ba_after = FRAC_PI_2 * (3.0 + 0.5 * 2.0);
+    let want_after = 60.0 - 5.0 + ba_after + (20.0 - 5.0);
+    assert!((read_ba(&edited) - ba_after).abs() < 1e-8);
+    assert!((read_height(&edited) - want_after).abs() < 1e-6);
+    assert_ne!(edited_dxf, before_dxf, "the new blank dimensions must reach the actual DXF");
+    assert_eq!(edited["bends"][0]["bend"], before["bends"][0]["bend"]);
+
+    let saved = session.doc.to_json();
+    let mut reopened = Session::new(solidcraft_doc::Document::from_json(&saved).unwrap());
+    assert_eq!(flat(&mut reopened), edited, "new values survive document reload");
+    assert_eq!(run(&mut reopened, "sheet.export_dxf", json!({})), edited_dxf);
+    for command in ["sheet.unfold", "sheet.refold"] {
+        run(&mut reopened, command, json!({}));
+        let result = flat(&mut reopened);
+        assert!((read_ba(&result) - ba_after).abs() < 1e-8, "{command}");
+        assert!((read_height(&result) - want_after).abs() < 1e-6, "{command}");
+    }
+}
+
+#[test]
+fn arclet_invalid_sheet_rule_and_custom_bend_radius_leave_design_unchanged() {
+    let mut session = Session::default();
+    base(&mut session, 100.0, 60.0);
+    let before = session.doc.to_json();
+    let before_flat = flat(&mut session);
+    for input in [
+        json!({"edges":[[50,0,2.5]],"height":"20 mm","radius":"-1 mm"}),
+        json!({"edges":[[50,0,2.5]],"height":"20 mm","radius":"10000001 mm"}),
+        json!({"edges":[[50,0,2.5]],"height":"20 mm","corner_relief":"-1 mm"}),
+    ] {
+        let error = session.execute("sheet.flange", &input).unwrap_err().to_string();
+        assert!(error.contains("radius") || error.contains("relief"), "{error}");
+        assert_eq!(session.doc.to_json(), before);
+        assert_eq!(flat(&mut session), before_flat);
+    }
+    for (field, value) in [("bend_radius", "-1 mm"), ("relief_width", "-1 mm"), ("gap", "-1 mm")] {
+        let mut input = json!({"name":"Unsafe"});
+        input[field] = json!(value);
+        assert!(session.execute("sheet.manage_rules", &input).is_err(), "{field}");
+        assert_eq!(session.doc.to_json(), before);
+    }
+}
