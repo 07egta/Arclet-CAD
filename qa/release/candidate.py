@@ -98,7 +98,7 @@ def package_candidate(
         raise CandidateError(f"compiled binary is missing: {binary}")
     data = binary.read_bytes()
     binary_kind(data, platform)
-    version = tomllib.loads((root / "apps/arclet/Cargo.toml").read_text(encoding="utf-8"))["package"]["version"]
+    version = tomllib.loads((root / "Cargo.toml").read_text(encoding="utf-8"))["workspace"]["package"]["version"]
     manifest = {
         "schema": "arclet-candidate/1",
         "platform": platform,
