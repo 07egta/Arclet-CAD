@@ -653,6 +653,11 @@ fn fit_round(st: &[Station], spec: &FillSpec, start: usize) -> SplineResult<Roun
             let ctrl: Vec<HPoint> = net.ctrl.iter().map(|p| HPoint::weighted(*p, 1.0)).collect();
             let surface = NurbsSurface::from_homogeneous([3, 3], grid.knots.clone(), ctrl)?;
             let surface = crown(surface, &net, st, &dev, spec.crown)?;
+            // The uncrowned fit was checked above. A crown changes its interior
+            // control points, so recheck the *published* surface for folds, too.
+            if spec.crown != 0.0 {
+                check_crowned_folds(&surface, &dev.d, lo, hi)?;
+            }
             return Ok(Round::Done(Box::new(GeneralFill {
                 surface,
                 counter_clockwise: dev.counter_clockwise,
@@ -1145,6 +1150,33 @@ fn crown(surface: NurbsSurface, net: &Net, st: &[Station], dev: &Developed, crow
 /// domain, the normal must be defined everywhere (the surface's parameter speed nowhere collapses
 /// against the rest) and must not turn over between neighbouring samples.
 fn check_folds(net: &Net, d: &[[f64; 2]], lo: [f64; 2], hi: [f64; 2]) -> SplineResult<()> {
+    check_fold_field(d, lo, hi, |q| Some((net.der(q, 1, 0)?, net.der(q, 0, 1)?)))
+}
+
+/// Approximate the first derivatives of the actual NURBS after its crown was
+/// applied. The domain has a 5% grid pad beyond the loop, leaving room for a
+/// centred stencil at all the sampled points inside that loop.
+fn check_crowned_folds(surface: &NurbsSurface, d: &[[f64; 2]], lo: [f64; 2], hi: [f64; 2]) -> SplineResult<()> {
+    let hu = (hi[0] - lo[0]) / (8.0 * FOLD_SAMPLES as f64);
+    let hv = (hi[1] - lo[1]) / (8.0 * FOLD_SAMPLES as f64);
+    if !(hu > 0.0 && hv > 0.0 && hu.is_finite() && hv.is_finite()) {
+        return invalid("the crowned surface has no finite domain");
+    }
+    check_fold_field(d, lo, hi, |q| {
+        let su = (surface.eval(q[0] + hu, q[1]).ok()? - surface.eval(q[0] - hu, q[1]).ok()?) / (2.0 * hu);
+        let sv = (surface.eval(q[0], q[1] + hv).ok()? - surface.eval(q[0], q[1] - hv).ok()?) / (2.0 * hv);
+        Some((su, sv))
+    })
+}
+
+/// Sampled fold/pinch check shared by the fitted and the crowned NURBS surface.
+/// This is not a proof of the absence of nonlocal self-intersections.
+fn check_fold_field(
+    d: &[[f64; 2]],
+    lo: [f64; 2],
+    hi: [f64; 2],
+    mut partials: impl FnMut([f64; 2]) -> Option<(Vec3, Vec3)>,
+) -> SplineResult<()> {
     let n = FOLD_SAMPLES;
     let mut cells: Vec<Option<(Vec3, f64)>> = Vec::with_capacity((n + 1) * (n + 1));
     for j in 0..=n {
@@ -1154,7 +1186,7 @@ fn check_folds(net: &Net, d: &[[f64; 2]], lo: [f64; 2], hi: [f64; 2]) -> SplineR
                 cells.push(None);
                 continue;
             }
-            let (Some(su), Some(sv)) = (net.der(q, 1, 0), net.der(q, 0, 1)) else { return invalid("the fit cannot be evaluated inside") };
+            let Some((su, sv)) = partials(q) else { return invalid("the fit cannot be evaluated inside") };
             let c = su.cross(sv);
             cells.push(Some((c, c.len())));
         }
