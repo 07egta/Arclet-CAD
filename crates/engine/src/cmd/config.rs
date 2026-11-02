@@ -962,6 +962,10 @@ mod tests {
         assert_eq!(s.doc, before, "invalid rebuild must reject every new sweep row");
         assert!(s.execute("config.sweep", &json!({"prefix":"Chair","axes":{"width":["10 mm"]}})).is_err());
         assert_eq!(s.doc, before, "colliding names cannot change existing rows");
+        assert!(s.execute("config.sweep", &json!({"prefix":"Aliased","axes":{"width":["10 mm"],"param:width":["20 mm"]}})).is_err());
+        assert_eq!(s.doc, before, "aliases of one column cannot create overlapping axes");
+        assert!(s.execute("config.sweep", &json!({"prefix":"Malformed","axes":{"width":["10 mm","10 mm"]}})).is_err());
+        assert_eq!(s.doc, before, "duplicate sweep values must be rejected");
         let widths: Vec<String> = (1..=17).map(|n| format!("{n} cm")).collect();
         let heights: Vec<String> = (1..=8).map(|n| format!("{n} cm")).collect();
         assert!(s.execute("config.sweep", &json!({"prefix":"Overflow","axes":{"width":widths,"height":heights}})).is_err());
