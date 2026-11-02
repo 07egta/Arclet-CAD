@@ -8771,4 +8771,36 @@ mod tests {
         assert!(doc.rule_values(&params, &zero).is_ok(), "legacy zero-gap/zero-relief rules stay valid");
     }
 
+
+
+    #[test]
+    fn arclet_hem_and_fold_reject_invalid_radii_before_editing_material() {
+        let original = plate(100.0, 60.0);
+        let point = Vec3::new(50.0, 0.0, original.t);
+        for (length, gap) in [
+            (30.0, -0.1),
+            (30.0, f64::NAN),
+            (30.0, f64::INFINITY),
+            (30.0, 10_000_001.0),
+            (f64::NAN, 0.01),
+            (f64::INFINITY, 0.01),
+        ] {
+            let mut sheet = original.clone();
+            assert!(sheet.add_hem(point, length, gap, false).is_err(), "invalid hem length={length}, gap={gap}");
+            assert_eq!(sheet, original, "rejected hem must not create any flange");
+        }
+        let a = Vec3::new(0.0, 30.0, original.t);
+        let b = Vec3::new(100.0, 30.0, original.t);
+        for radius in [-1.0, f64::NAN, f64::INFINITY, 10_000_001.0] {
+            let mut sheet = original.clone();
+            let mut warning = None;
+            assert!(sheet.add_fold(
+                a, b, std::f64::consts::FRAC_PI_2, radius,
+                "centerline", false, None, &mut warning,
+            ).is_err(), "invalid fold radius={radius}");
+            assert_eq!(sheet, original, "rejected fold must not trim the existing panel");
+            assert_eq!(warning, None, "invalid radius should fail before attempting to fold");
+        }
+    }
+
 }
