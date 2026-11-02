@@ -41,7 +41,7 @@ The 90° oracle in `sheet.rs` additionally sweeps:
 ## Fixes in this PR
 
 1. **Rule dimension validation.** The rule evaluator now rejects invalid/non-finite K, and negative, non-finite or extremely large bend/relief/gap lengths before geometry evaluation. Valid zero-gap and zero-relief rules are explicitly preserved.
-2. **Per-flange input validation.** Explicit edge-flange bend radii, sheet thickness/K and corner-relief sizes are checked before trimming any existing panel, with error text naming the quantity.
+2. **Per-operation input validation.** Explicit edge-flange bend radii, sheet thickness/K and corner-relief sizes are checked before trimming any existing panel. Hem inner-gap override and fold radius now also reject negative, non-finite or excessively large values before geometry modification, with error text naming the quantity.
 3. **Dependent-rule deletion guard.** `sheet.manage_rules {name, delete:true}` refuses deletion when a sheet base, contour or convert feature names that rule or implicitly uses it as the current effective rule. Otherwise an existing feature could silently rebuild under a different thickness/radius and change its DXF. Both active and rolled-back features count. Unused rules can still be removed. To change a rule intentionally, edit its parameters (or update the affected sheet's rule selection first).
 
 These checks are additive for valid inputs and do not change the serialization layout or existing DXF output code.
@@ -52,6 +52,8 @@ These checks are additive for valid inputs and do not change the serialization l
 
 - `arclet_ninety_degree_blank_matches_neutral_axis_across_thickness_radius_and_direction`: six analytical fold/flat cases with B-rep validation.
 - `arclet_invalid_radius_and_corner_relief_never_mutate_an_existing_sheet`: invalid per-flange geometry inputs rejected without geometry changes.
+- `arclet_hem_and_fold_reject_invalid_radii_before_editing_material`: negative, non-finite and oversized Hem/Fold radii, and invalid hem length, rejected before geometry changes.
+- `arclet_hem_and_fold_invalid_overrides_preserve_existing_sheet_and_dxf`: failed Hem/Fold commands preserve the document, flat pattern and exact DXF output.
 - `arclet_rule_length_fields_are_bounded_without_rejecting_zero_relief`: invalid rule dimensions and legacy zero allowances.
 - `arclet_sheet_rule_deletion_preserves_existing_flat_pattern_and_dxf`: active and explicit rule references, unused rule removal, unchanged DXF on rejected operation.
 - `arclet_k_factor_and_radius_recompute_flats_and_dxf_after_save_reload`: formula, parametric rule edit, DXF difference, reload, unfold and refold.
