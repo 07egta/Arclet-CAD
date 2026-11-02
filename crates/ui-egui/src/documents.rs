@@ -1556,6 +1556,38 @@ mod tests {
         assert!(designs_to_reopen(&a).is_empty(), "a file that is gone is skipped");
     }
 
+    /// An actual file I/O failure while answering Quit with Save must not
+    /// close the window, clear the document or destroy its undo history.
+    #[test]
+    fn failed_save_while_quitting_keeps_the_live_design() {
+        let mut a = app();
+        a.run("solid.box", json!({"length": 10, "width": 12, "height": 14})).unwrap();
+        let document = a.session.doc.clone();
+        let undo_len = a.session.undo.len();
+        let parent = std::env::temp_dir().join(format!("solidcraft-close-failed-save-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&parent);
+        // A directory the file picker can name but the writer cannot create.
+        let destination = parent.join("missing-folder").join("part.sc");
+        let path = destination.to_string_lossy().into_owned();
+        a.services.pick_save = Some(Box::new(move |_, _| Box::pin(std::future::ready(Some(path.clone())))));
+
+        request_quit(&mut a);
+        assert_eq!(a.docs.closing, Some(0));
+        answer_prompt(&mut a, Answer::Save);
+        assert!(a.file_picker_busy());
+        crate::file_picker::tick(&mut a, &crate::fonts::test_context());
+        crate::save_job::tick(&mut a, true);
+
+        assert!(!a.quit_requested, "failed Save must not continue Quit");
+        assert!(a.docs.quitting.is_none() && a.docs.closing.is_none());
+        assert!(a.session.is_dirty(), "the document was not saved");
+        assert!(a.session.path.is_none(), "failed Save As cannot become the current file");
+        assert!(std::sync::Arc::ptr_eq(&a.session.doc, &document), "the edited design is still live");
+        assert_eq!(a.session.undo.len(), undo_len, "failed Save left Undo intact");
+        assert_eq!(a.session.doc.features.len(), 1);
+        assert!(!destination.exists());
+    }
+
     /// Cancel, Esc's answer, or a Save that saves nothing (a never-saved design whose Save As
     /// picker is cancelled) stay open with the changes.
     #[test]

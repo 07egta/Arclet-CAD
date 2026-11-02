@@ -59,10 +59,8 @@ pub fn tick(app: &mut SolveApp, wait: bool) {
     };
     let Some(Saving { command, .. }) = app.saving.take() else { return };
     let r = match outcome {
-        Some((copy, Ok(v))) => {
-            app.session.adopt_save(&copy);
-            Ok(v)
-        }
+        Some((copy, Ok(v))) if app.session.adopt_save(&copy) => Ok(v),
+        Some((_, Ok(_))) => Err(format!("{command}: the save belongs to a different document; the current design is still unsaved")),
         Some((_, Err(e))) => Err(e),
         None => Err(format!("{command}: the save stopped")),
     };
@@ -188,5 +186,33 @@ mod tests {
         super::start(&mut h.app, "file.save_as", json!({"path": bad.to_string_lossy()}));
         super::tick(&mut h.app, true);
         assert!(h.app.session.is_dirty() && h.app.status.as_ref().is_some_and(|(_, _, error)| *error));
+    }
+
+    /// A slow writer can finish after New/Open replaced the session. The bytes
+    /// it wrote stay on disk, but its clean state cannot be adopted by the new tab.
+    #[test]
+    fn completed_save_cannot_acknowledge_a_different_document() {
+        let mut h = crate::scenario::Harness::new();
+        h.app.home.open = false;
+        h.app.run("solid.box", json!({"length": 10, "width": 10, "height": 10})).unwrap();
+        let path = h.dir.join("former.sc");
+        let mut old = h.app.session.scratch();
+        old.execute("file.save_as", &json!({"path": path})).unwrap();
+        let (finish, done) = std::sync::mpsc::channel();
+        h.app.saving = Some(super::Saving { command: "file.save_as", done });
+
+        // Direct engine commands simulate a replacement that reached past UI
+        // guards, such as from another control channel.
+        h.app.session.execute("file.new", &json!({"name": "New model"})).unwrap();
+        h.app.session.execute("solid.sphere", &json!({"diameter": 4})).unwrap();
+        let current = h.app.session.doc.clone();
+        finish.send((old, Ok(json!({"path": path})))).unwrap();
+        super::tick(&mut h.app, false);
+        assert!(std::sync::Arc::ptr_eq(&h.app.session.doc, &current));
+        assert_eq!(h.app.session.doc.name, "New model");
+        assert!(h.app.session.path.is_none());
+        assert!(h.app.session.is_dirty());
+        assert!(h.app.status.as_ref().is_some_and(|(_, _, error)| *error));
+        assert!(path.exists(), "the completed old file remains available");
     }
 }
