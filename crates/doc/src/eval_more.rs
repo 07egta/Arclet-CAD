@@ -1968,9 +1968,9 @@ pub(super) fn plastic_eval(doc: &Document, vals: &BTreeMap<String, Value>, f: &F
                     return Err(DocError::Invalid("the boss hole must fit inside the boss at both ends".into()));
                 }
             }
-            if depth.is_some_and(|d| d > h) {
-                return Err(DocError::Invalid("the boss hole depth must not exceed the boss height".into()));
-            }
+            // A hole deeper than the post is valid: it can drill a pilot
+            // recess into the parent shell or plate. The positive-depth
+            // preflight above is sufficient; do not silently disallow it.
             let delta = (h * 0.05).clamp(1e-3, 0.5);
             let (x, _, z) = local_frame(direction.0, None)?;
             // The post: a (tapered) cylinder from a little inside the face.
