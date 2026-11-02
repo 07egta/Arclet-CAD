@@ -175,6 +175,31 @@ fn g2_mismatch_is_a_failure_even_when_positions_and_normals_fit() {
     assert!(meets_fill_tolerances(&with_mismatch(0.01), &g1_only, &spec(&[])));
 }
 
+/// A crown is checked after modifying the control net, not just before.
+/// This simple tensor patch folds across v=1/2 and must be rejected.
+#[test]
+fn post_crown_quality_check_rejects_an_interior_fold() {
+    let knots = [vec![0.0, 0.0, 1.0, 1.0], vec![0.0, 0.0, 1.0, 1.0]];
+    let domain = [[0.1, 0.1], [0.9, 0.1], [0.9, 0.9], [0.1, 0.9]];
+    let plane = NurbsSurface::new(
+        [1, 1],
+        knots.clone(),
+        &[Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::new(1.0, 1.0, 0.0)],
+        &[1.0; 4],
+    )
+    .unwrap();
+    assert!(check_crowned_folds(&plane, &domain, [0.0; 2], [1.0; 2]).is_ok());
+    let inverted = NurbsSurface::new(
+        [1, 1],
+        knots,
+        &[Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::new(-1.0, 1.0, 0.0)],
+        &[1.0; 4],
+    )
+    .unwrap();
+    let err = check_crowned_folds(&inverted, &domain, [0.0; 2], [1.0; 2]).unwrap_err();
+    assert!(err.to_string().contains("pinches") || err.to_string().contains("folds"), "{err}");
+}
+
 #[test]
 fn hostile_loops_and_specs_are_refused() {
     let ok = |s: &FillSpec| fill_general(1, &mut tube_end(10.0, false), s);
