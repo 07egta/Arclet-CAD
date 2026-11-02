@@ -504,6 +504,7 @@ fn sweep(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let mut count = 1_usize;
     let mut parsed = Vec::with_capacity(axes.len());
+    let mut used_columns = std::collections::BTreeSet::new();
     for (key, values) in axes {
         let column = s
             .doc
@@ -512,6 +513,9 @@ fn sweep(s: &mut Session, p: &Value) -> Result<Value> {
             .iter()
             .position(|column| s.doc.config_key(column) == *key || matches!(column, Column::Param(name) if name == key))
             .ok_or_else(|| bad(cmd, format!("`{key}` is not a configured column")))?;
+        if !used_columns.insert(column) {
+            return Err(bad(cmd, format!("multiple axes target the same configuration column: `{key}`")));
+        }
         let list = values.as_array().filter(|v| !v.is_empty()).ok_or_else(|| bad(cmd, format!("`{key}` needs a nonempty value list")))?;
         count = count.checked_mul(list.len()).filter(|n| *n <= MAX_SWEEP_VARIANTS).ok_or_else(|| {
             bad(cmd, format!("sweep exceeds the {MAX_SWEEP_VARIANTS}-variant limit"))
