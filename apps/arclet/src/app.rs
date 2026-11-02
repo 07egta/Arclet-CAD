@@ -332,6 +332,9 @@ impl ArcletApp {
 
     fn header(&mut self, ui: &mut Ui) {
         let tokens = Tokens::get();
+        // Keep primary workflows visible when the window is resized or display scaling
+        // leaves fewer egui points. Extended tool categories move into "More", not away.
+        let compact = ui.available_width() < 1180.0;
         Container::new(ui.ctx(), Surface::ApplicationBar)
             .edge("arclet_header", Edge::Top)
             .exact_size(50.0)
@@ -340,7 +343,7 @@ impl ArcletApp {
                 ui.horizontal_centered(|ui| {
                     ui.label(RichText::new("Arclet").size(21.0).strong().color(tokens.text));
                     ui.label(RichText::new("CAD").size(11.0).color(tokens.text_dim));
-                    ui.add_space(14.0);
+                    ui.add_space(if compact { 6.0 } else { 14.0 });
                     for (label, nodes) in [("arclet.model", false), ("arclet.nodes", true)] {
                         let response =
                             ui_kit::button(ui, tr(label), if self.cad.nodes.open == nodes { ui_kit::Button::Primary } else { ui_kit::Button::Ghost });
@@ -355,7 +358,7 @@ impl ArcletApp {
                         let widgets = &mut ui.visuals_mut().widgets;
                         widgets.inactive.weak_bg_fill = egui::Color32::TRANSPARENT;
                         widgets.inactive.bg_stroke = egui::Stroke::NONE;
-                        ui.add_enabled_ui(!self.cad.nodes.open, |ui| self.menus(ui));
+                        ui.add_enabled_ui(!self.cad.nodes.open, |ui| self.menus(ui, compact));
                         ui_kit::Menu::button(ui, tr("arclet.menu.help"), |ui| {
                             if ui_kit::button(ui, tr("arclet.help"), ui_kit::Button::Normal).clicked() {
                                 self.help = !self.help;
@@ -367,7 +370,7 @@ impl ArcletApp {
                         if ui_kit::button(ui, tr("arclet.settings"), ui_kit::Button::Ghost).clicked() {
                             FileAction::Settings.run(&mut self.cad);
                         }
-                        if ui.available_width() > 200.0 {
+                        if !compact && ui.available_width() > 200.0 {
                             let (name, dirty) = if self.cad.nodes.open {
                                 (tr("arclet.graph_document"), self.cad.nodes.editor.is_dirty())
                             } else {
@@ -382,7 +385,7 @@ impl ArcletApp {
 
     /// The Rhino-style menu row, in the same order as Rhino's top bar. Each menu draws from
     /// the command tables above, so every entry is one engine command id.
-    fn menus(&mut self, ui: &mut Ui) {
+    fn menus(&mut self, ui: &mut Ui, compact: bool) {
         ui_kit::Menu::button(ui, tr("arclet.menu.file"), |ui| {
             for (label, action) in [
                 ("arclet.new", FileAction::New),
@@ -425,6 +428,11 @@ impl ArcletApp {
         ui_kit::Menu::button(ui, tr("arclet.menu.view"), |ui| {
             self.tool_items(ui, &[VIEWS, VIEW_MORE]);
             ui.separator();
+            // This is not a button that silently paints the same camera four times.
+            // The shared renderer has one camera and one set of GPU uniforms today.
+            ui.add_enabled(false, egui::Button::new(tr("arclet.view.four_views")));
+            ui.label(RichText::new(tr("arclet.view.four_reason")).size(11.0).color(Tokens::get().text_dim));
+            ui.separator();
             let isolate = solidcraft_ui_egui::context_menu::items(&self.cad, &solidcraft_ui_egui::context_menu::Target::Viewport)
                 .into_iter()
                 .find(|item| item.id == "ui.isolate");
@@ -441,26 +449,45 @@ impl ArcletApp {
                 ui.close();
             }
         });
-        self.tool_menu(ui, "arclet.menu.curve", &[CURVES, CURVE_SHAPES, CURVE_EDITS, CURVE_TOOLS]);
-        self.tool_menu(ui, "arclet.menu.surface", &[SURFACES, SURFACE_MORE]);
-        self.tool_menu(ui, "arclet.menu.solid", &[SOLIDS, SOLID_MORE, SOLID_PATTERNS]);
-        self.tool_menu(ui, "arclet.menu.mesh", &[MESH_TOOLS]);
-        self.tool_menu(ui, "arclet.menu.transform", &[TRANSFORMS]);
-        self.tool_menu(ui, "arclet.menu.analyze", &[ANALYSIS, ANALYZE_MORE]);
-        self.tool_menu(ui, "arclet.menu.render", &[RENDER_TOOLS]);
-        ui_kit::Menu::button(ui, tr("arclet.menu.tools"), |ui| {
-            if ui_kit::button(ui, tr("arclet.all_tools"), ui_kit::Button::Normal).clicked() {
-                self.start("ui.palette");
-                ui.close();
-            }
-            ui.separator();
-            solidcraft_ui_egui::toolbar::selection_filter(&mut self.cad, ui);
-            ui.separator();
-            if ui_kit::button(ui, tr("arclet.clear_selection"), ui_kit::Button::Normal).clicked() {
-                self.start("select.clear");
-                ui.close();
-            }
-        });
+        if compact {
+            // One overflow menu prevents the ten specialist categories from falling
+            // off the right edge at laptop widths. Each leaf still invokes its real
+            // engine command through tool_items, with the same labels and ids.
+            ui_kit::Menu::button(ui, tr("arclet.menu.more"), |ui| {
+                ui.set_max_width(330.0);
+                ui.collapsing(tr("arclet.menu.curve"), |ui| self.tool_items(ui, &[CURVES, CURVE_SHAPES, CURVE_EDITS, CURVE_TOOLS]));
+                ui.collapsing(tr("arclet.menu.surface"), |ui| self.tool_items(ui, &[SURFACES, SURFACE_MORE]));
+                ui.collapsing(tr("arclet.menu.solid"), |ui| self.tool_items(ui, &[SOLIDS, SOLID_MORE, SOLID_PATTERNS]));
+                ui.collapsing(tr("arclet.menu.mesh"), |ui| self.tool_items(ui, &[MESH_TOOLS]));
+                ui.collapsing(tr("arclet.menu.transform"), |ui| self.tool_items(ui, &[TRANSFORMS]));
+                ui.collapsing(tr("arclet.menu.analyze"), |ui| self.tool_items(ui, &[ANALYSIS, ANALYZE_MORE]));
+                ui.collapsing(tr("arclet.menu.render"), |ui| self.tool_items(ui, &[RENDER_TOOLS]));
+                ui.collapsing(tr("arclet.menu.tools"), |ui| self.tools_menu_actions(ui));
+            });
+        } else {
+            self.tool_menu(ui, "arclet.menu.curve", &[CURVES, CURVE_SHAPES, CURVE_EDITS, CURVE_TOOLS]);
+            self.tool_menu(ui, "arclet.menu.surface", &[SURFACES, SURFACE_MORE]);
+            self.tool_menu(ui, "arclet.menu.solid", &[SOLIDS, SOLID_MORE, SOLID_PATTERNS]);
+            self.tool_menu(ui, "arclet.menu.mesh", &[MESH_TOOLS]);
+            self.tool_menu(ui, "arclet.menu.transform", &[TRANSFORMS]);
+            self.tool_menu(ui, "arclet.menu.analyze", &[ANALYSIS, ANALYZE_MORE]);
+            self.tool_menu(ui, "arclet.menu.render", &[RENDER_TOOLS]);
+            ui_kit::Menu::button(ui, tr("arclet.menu.tools"), |ui| self.tools_menu_actions(ui));
+        }
+    }
+
+    fn tools_menu_actions(&mut self, ui: &mut Ui) {
+        if ui_kit::button(ui, tr("arclet.all_tools"), ui_kit::Button::Normal).clicked() {
+            self.start("ui.palette");
+            ui.close();
+        }
+        ui.separator();
+        solidcraft_ui_egui::toolbar::selection_filter(&mut self.cad, ui);
+        ui.separator();
+        if ui_kit::button(ui, tr("arclet.clear_selection"), ui_kit::Button::Normal).clicked() {
+            self.start("select.clear");
+            ui.close();
+        }
     }
 
     fn run_pick(&mut self, pick: crate::toolbars::Pick) {
@@ -846,10 +873,16 @@ mod tests {
         ctx: egui::Context,
         output: egui::PlatformOutput,
         time: f64,
+        width: f32,
+        height: f32,
     }
 
     impl AppFrames {
         fn new() -> Self {
+            Self::with_size(1440.0, 900.0)
+        }
+
+        fn with_size(width: f32, height: f32) -> Self {
             let ctx = egui::Context::default();
             ctx.enable_accesskit();
             // Exercise the runtime's font setup too. Installing fonts only in this test
@@ -857,7 +890,7 @@ mod tests {
             let mut app = ArcletApp::with_context(&ctx, Default::default());
             // These checks exercise layout and clicks, not background geometry evaluation.
             app.cad.nodes.editor.cancel();
-            let mut frames = Self { app, ctx, output: Default::default(), time: 0.0 };
+            let mut frames = Self { app, ctx, output: Default::default(), time: 0.0, width, height };
             frames.idle(3);
             frames
         }
@@ -865,7 +898,7 @@ mod tests {
         fn frame(&mut self, events: Vec<egui::Event>) {
             self.time += 1.0 / 60.0;
             let mut raw = egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(1440.0, 900.0))),
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(self.width, self.height))),
                 focused: true,
                 time: Some(self.time),
                 events,
@@ -952,6 +985,39 @@ mod tests {
                 }]);
             }
         }
+    }
+
+    #[test]
+    fn compact_header_exposes_real_commands_at_laptop_width() {
+        let mut frames = AppFrames::with_size(960.0, 600.0);
+        let top = frames.accesskit_buttons();
+        for label in ["File", "Edit", "View", "More", "Help"] {
+            assert!(
+                top.iter().any(|(text, rect)| text == label && rect.center().y < 45.0),
+                "{label} is not visible in the compact top bar"
+            );
+        }
+        assert!(!top.iter().any(|(text, rect)| text == "Curve" && rect.center().y < 45.0));
+        frames.click_button("More");
+        frames.idle(1);
+        assert!(frames.button_below_header("Curve"), "the overflow menu must expose Curve");
+        frames.click_button("Curve");
+        frames.idle(1);
+        assert!(frames.button_below_header("Line"), "a real sketch command must be reachable in the overflow menu");
+        frames.press_escape();
+    }
+
+    #[test]
+    fn four_views_is_explicitly_disabled_until_per_pane_gpu_state_exists() {
+        let mut frames = AppFrames::new();
+        frames.click_button("View");
+        frames.idle(1);
+        let disabled = frames.output.accesskit_update.as_ref().is_some_and(|tree| {
+            tree.nodes.iter().any(|(_, node)| {
+                node.role() == egui::accesskit::Role::Button && node.label() == Some("Four views") && node.is_disabled()
+            })
+        });
+        assert!(disabled, "an unsupported four-viewport action must not look actionable");
     }
 
     #[test]

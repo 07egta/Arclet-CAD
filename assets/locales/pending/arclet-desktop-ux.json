@@ -1,0 +1,12 @@
+{
+  "en": {
+    "arclet.menu.more": "More",
+    "arclet.view.four_reason": "Unavailable: the renderer supports only one camera. Switch between Top, Front, Right and Isometric for now.",
+    "arclet.view.four_views": "Four views"
+  },
+  "ja": {
+    "arclet.menu.more": "その他",
+    "arclet.view.four_reason": "未対応：描画エンジンは現在単一カメラです。Top・Front・Right・Isometric を切り替えて使用してください。",
+    "arclet.view.four_views": "4ビュー"
+  }
+}
