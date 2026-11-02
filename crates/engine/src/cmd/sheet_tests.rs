@@ -5723,3 +5723,27 @@ fn arclet_invalid_sheet_rule_and_custom_bend_radius_leave_design_unchanged() {
         assert_eq!(session.doc.to_json(), before);
     }
 }
+
+
+#[test]
+fn arclet_hem_and_fold_invalid_overrides_preserve_existing_sheet_and_dxf() {
+    let mut session = Session::default();
+    base(&mut session, 100.0, 60.0);
+    let saved = session.doc.to_json();
+    let pattern = flat(&mut session);
+    let dxf = run(&mut session, "sheet.export_dxf", json!({}));
+    for (command, params) in [
+        ("sheet.hem", json!({"edges":[[50,0,2.5]],"length":"30 mm","gap":"-1 mm"})),
+        ("sheet.hem", json!({"edges":[[50,0,2.5]],"length":"30 mm","gap":"10000001 mm"})),
+        ("sheet.fold", json!({
+            "points":[[0,30,2.5],[100,30,2.5]],
+            "angle":"90 deg","radius":"10000001 mm",
+        })),
+    ] {
+        let error = session.execute(command, &params).unwrap_err().to_string();
+        assert!(error.contains("gap") || error.contains("radius"), "{command}: {error}");
+        assert_eq!(session.doc.to_json(), saved, "{command} must be atomic");
+        assert_eq!(flat(&mut session), pattern, "{command} must keep the blank");
+        assert_eq!(run(&mut session, "sheet.export_dxf", json!({})), dxf, "{command} must keep the DXF");
+    }
+}
