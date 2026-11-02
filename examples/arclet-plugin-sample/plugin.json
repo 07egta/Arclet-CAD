@@ -46,6 +46,9 @@
         "properties": {
           "fail": {
             "type": "boolean"
+          },
+          "try_forbidden": {
+            "type": "boolean"
           }
         },
         "additionalProperties": false
