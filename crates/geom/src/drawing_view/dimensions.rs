@@ -15,8 +15,13 @@ pub enum LengthUnit {
     Millimetre,
     Centimetre,
     Metre,
+    Micrometre,
     Inch,
     Foot,
+    Yard,
+    Kilometre,
+    Mil,
+    Nanometre,
 }
 
 impl LengthUnit {
@@ -25,8 +30,13 @@ impl LengthUnit {
             LengthUnit::Millimetre => 1.0,
             LengthUnit::Centimetre => 10.0,
             LengthUnit::Metre => 1000.0,
+            LengthUnit::Micrometre => 0.001,
             LengthUnit::Inch => 25.4,
             LengthUnit::Foot => 304.8,
+            LengthUnit::Yard => 914.4,
+            LengthUnit::Kilometre => 1_000_000.0,
+            LengthUnit::Mil => 0.0254,
+            LengthUnit::Nanometre => 1e-6,
         }
     }
 
@@ -35,8 +45,30 @@ impl LengthUnit {
             LengthUnit::Millimetre => "mm",
             LengthUnit::Centimetre => "cm",
             LengthUnit::Metre => "m",
+            LengthUnit::Micrometre => "µm",
             LengthUnit::Inch => "in",
             LengthUnit::Foot => "ft",
+            LengthUnit::Yard => "yd",
+            LengthUnit::Kilometre => "km",
+            LengthUnit::Mil => "mil",
+            LengthUnit::Nanometre => "nm",
+        }
+    }
+
+    /// All length symbols accepted by the drawing document expression table.
+    pub fn from_symbol(symbol: &str) -> Option<Self> {
+        match symbol {
+            "mm" => Some(LengthUnit::Millimetre),
+            "cm" => Some(LengthUnit::Centimetre),
+            "m" => Some(LengthUnit::Metre),
+            "um" | "µm" => Some(LengthUnit::Micrometre),
+            "in" | "inch" => Some(LengthUnit::Inch),
+            "ft" => Some(LengthUnit::Foot),
+            "yd" => Some(LengthUnit::Yard),
+            "km" => Some(LengthUnit::Kilometre),
+            "mil" => Some(LengthUnit::Mil),
+            "nm" => Some(LengthUnit::Nanometre),
+            _ => None,
         }
     }
 }
