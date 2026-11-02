@@ -121,7 +121,19 @@ pub fn weighted_points(points: &[Vec3], weights: &[f64]) -> SplineResult<Vec<HPo
     if weights.iter().any(|w| !(w.is_finite() && *w > 0.0)) {
         return invalid("weights must be positive numbers");
     }
-    Ok(points.iter().zip(weights).map(|(p, w)| HPoint::weighted(*p, *w)).collect())
+    points.iter().zip(weights).map(|(p, w)| {
+        let h = HPoint::weighted(*p, *w);
+        if !h.is_finite() {
+            return invalid("a weighted control coordinate overflowed");
+        }
+        // The caller provided Cartesian coordinates. If p*w has rounded a
+        // nonzero coordinate to zero, no subsequent homogeneous evaluation
+        // can recover it. Reject instead of silently altering the shape.
+        if (p.x != 0.0 && h.x == 0.0) || (p.y != 0.0 && h.y == 0.0) || (p.z != 0.0 && h.z == 0.0) {
+            return invalid("a weighted control coordinate underflowed to zero");
+        }
+        Ok(h)
+    }).collect()
 }
 
 /// Which one-sided limit a basis evaluation takes at a knot. Basis functions live on half-open
@@ -486,6 +498,92 @@ pub struct NurbsSurface {
     ctrl: Vec<HPoint>,
 }
 
+/// Analytic two-parameter derivatives of an editable NURBS surface.
+/// All derivatives refer to the original u and v parameters, not display tessellation.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SurfaceJet {
+    pub point: Vec3,
+    pub du: Vec3,
+    pub dv: Vec3,
+    pub duu: Vec3,
+    pub duv: Vec3,
+    pub dvv: Vec3,
+}
+
+/// Principal curvature invariants of a regular surface at one parameter pair.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SurfaceCurvature {
+    /// Unit normal, with the orientation given by du × dv.
+    pub normal: Vec3,
+    /// Signed mean curvature in inverse millimetres.
+    pub mean_per_mm: f64,
+    /// Gaussian curvature in inverse square millimetres.
+    pub gaussian_per_mm2: f64,
+}
+
+impl SurfaceJet {
+    /// First and second fundamental forms. A collapsed or nearly parallel parameter
+    /// frame has no numerically reliable curvature: return an error instead of NaN.
+    pub fn curvature(self) -> SplineResult<SurfaceCurvature> {
+        if [self.point, self.du, self.dv, self.duu, self.duv, self.dvv].iter().any(|v| !v.is_finite()) {
+            return invalid("surface derivatives must be finite");
+        }
+        let length = |v: Vec3| v.x.hypot(v.y).hypot(v.z);
+        let speed_u = length(self.du);
+        let speed_v = length(self.dv);
+        if !(speed_u > 0.0 && speed_u.is_finite() && speed_v > 0.0 && speed_v.is_finite()) {
+            return invalid("surface curvature needs two finite nonzero parameter tangents");
+        }
+        let tu = self.du / speed_u;
+        let tv = self.dv / speed_v;
+        let cross = tu.cross(tv);
+        let sine = length(cross);
+        // The test is relative to the parameter tangent lengths; an absolute
+        // determinant test would incorrectly reject very small valid surfaces.
+        if !(sine > 1e-12 && sine.is_finite()) {
+            return invalid("surface tangents are numerically dependent");
+        }
+        let normal = cross / sine;
+        let cosine = tu.dot(tv).clamp(-1.0, 1.0);
+        // Divide successively so squaring a large speed does not overflow before
+        // a representable curvature can be obtained.
+        let e = normal.dot((self.duu / speed_u) / speed_u);
+        let f = normal.dot((self.duv / speed_u) / speed_v);
+        let g = normal.dot((self.dvv / speed_v) / speed_v);
+        let determinant = sine * sine;
+        let gaussian_per_mm2 = (e * g - f * f) / determinant;
+        let mean_per_mm = (e + g - 2.0 * cosine * f) / (2.0 * determinant);
+        if !normal.is_finite() || !mean_per_mm.is_finite() || !gaussian_per_mm2.is_finite() {
+            return invalid("surface curvature is outside the finite numerical range");
+        }
+        Ok(SurfaceCurvature { normal, mean_per_mm, gaussian_per_mm2 })
+    }
+}
+
+/// Compensated sum for signed basis derivatives and local-coordinate numerators.
+/// It also reduces the loss of low-order terms when control weights differ.
+#[derive(Clone, Copy, Default)]
+struct SplineSum {
+    sum: f64,
+    correction: f64,
+}
+
+impl SplineSum {
+    fn add(&mut self, x: f64) {
+        let next = self.sum + x;
+        self.correction += if self.sum.abs() >= x.abs() {
+            (self.sum - next) + x
+        } else {
+            (x - next) + self.sum
+        };
+        self.sum = next;
+    }
+
+    fn total(self) -> f64 {
+        self.sum + self.correction
+    }
+}
+
 impl NurbsSurface {
     /// A surface from Cartesian points and positive weights (one per point, u fastest).
     pub fn new(degree: [usize; 2], knots: [Vec<f64>; 2], points: &[Vec3], weights: &[f64]) -> SplineResult<NurbsSurface> {
@@ -502,8 +600,11 @@ impl NurbsSurface {
             }
             check_knots(kn)?;
             let n = kn.len().checked_sub(p + 1).filter(|&n| n > p).ok_or_else(|| SplineError::Invalid("too few knots for the degree".into()))?;
-            if !(kn.get(p) < kn.get(n)) {
-                return invalid("the surface's domain is empty");
+            let (Some(&a), Some(&b)) = (kn.get(p), kn.get(n)) else {
+                return invalid("the surface has an invalid parameter domain");
+            };
+            if !(a < b && (b - a).is_finite()) {
+                return invalid("the surface needs a nonempty finite parameter range");
             }
             count[d] = n;
         }
@@ -550,25 +651,161 @@ impl NurbsSurface {
         [d(0), d(1)]
     }
 
-    /// The point at `(u, v)`, which must lie in the domain.
+    /// The exact NURBS point at `(u, v)` (not a display mesh), within the parameter domain.
     pub fn eval(&self, u: f64, v: f64) -> SplineResult<Vec3> {
-        let dom = self.domain();
-        let mut spans = [0; 2];
-        let mut basis: [Vec<f64>; 2] = [Vec::new(), Vec::new()];
-        for (d, x) in [u, v].into_iter().enumerate() {
-            let (p, n, kn) = (self.degree[d], self.count[d], &self.knots[d]);
-            let span = find_span(kn, p, n, x).ok_or_else(|| SplineError::Invalid(format!("({u}, {v}) is outside the domain")))?;
-            let side = if x >= dom[d][1] { Side::Left } else { Side::Right };
-            spans[d] = span;
-            basis[d] = (span - p..=span).map(|i| kn.get(i..i + p + 2).map_or(0.0, |k| local_basis(k, x, side, 0)[0])).collect();
-        }
-        let mut acc = HPoint::ZERO;
-        for (b, nj) in basis[1].iter().enumerate() {
-            for (a, ni) in basis[0].iter().enumerate() {
-                acc += self.point(spans[0] - self.degree[0] + a, spans[1] - self.degree[1] + b) * (ni * nj);
+        Ok(self.evaluate(u, v, false)?.point)
+    }
+
+    /// Analytic first and second partial derivatives. At an interior repeated knot,
+    /// one-sided derivatives are taken from the right; at the domain end, from the left.
+    /// A requested derivative that overflows f64 is an error, not an invented zero.
+    pub fn jet(&self, u: f64, v: f64) -> SplineResult<SurfaceJet> {
+        self.evaluate(u, v, true)
+    }
+
+    fn evaluate(&self, u: f64, v: f64, derivatives: bool) -> SplineResult<SurfaceJet> {
+        let domain = self.domain();
+        let mut starts = [0; 2];
+        let mut basis: [Vec<[f64; 3]>; 2] = [Vec::new(), Vec::new()];
+        let order = if derivatives { 2 } else { 0 };
+        for (d, parameter) in [u, v].into_iter().enumerate() {
+            let (p, n, knots) = (self.degree[d], self.count[d], &self.knots[d]);
+            let span = find_span(knots, p, n, parameter)
+                .ok_or_else(|| SplineError::Invalid(format!("({u}, {v}) is outside the surface domain")))?;
+            let side = if parameter >= domain[d][1] { Side::Left } else { Side::Right };
+            starts[d] = span - p;
+            for i in starts[d]..=span {
+                let Some(local_knots) = knots.get(i..i + p + 2) else {
+                    return invalid("a local surface basis has an invalid knot window");
+                };
+                let values = local_basis_array(local_knots, parameter, side, order);
+                if values.iter().take(order + 1).any(|x| !x.is_finite()) {
+                    return invalid("surface basis derivatives overflowed");
+                }
+                basis[d].push([values[0], values[1], values[2]]);
             }
         }
-        acc.project().ok_or_else(|| SplineError::Invalid("the surface's weights vanish there".into()))
+
+        // Only controls with a nonzero *value* basis enter the normalizing
+        // weight. A huge weight at a zero-basis endpoint must not erase a tiny,
+        // but perfectly representable, endpoint contribution.
+        let mut max_weight = 0.0_f64;
+        for (j, bv) in basis[1].iter().enumerate() {
+            for (i, bu) in basis[0].iter().enumerate() {
+                if bu[0] > 0.0 && bv[0] > 0.0 {
+                    max_weight = max_weight.max(self.point(starts[0] + i, starts[1] + j).w);
+                }
+            }
+        }
+        if !(max_weight > 0.0 && max_weight.is_finite()) {
+            return invalid("the surface has no contributing positive weight");
+        }
+
+        let mut strongest = -1.0_f64;
+        let mut origin = None;
+        for (j, bv) in basis[1].iter().enumerate() {
+            for (i, bu) in basis[0].iter().enumerate() {
+                if bu[0] <= 0.0 || bv[0] <= 0.0 {
+                    continue;
+                }
+                let h = self.point(starts[0] + i, starts[1] + j);
+                let coefficient = bu[0] * bv[0] * (h.w / max_weight);
+                if coefficient > strongest {
+                    strongest = coefficient;
+                    let point = Vec3::new(h.x / h.w, h.y / h.w, h.z / h.w);
+                    origin = point.is_finite().then_some(point);
+                }
+            }
+        }
+        let Some(origin) = origin else {
+            return invalid("the surface has no finite contributing control point");
+        };
+
+        // Recover Cartesian control positions *before* differencing them from
+        // an active local origin. Differentiating large absolute world positions
+        // would otherwise produce spurious tangents for translated surfaces.
+        let mut controls = [[Vec3::ZERO; MAX_SPLINE_DEGREE + 1]; MAX_SPLINE_DEGREE + 1];
+        let mut half_scale = false;
+        for (j, bv) in basis[1].iter().enumerate() {
+            for (i, bu) in basis[0].iter().enumerate() {
+                let active = bu.iter().take(order + 1).any(|x| *x != 0.0)
+                    && bv.iter().take(order + 1).any(|x| *x != 0.0);
+                if !active {
+                    continue;
+                }
+                let h = self.point(starts[0] + i, starts[1] + j);
+                let point = Vec3::new(h.x / h.w, h.y / h.w, h.z / h.w);
+                if !point.is_finite() {
+                    return invalid("a contributing surface control point cannot be projected");
+                }
+                controls[j][i] = point;
+                half_scale |= !(point - origin).is_finite();
+            }
+        }
+
+        // Rational tensor quotient rule through total order two:
+        // C_u = (A_u - W_u C) / W, and similarly for uv, uu and vv.
+        // A is the *local* numerator sum of weight × (P - origin).
+        const ORDERS: [(usize, usize); 6] = [(0, 0), (1, 0), (0, 1), (2, 0), (1, 1), (0, 2)];
+        let count = if derivatives { ORDERS.len() } else { 1 };
+        let mut sums = [[SplineSum::default(); 3]; 6];
+        let mut weight_sums = [SplineSum::default(); 6];
+        for (j, bv) in basis[1].iter().enumerate() {
+            for (i, bu) in basis[0].iter().enumerate() {
+                let h = self.point(starts[0] + i, starts[1] + j);
+                let weight = h.w / max_weight;
+                let point = controls[j][i];
+                let relative = if half_scale { point * 0.5 - origin * 0.5 } else { point - origin };
+                for (k, &(a, b)) in ORDERS.iter().take(count).enumerate() {
+                    // Never form infinity × zero for a large off-end control weight.
+                    if bu[a] == 0.0 || bv[b] == 0.0 {
+                        continue;
+                    }
+                    let factor = weight * bu[a] * bv[b];
+                    if factor == 0.0 {
+                        continue;
+                    }
+                    weight_sums[k].add(factor);
+                    sums[k][0].add(relative.x * factor);
+                    sums[k][1].add(relative.y * factor);
+                    sums[k][2].add(relative.z * factor);
+                }
+            }
+        }
+        let mut weights = [0.0; 6];
+        let mut numerators = [Vec3::ZERO; 6];
+        for k in 0..count {
+            weights[k] = weight_sums[k].total();
+            numerators[k] = Vec3::new(sums[k][0].total(), sums[k][1].total(), sums[k][2].total());
+            if !weights[k].is_finite() || !numerators[k].is_finite() {
+                return invalid("surface rational sums overflowed");
+            }
+        }
+        if !(weights[0] > 0.0) {
+            return invalid("the surface rational denominator is not positive");
+        }
+        let local = numerators[0] / weights[0];
+        let (mut du, mut dv, mut duu, mut duv, mut dvv) = (Vec3::ZERO, Vec3::ZERO, Vec3::ZERO, Vec3::ZERO, Vec3::ZERO);
+        if derivatives {
+            du = (numerators[1] - local * weights[1]) / weights[0];
+            dv = (numerators[2] - local * weights[2]) / weights[0];
+            duu = (numerators[3] - du * (2.0 * weights[1]) - local * weights[3]) / weights[0];
+            duv = (numerators[4] - du * weights[2] - dv * weights[1] - local * weights[4]) / weights[0];
+            dvv = (numerators[5] - dv * (2.0 * weights[2]) - local * weights[5]) / weights[0];
+        }
+        let point = if half_scale { (origin * 0.5 + local) * 2.0 } else { origin + local };
+        if half_scale {
+            du = du * 2.0;
+            dv = dv * 2.0;
+            duu = duu * 2.0;
+            duv = duv * 2.0;
+            dvv = dvv * 2.0;
+        }
+        let jet = SurfaceJet { point, du, dv, duu, duv, dvv };
+        if [jet.point, jet.du, jet.dv, jet.duu, jet.duv, jet.dvv].iter().any(|v| !v.is_finite()) {
+            return invalid("surface evaluation exceeded the finite numerical range");
+        }
+        Ok(jet)
     }
 
     /// The same surface with the knot `x` inserted once in direction `dir` ([`Dir::S`] = u).
@@ -824,6 +1061,241 @@ pub(crate) mod tests {
         // A clamped surface interpolates its corner control points.
         let corner = c.eval(3.0, 1.5).unwrap();
         assert!(corner.dist(c.point(0, 0).project().unwrap()) < 1e-12);
+    }
+
+    fn assert_vector_near(actual: Vec3, expected: Vec3, scale: f64) {
+        let error = (actual.x - expected.x).abs().max((actual.y - expected.y).abs()).max((actual.z - expected.z).abs());
+        assert!(error <= 2e-12 * scale, "got {actual:?}, expected {expected:?}, scale {scale}, error {error}");
+    }
+
+    #[test]
+    fn analytic_plane_surface_jet_and_curvature_are_scale_aware() {
+        // Bilinear plane: S(u,v) = (2u, 3v, 0). The exact second derivatives
+        // and both curvatures vanish, independent of model scale.
+        for scale in [1e-6, 1.0, 1e9] {
+            let points = [
+                Vec3::new(0.0, 0.0, 0.0),
+                Vec3::new(2.0 * scale, 0.0, 0.0),
+                Vec3::new(0.0, 3.0 * scale, 0.0),
+                Vec3::new(2.0 * scale, 3.0 * scale, 0.0),
+            ];
+            let patch = NurbsSurface::new(
+                [1, 1], [vec![0.0, 0.0, 1.0, 1.0], vec![0.0, 0.0, 1.0, 1.0]],
+                &points, &[1.0; 4],
+            ).unwrap();
+            for (u, v) in [(0.0, 0.0), (0.25, 0.75), (1.0, 1.0)] {
+                let j = patch.jet(u, v).unwrap();
+                assert_vector_near(j.point, Vec3::new(2.0 * scale * u, 3.0 * scale * v, 0.0), scale);
+                assert_vector_near(j.du, Vec3::new(2.0 * scale, 0.0, 0.0), scale);
+                assert_vector_near(j.dv, Vec3::new(0.0, 3.0 * scale, 0.0), scale);
+                for d in [j.duu, j.duv, j.dvv] {
+                    assert_vector_near(d, Vec3::ZERO, scale);
+                }
+                let c = j.curvature().unwrap();
+                assert_vector_near(c.normal, Vec3::Z, 1.0);
+                assert_eq!(c.mean_per_mm, 0.0);
+                assert_eq!(c.gaussian_per_mm2, 0.0);
+            }
+        }
+    }
+
+    fn quarter_cylinder(radius: f64, height: f64, common_weight: f64) -> NurbsSurface {
+        // A quadratic rational quarter circle extruded linearly along z.
+        // Every point lies exactly on x²+y²=R², without tessellation.
+        let points = [
+            Vec3::new(radius, 0.0, 0.0), Vec3::new(radius, radius, 0.0), Vec3::new(0.0, radius, 0.0),
+            Vec3::new(radius, 0.0, height), Vec3::new(radius, radius, height), Vec3::new(0.0, radius, height),
+        ];
+        let c = std::f64::consts::FRAC_1_SQRT_2;
+        NurbsSurface::new(
+            [2, 1],
+            [vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0], vec![0.0, 0.0, 1.0, 1.0]],
+            &points, &[common_weight, c * common_weight, common_weight,
+                common_weight, c * common_weight, common_weight],
+        ).unwrap()
+    }
+
+    #[test]
+    fn rational_quarter_cylinder_matches_analytic_shape_tangent_and_curvature() {
+        for radius in [1e-4, 4.0, 1e5] {
+            let s = quarter_cylinder(radius, 2.0 * radius, 1.0);
+            let j = s.jet(0.5, 0.4).unwrap();
+            let a = radius * std::f64::consts::FRAC_1_SQRT_2;
+            assert_vector_near(j.point, Vec3::new(a, a, 0.8 * radius), radius);
+            let speed = 4.0 * (1.0 - std::f64::consts::FRAC_1_SQRT_2);
+            assert_vector_near(j.du, Vec3::new(-speed * radius, speed * radius, 0.0), radius);
+            assert_vector_near(j.dv, Vec3::new(0.0, 0.0, 2.0 * radius), radius);
+            let c = j.curvature().unwrap();
+            assert_vector_near(c.normal, Vec3::new(std::f64::consts::FRAC_1_SQRT_2, std::f64::consts::FRAC_1_SQRT_2, 0.0), 1.0);
+            assert!((c.mean_per_mm + 0.5 / radius).abs() <= 2e-12 / radius, "{c:?}");
+            assert!(c.gaussian_per_mm2.abs() <= 2e-12 / (radius * radius), "{c:?}");
+        }
+    }
+
+    #[test]
+    fn surface_weight_normalization_recovers_tiny_positive_weights() {
+        let canonical = quarter_cylinder(8.0, 2.0, 1.0);
+        let expected = canonical.jet(0.3, 0.7).unwrap();
+        for weight in [1e-310, 1e-200, 1e-100, 1e100, 1e200, 1e307] {
+            let scaled = quarter_cylinder(8.0, 2.0, weight);
+            let result = scaled.jet(0.3, 0.7).unwrap();
+            assert_vector_near(result.point, expected.point, 8.0);
+            assert_vector_near(result.du, expected.du, 8.0);
+            assert_vector_near(result.dv, expected.dv, 8.0);
+            assert_vector_near(result.duu, expected.duu, 8.0);
+            assert_vector_near(result.duv, expected.duv, 8.0);
+            assert_vector_near(result.dvv, expected.dvv, 8.0);
+            assert_vector_near(scaled.eval(0.0, 0.0).unwrap(), Vec3::new(8.0, 0.0, 0.0), 8.0);
+        }
+    }
+
+    #[test]
+    fn translated_surface_has_no_spurious_derivatives_and_degenerate_curvature_fails() {
+        let origin = Vec3::new(1e14, -2e14, 3e14);
+        let points = [
+            origin, origin + Vec3::new(10.0, 0.0, 0.0),
+            origin + Vec3::new(0.0, 20.0, 0.0), origin + Vec3::new(10.0, 20.0, 0.0),
+        ];
+        let knots = [vec![0.0, 0.0, 1.0, 1.0], vec![0.0, 0.0, 1.0, 1.0]];
+        let patch = NurbsSurface::new([1, 1], knots.clone(), &points, &[1.0; 4]).unwrap();
+        let j = patch.jet(0.25, 0.75).unwrap();
+        assert_vector_near(j.point - origin, Vec3::new(2.5, 15.0, 0.0), 1e11);
+        assert_vector_near(j.du, Vec3::new(10.0, 0.0, 0.0), 10.0);
+        assert_vector_near(j.dv, Vec3::new(0.0, 20.0, 0.0), 20.0);
+        for d in [j.duu, j.duv, j.dvv] {
+            assert_vector_near(d, Vec3::ZERO, 20.0);
+        }
+        let collapsed = NurbsSurface::new([1, 1], knots, &[origin; 4], &[1.0; 4]).unwrap();
+        assert_eq!(collapsed.jet(0.5, 0.5).unwrap().point, origin);
+        assert!(collapsed.jet(0.5, 0.5).unwrap().curvature().is_err());
+    }
+
+    #[test]
+    fn opposite_large_finite_surface_coordinates_do_not_overflow_position_only() {
+        // Even though du has magnitude 2e308 and cannot fit in f64,
+        // a point at the centre of the patch is finite. Point evaluation
+        // must not fail merely because subtracting the controls overflows.
+        let lo = Vec3::new(-1e308, 0.0, 0.0);
+        let hi = Vec3::new(1e308, 0.0, 0.0);
+        let patch = NurbsSurface::new(
+            [1, 1],
+            [vec![0.0, 0.0, 1.0, 1.0], vec![0.0, 0.0, 1.0, 1.0]],
+            &[lo, hi, lo + Vec3::Y, hi + Vec3::Y],
+            &[1.0; 4],
+        ).unwrap();
+        let centre = patch.eval(0.5, 0.5).unwrap();
+        assert!(centre.is_finite(), "{centre:?}");
+        assert_vector_near(centre, Vec3::new(0.0, 0.5, 0.0), 1.0);
+        assert!(patch.jet(0.5, 0.5).is_err());
+    }
+
+    #[test]
+    fn surface_internal_knot_uses_right_hand_jet() {
+        // Quadratic Bézier pieces with a shared middle control and a C0
+        // repeated knot at u=0.5. Its right derivative is (1,0,4).
+        let row = [
+            Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.25, 0.0, 0.0),
+            Vec3::new(0.5, 0.0, 0.0), Vec3::new(0.75, 0.0, 1.0),
+            Vec3::new(1.0, 0.0, 1.0),
+        ];
+        let points: Vec<Vec3> = row.iter().copied().chain(row.iter().map(|p| *p + Vec3::Y)).collect();
+        let patch = NurbsSurface::new(
+            [2, 1],
+            [vec![0.0, 0.0, 0.0, 0.5, 0.5, 1.0, 1.0, 1.0], vec![0.0, 0.0, 1.0, 1.0]],
+            &points, &[1.0; 10],
+        ).unwrap();
+        let right = patch.jet(0.5, 0.3).unwrap();
+        assert_vector_near(right.point, Vec3::new(0.5, 0.3, 0.0), 1.0);
+        assert_vector_near(right.du, Vec3::new(1.0, 0.0, 4.0), 1.0);
+        assert_vector_near(right.dv, Vec3::Y, 1.0);
+        let left = patch.jet(0.5 - 1e-7, 0.3).unwrap();
+        assert!(left.du.z.abs() < 1e-12);
+        assert!(right.du.z - left.du.z > 3.9);
+    }
+
+    #[test]
+    fn rational_surface_jet_matches_independent_exact_fraction_oracle() {
+        // Expected results were generated independently with Python's exact
+        // fractions.Fraction arithmetic: Cox-de Boor basis derivatives and the
+        // rational quotient rule, without calling any SolidCraft code.
+        // Degrees [2,2], a nonuniform internal u knot, and positive unequal weights.
+        let u_knots = vec![0.0, 0.0, 0.0, 1.0 / 3.0, 1.0, 1.0, 1.0];
+        let v_knots = vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+        let mut points = Vec::new();
+        let mut weights = Vec::new();
+        for j in 0..3 {
+            for i in 0..4 {
+                points.push(Vec3::new(
+                    (3 * i + 2 * j) as f64 / 7.0 - 1.0 / 7.0,
+                    (i * i + j + 2) as f64 / 5.0,
+                    ((i + 1) * (j + 2)) as f64 / 11.0,
+                ));
+                weights.push((2 * i + j + 3) as f64 / 4.0);
+            }
+        }
+        let patch = NurbsSurface::new([2, 2], [u_knots, v_knots], &points, &weights).unwrap();
+        let jet = patch.jet(2.0 / 5.0, 3.0 / 7.0).unwrap();
+        let expected = [
+            (jet.point, Vec3::new(0.78656355354247631, 1.1211493424608179, 0.67830530125612087)),
+            (jet.du, Vec3::new(0.95786110815155945, 1.5203490822121051, 0.59199064842709026)),
+            (jet.dv, Vec3::new(0.56739557963381171, 0.38965761255881776, 0.46211353816836215)),
+            (jet.duu, Vec3::new(0.58133527146482356, 3.2063753210225108, 0.34634312901589087)),
+            (jet.duv, Vec3::new(-0.01453311381580278, -0.034905862971809844, 0.4069431806690737)),
+            (jet.dvv, Vec3::new(-0.16576452773742598, -0.11161019654575237, -0.13980467300213142)),
+        ];
+        for (actual, oracle) in expected {
+            assert_vector_near(actual, oracle, 4.0);
+        }
+
+        // Knot insertion changes only the control net, not the parameterization
+        // or the analytic surface jets. These sampled tests are not a global
+        // maximum-error guarantee.
+        let refined = patch.insert_knot(Dir::S, 0.6).unwrap().insert_knot(Dir::T, 0.2).unwrap();
+        for (u, v) in [(0.1, 0.15), (0.4, 0.3), (0.8, 0.9)] {
+            let a = patch.jet(u, v).unwrap();
+            let b = refined.jet(u, v).unwrap();
+            for (original, after) in [
+                (a.point, b.point), (a.du, b.du), (a.dv, b.dv),
+                (a.duu, b.duu), (a.duv, b.duv), (a.dvv, b.dvv),
+            ] {
+                assert_vector_near(after, original, 4.0);
+            }
+        }
+    }
+
+    #[test]
+    fn homogeneous_weighting_rejects_silent_coordinate_underflow() {
+        // Positive finite Cartesian controls are not enough if their
+        // homogeneous products would round nonzero coordinates to zero.
+        let tiny = Vec3::new(1e-200, 0.0, 0.0);
+        assert!(weighted_points(&[tiny], &[1e-200]).is_err());
+        assert!(weighted_points(&[Vec3::new(1e200, 0.0, 0.0)], &[1e200]).is_err());
+        assert!(weighted_points(&[Vec3::new(8.0, 0.0, 0.0)], &[1e-200]).is_ok());
+        assert!(weighted_points(&[Vec3::ZERO], &[1e-200]).is_ok());
+        let knots = [vec![0.0, 0.0, 1.0, 1.0], vec![0.0, 0.0, 1.0, 1.0]];
+        assert!(NurbsSurface::new([1, 1], knots.clone(), &[tiny; 4], &[1e-200; 4]).is_err());
+        assert!(NurbsSurface::new(
+            [1, 1],
+            [vec![-1e308, -1e308, 1e308, 1e308], knots[1].clone()],
+            &[Vec3::ZERO; 4], &[1.0; 4],
+        ).is_err());
+    }
+
+    #[test]
+    fn surface_jet_rejects_unrepresentable_second_derivatives_without_breaking_eval() {
+        // A tiny but representable parameter domain produces finite points
+        // while individual basis second derivatives overflow f64.
+        let points = [
+            Vec3::ZERO, Vec3::X * 1e-300, Vec3::X * 2e-300,
+            Vec3::Y, Vec3::Y + Vec3::X * 1e-300, Vec3::Y + Vec3::X * 2e-300,
+        ];
+        let patch = NurbsSurface::new(
+            [2, 1],
+            [vec![0.0, 0.0, 0.0, 1e-300, 1e-300, 1e-300], vec![0.0, 0.0, 1.0, 1.0]],
+            &points, &[1.0; 6],
+        ).unwrap();
+        assert!(patch.eval(0.5e-300, 0.5).unwrap().is_finite());
+        assert!(patch.jet(0.5e-300, 0.5).is_err());
     }
 
     #[test]
