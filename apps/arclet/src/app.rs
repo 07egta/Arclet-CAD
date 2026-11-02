@@ -152,6 +152,9 @@ pub struct ArcletApp {
     command_error: Option<String>,
     command_focus: bool,
     cmdline: cmdline::CommandLine,
+    /// The specific Boolean mode entered in Arclet's command bar, if the last command was
+    /// a named Boolean alias. Empty Enter repeats this choice instead of reverting to Join.
+    last_boolean_alias: Option<commands::BooleanAlias>,
     help: bool,
     controls: Sender<ControlRequest>,
     screenshot_path: Option<String>,
@@ -239,6 +242,7 @@ impl ArcletApp {
             command_error: None,
             command_focus: false,
             cmdline: cmdline::CommandLine::default(),
+            last_boolean_alias: None,
             help: false,
             controls,
             screenshot_path: None,
@@ -310,6 +314,9 @@ impl ArcletApp {
     }
 
     fn start(&mut self, id: &str) {
+        // A toolbar/menu command (or a new typed command) must not inherit the mode of
+        // the previous Boolean alias. Explicit aliases restore it after this call.
+        self.last_boolean_alias = None;
         self.command_error = None;
         if matches!(id, "sketch.spline.rebuild" | "inspect.curve_continuity") && self.cad.session.active_sketch.is_none() {
             self.command_error = Some(tr("curve_quality.edit_sketch").to_string());
@@ -522,8 +529,14 @@ impl ArcletApp {
         if self.command.trim().is_empty() {
             match self.cad.last_command.clone() {
                 Some((id, _)) => {
+                    // The shared command history records the generic engine ID only. Keep
+                    // Arclet's last explicit Boolean operation when repeating that ID.
+                    let repeated_boolean = (id == "solid.combine").then_some(self.last_boolean_alias).flatten();
                     self.cmdline.repeated(&id);
                     self.start_logged(&id);
+                    if let Some(operation) = repeated_boolean {
+                        self.set_boolean_operation(operation);
+                    }
                 }
                 None => {
                     let error = tr("arclet.command.empty").to_string();
@@ -536,13 +549,35 @@ impl ArcletApp {
         self.cmdline.entered(&self.command);
         match commands::resolve(&self.command) {
             Ok(id) => {
+                let entered = self.command.clone();
                 self.start_logged(id);
+                self.preset_boolean_operation(id, &entered);
                 self.command.clear();
             }
             Err(error) => {
                 self.cmdline.failed(&self.command, &error);
                 self.command_error = Some(error);
             }
+        }
+    }
+
+    /// A specific Boolean command sets the live operation selector, not merely the generic
+    /// Combine tool. The underlying engine and its default remain unchanged.
+    fn preset_boolean_operation(&mut self, id: &str, entered: &str) {
+        if id == "solid.combine" && let Some(operation) = commands::boolean_alias(entered) {
+            self.set_boolean_operation(operation);
+        }
+    }
+
+    fn set_boolean_operation(&mut self, operation: commands::BooleanAlias) {
+        if self.command_error.is_some() {
+            return;
+        }
+        if let Some(dialog) = self.cad.dialog.as_mut()
+            && let solidcraft_ui_egui::dialogs::Kind::Combine { operation: selected, .. } = &mut dialog.kind
+        {
+            *selected = operation.dialog_index();
+            self.last_boolean_alias = Some(operation);
         }
     }
 
@@ -572,8 +607,10 @@ impl ArcletApp {
                     cmdline::Action::Nothing => {}
                     cmdline::Action::Run => self.run_command_text(),
                     cmdline::Action::Suggested { id, label } => {
+                        let entered = self.command.clone();
                         self.cmdline.entered(label);
                         self.start_logged(id);
+                        self.preset_boolean_operation(id, &entered);
                         self.command.clear();
                     }
                     cmdline::Action::Cancel => {
@@ -1052,6 +1089,54 @@ mod tests {
         app.run_command_text();
         assert!(app.command_error.is_none());
         assert_eq!(app.cad.last_command.as_ref().map(|(id, _)| id.as_str()), Some("view.top"));
+    }
+
+    #[test]
+    fn boolean_command_aliases_seed_the_live_dialog_and_repeat_the_same_operation() {
+        use solidcraft_ui_egui::dialogs::Kind;
+
+        for (name, expected) in [("BooleanUnion", 1), ("BooleanDifference", 2), ("BooleanIntersection", 3)] {
+            let mut app = ArcletApp::with_services(Default::default());
+            app.command = name.into();
+            app.run_command_text();
+            assert!(app.command_error.is_none(), "{name}: {:?}", app.command_error);
+            assert!(app.command.is_empty(), "{name}: the command should have been consumed");
+            let operation = match &app.cad.dialog.as_ref().expect("Combine dialog must open").kind {
+                Kind::Combine { operation, .. } => *operation,
+                other => panic!("{name}: unexpected dialog {other:?}"),
+            };
+            assert_eq!(operation, expected, "{name} opened with the wrong Boolean operation");
+
+            // The last command recorded by the shared UI is `solid.combine` (not the alias).
+            // Reopening it via the empty Enter shortcut must not silently change a cut to join.
+            assert_eq!(app.cad.last_command.as_ref().map(|(id, _)| id.as_str()), Some("solid.combine"));
+            app.run_command_text();
+            assert!(app.command_error.is_none(), "repeat of {name}: {:?}", app.command_error);
+            let repeated = match &app.cad.dialog.as_ref().expect("repeated Combine dialog").kind {
+                Kind::Combine { operation, .. } => *operation,
+                other => panic!("{name}: repeat opened {other:?}"),
+            };
+            assert_eq!(repeated, expected, "repeat of {name} changed the operation");
+        }
+    }
+
+    #[test]
+    fn generic_boolean_does_not_inherit_a_previous_explicit_cut() {
+        use solidcraft_ui_egui::dialogs::Kind;
+
+        let mut app = ArcletApp::with_services(Default::default());
+        app.command = "BooleanDifference".into();
+        app.run_command_text();
+        assert!(app.last_boolean_alias.is_some());
+
+        app.command = "Boolean".into();
+        app.run_command_text();
+        assert!(app.command_error.is_none());
+        assert!(app.last_boolean_alias.is_none());
+        assert!(matches!(app.cad.dialog.as_ref().map(|d| &d.kind), Some(Kind::Combine { operation: 1, .. })));
+
+        app.run_command_text();
+        assert!(matches!(app.cad.dialog.as_ref().map(|d| &d.kind), Some(Kind::Combine { operation: 1, .. })));
     }
 
     #[test]
