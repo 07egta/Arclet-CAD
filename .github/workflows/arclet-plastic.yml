@@ -40,3 +40,5 @@ jobs:
         run: cargo test --profile ci --locked -p solidcraft-doc --lib plastic
       - name: Plastic engine and sensor enclosure
         run: cargo test --profile ci --locked -p solidcraft-engine --lib cmd::plastic::tests
+      - name: Rib and web regression tests
+        run: cargo test --profile ci --locked -p solidcraft-engine --lib rib_
