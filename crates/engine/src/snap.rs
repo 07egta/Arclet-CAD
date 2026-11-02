@@ -220,4 +220,8 @@ fn area_centre(tris: &[[Vec3; 3]]) -> Option<Vec3> {
 // snap_points contract intact preserves older command callers and mesh fallbacks.
 #[path = "snap/smart.rs"]
 mod smart;
-pub use smart::{SnapAccuracy, SnapCandidate, SnapClipDepth, SnapGeometry, SnapInference, SnapObject, SnapQuery, SnapResult, SnapScreenPoint, SnapSettings, SnapView, query_snaps};
+pub use smart::{
+    SnapAccuracy, SnapCandidate, SnapClipDepth, SnapError, SnapGeometry, SnapInference,
+    SnapObject, SnapPlane, SnapQuery, SnapResult, SnapScreenPoint, SnapSettings,
+    SnapTransform, SnapView, legacy_snap_objects, query_snaps,
+};
