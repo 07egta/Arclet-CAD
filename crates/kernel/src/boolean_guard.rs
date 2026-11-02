@@ -139,19 +139,54 @@ pub(crate) fn check_retry(a: &Body, b: &Body, op: BoolOp, result: Option<&Body>)
         return Ok(());
     }
     let Some(r) = result else {
-        // Nothing left: only a cut whose tool covers the whole target (to within the meshes'
-        // chords: a tool touching a round side of the target).
-        let chord = a.size().max(b.size()) * 1e-3;
-        let (Ok(ma), Ok(mb)) = (a.tessellate(chord), b.tessellate(chord)) else { return Ok(()) };
+        // An empty cut is possible only when the tool contains the *material* of the target.
+        // Containment of axis-aligned bounding boxes is necessary, but not sufficient: a
+        // sphere's box can enclose a cube while leaving all eight corners uncut. A hollow tool
+        // can similarly enclose the target's box without touching any of its material.
+        if op != BoolOp::Cut {
+            return Err(bad(op, "it came out empty".into()));
+        }
+        let chord = (a.size().max(b.size()) * 1e-3).max(1e-6);
+        let ma = a.tessellate(chord).map_err(|_| bad(op, "the target could not be checked".into()))?;
+        let mb = b.tessellate(chord).map_err(|_| bad(op, "the tool could not be checked".into()))?;
         let (ba, bb) = (ma.bounds(), mb.bounds());
         let tol = 2.0 * chord;
-        let within = ba.min.x >= bb.min.x - tol
-            && ba.min.y >= bb.min.y - tol
-            && ba.min.z >= bb.min.z - tol
-            && ba.max.x <= bb.max.x + tol
-            && ba.max.y <= bb.max.y + tol
-            && ba.max.z <= bb.max.z + tol;
-        return if op == BoolOp::Cut && within { Ok(()) } else { Err(bad(op, "it came out empty".into())) };
+        if ba.is_empty()
+            || bb.is_empty()
+            || ba.min.x < bb.min.x - tol
+            || ba.min.y < bb.min.y - tol
+            || ba.min.z < bb.min.z - tol
+            || ba.max.x > bb.max.x + tol
+            || ba.max.y > bb.max.y + tol
+            || ba.max.z > bb.max.z + tol
+        {
+            return Err(bad(op, "it came out empty, but the tool does not cover the target's bounds".into()));
+        }
+        // Check the actual tool, not just its box. Near-surface points are accepted to avoid
+        // rejecting a complete cut where the two B-reps share a face or a curved boundary.
+        // Crossings also catch a small incursion through a concave tool between mesh vertices.
+        if ma.triangles.is_empty() || mb.triangles.is_empty() || ma.crosses(&mb, tol) {
+            return Err(bad(op, "the target cannot be wholly inside the tool".into()));
+        }
+        let inside = mb.inside_index();
+        let near = Near::new(&mb, tol).ok_or_else(|| bad(op, "the tool could not be checked".into()))?;
+        let covered = |p: Vec3| p.is_finite() && (near.close(p) || inside.contains(p));
+        if ma.positions.is_empty() || ma.positions.iter().any(|p| !covered(*p)) {
+            return Err(bad(op, "part of the target lies outside the tool".into()));
+        }
+        // A tool with a cavity can contain the target's surface samples but not its interior.
+        // Check a representative interior point where one exists, and facet interiors too.
+        let center = ba.center();
+        if ma.contains(center) && !covered(center) {
+            return Err(bad(op, "part of the target lies outside the tool".into()));
+        }
+        let step = ma.triangles.len().div_ceil(MAX_SAMPLES).max(1);
+        if ma.triangles.iter().step_by(step).any(|tri| {
+            ma.tri(tri).is_none_or(|[p, q, r]| !covered((p + q + r) / 3.0))
+        }) {
+            return Err(bad(op, "part of the target lies outside the tool".into()));
+        }
+        return Ok(());
     };
     if r.solid.boundaries().iter().any(|s| s.shell_condition() != truck_modeling::ShellCondition::Closed) {
         return Err(bad(op, "the result is not closed".into()));
