@@ -335,7 +335,22 @@ fn closest(a: &mut Track, b: &mut Track, tol: f64) -> SplineResult<Crossing> {
         }
     }
     match found.as_slice() {
-        [c] => Ok(*c),
+        [c] => {
+            if !a.point && !b.point {
+                let da = a.ders(c.s)?.0;
+                let db = b.ders(c.r)?.0;
+                let speed = da.len() * db.len();
+                // Two coincident (or almost tangent) curves do not define a
+                // single, well-conditioned network crossing, even if a closest
+                // point search returned just one parameter pair.
+                if !(speed > 0.0 && speed.is_finite())
+                    || !(da.cross(db).len() / speed > 1e-3)
+                {
+                    return invalid(format!("{} and {} touch tangentially or overlap: the crossing is not unique", a.label, b.label));
+                }
+            }
+            Ok(*c)
+        }
         [] => {
             let (gap, at) = miss.unwrap_or((f64::INFINITY, Vec3::ZERO));
             invalid(format!(
@@ -1782,6 +1797,14 @@ mod tests {
         let bad = sampled_surface_quality(&folded, 24).unwrap();
         assert!(bad.foldover_pairs > 0, "{bad:?}");
         assert!(bad.maximum_normal_step_rad > 3.0);
+    }
+
+    #[test]
+    fn overlapping_network_curves_are_not_a_unique_crossing() {
+        let mut first = Track::new(line("first", Vec3::ZERO, Vec3::X * 10.0)).unwrap();
+        let mut second = Track::new(line("second", Vec3::X * 2.0, Vec3::X * 8.0)).unwrap();
+        let error = closest(&mut first, &mut second, 1e-4).unwrap_err();
+        assert!(error.to_string().contains("tangentially") || error.to_string().contains("overlap"), "{error}");
     }
 
     /// A shallow sinusoid crosses twice while its *whole length* remains near the
