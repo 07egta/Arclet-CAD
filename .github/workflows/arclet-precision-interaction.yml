@@ -1,6 +1,8 @@
 name: Arclet precision interaction regressions
 
 on:
+  push:
+    branches: [feat/arclet-precision-interaction]
   pull_request:
     branches: [main]
     paths:
