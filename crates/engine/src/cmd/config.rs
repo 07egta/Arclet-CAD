@@ -968,6 +968,29 @@ mod tests {
         assert_eq!(s.doc, before);
     }
 
+
+    #[test]
+    fn many_configuration_rows_validate_deterministically_without_changing_the_active_design() {
+        let mut s = Session::default();
+        run(&mut s, "parameters.add", json!({"name":"width","expression":"40 cm","unit":"mm"}));
+        run(&mut s, "parameters.add", json!({"name":"height","expression":"80 cm","unit":"mm"}));
+        run(&mut s, "solid.box", json!({"length":"width","width":"height","height":10}));
+        run(&mut s, "config.configure", json!({"params":["width","height"]}));
+        let widths: Vec<String> = (1..=8).map(|n| format!("{} cm", n * 5)).collect();
+        let heights: Vec<String> = (1..=8).map(|n| format!("{} cm", n * 10)).collect();
+        let sweep = run(&mut s, "config.sweep", json!({"prefix":"Batch","axes":{"width":widths,"height":heights}}));
+        assert_eq!(sweep["count"], 64);
+        let original = s.doc.clone();
+        let revision = s.revision;
+        let first = run(&mut s, "config.validate", json!({}));
+        assert_eq!(first["checked"], 65);
+        assert_eq!(first["failed"], 0, "{first}");
+        assert!(first["valid"].as_bool() == Some(true));
+        assert_eq!(first, run(&mut s, "config.validate", json!({})), "the same table must report identical results");
+        assert_eq!(s.doc, original, "bulk validation must never modify any saved row or the active design");
+        assert_eq!(s.revision, revision);
+    }
+
     #[test]
     fn configuration_sweep_varies_materials_and_feature_suppression_independently() {
         let mut s = Session::default();
