@@ -1082,15 +1082,15 @@ mod tests {
         pv.poll(2, None);
         assert!(pv.error.is_none(), "the corrected inputs can Apply while their preview computes");
         assert!(pv.running.is_some());
-        assert!(pv.active);
-        assert_eq!(pv.replaced, ["Turn"]);
-        assert_eq!(pv.key, 9, "the last good geometry stays visible");
+        assert!(!pv.active);
+        assert!(pv.replaced.is_empty(), "a new unstreamed input must restore the original scene");
+        assert_ne!(pv.key, 9, "obsolete geometry disappears before the new worker completes");
         tx.send(Err("unknown_angle".into())).unwrap();
         pv.poll(2, None);
         assert!(pv.error.is_none(), "a late obsolete result cannot disable Apply again");
         assert!(pv.running.is_none());
         assert_eq!(pv.shown_key, Some(1));
-        assert_eq!(pv.key, 9);
+        assert_ne!(pv.key, 9);
 
         let (tx, rx) = std::sync::mpsc::channel();
         pv.running = Some((2, rx));
