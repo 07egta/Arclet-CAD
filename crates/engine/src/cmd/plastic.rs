@@ -404,6 +404,101 @@ mod tests {
     }
 
     #[test]
+    fn plastic_audit_tracks_parametric_boss_wall_and_roundtrip() {
+        let mut s = Session::default();
+        run(&mut s, "parameters.change", json!({"name":"boss_od", "expression":"10 mm"}));
+        run(&mut s, "solid.box", json!({"length":60, "width":60, "height":3, "body_name":"Plate"}));
+        run(&mut s, "plastic.manage_rules", json!({
+            "name":"Thick Boss Rule",
+            "thickness":"4 mm",
+            "min_thickness":"3.5 mm",
+            "max_thickness":"5 mm",
+            "draft":"0 deg",
+            "active":true
+        }));
+        run(&mut s, "plastic.boss", json!({
+            "position":[30,30,3], "diameter":"boss_od",
+            "height":12, "hole_diameter":4, "body":"Plate"
+        }));
+        let first = run(&mut s, "plastic.audit", json!({"bodies":["Plate"]}));
+        assert_eq!(first["geometry_thickness_sampled"], false);
+        assert_eq!(first["molding_feasibility_certified"], false);
+        assert_eq!(first["body_rules"][0]["nominal_thickness_mm"], 4.0);
+        assert_eq!(first["feature_checks"][0]["nominal_mm"], 3.0);
+        assert_eq!(first["feature_checks"][0]["warnings"][0]["code"], "below_rule_min");
+
+        run(&mut s, "parameters.change", json!({"name":"boss_od", "expression":"12 mm"}));
+        let second = run(&mut s, "plastic.audit", json!({"bodies":["Plate"]}));
+        assert_eq!(second["feature_checks"][0]["nominal_mm"], 4.0);
+        assert_eq!(second["feature_checks"][0]["warnings"].as_array().map(Vec::len), Some(0));
+        let expected = 10800.0 + PI * (36.0 - 4.0) * 12.0;
+        assert!(rel(volume(&mut s), expected) < 1e-3);
+        let mut cold = Session::new(solidcraft_doc::Document::from_json(&s.doc.to_json()).unwrap());
+        let loaded = run(&mut cold, "plastic.audit", json!({"bodies":["Plate"]}));
+        assert_eq!(loaded["feature_checks"][0]["nominal_mm"], 4.0);
+        assert!(rel(volume(&mut cold), expected) < 1e-3);
+        assert!(cold.model.results.iter().all(|result| result.error.is_none()));
+    }
+
+    #[test]
+    fn invalid_plastic_rule_edits_and_unknown_bodies_preserve_document() {
+        let mut s = Session::default();
+        run(&mut s, "solid.box", json!({"length":20, "width":20, "height":2, "body_name":"Panel"}));
+        let saved = s.doc.to_json();
+        assert!(s.execute("plastic.manage_rules", &json!({
+            "name":"Impossible",
+            "min_thickness":"5 mm",
+            "max_thickness":"2 mm",
+        })).is_err());
+        assert_eq!(s.doc.to_json(), saved);
+        assert!(s.execute("plastic.audit", &json!({"bodies":["Nonexistent"]})).is_err());
+        assert_eq!(s.doc.to_json(), saved);
+        assert_eq!(run(&mut s, "inspect.measure", json!({}))["body_count"], 1);
+    }
+
+    #[test]
+    fn plastic_preflight_rejects_bad_boss_and_rest_without_mutation() {
+        let (mut s, baseline) = plate();
+        let boss = json!({"position":[30,30,3], "diameter":10, "height":12, "hole_diameter":4});
+        for (key, value) in [
+            ("fillet", json!(-1)),
+            ("draft", json!("60 deg")),
+            ("hole_depth", json!(13)),
+            ("ribs", json!(2.5)),
+            ("rib_offset", json!(-1)),
+        ] {
+            let mut p = boss.clone();
+            p[key] = value;
+            if key == "rib_offset" {
+                p["ribs"] = json!(4);
+            }
+            assert!(s.execute("plastic.boss", &p).is_err(), "expected rejection of {key}");
+            assert!(rel(volume(&mut s), baseline) < 1e-10, "{key} changed volume");
+        }
+        assert!(s.execute("plastic.boss", &json!({
+            "position":[30,30,3], "diameter":10, "height":12,
+            "hole_diameter":11, "draft":"-5 deg",
+        })).is_err(), "a widening boss still needs to fit the hole at its base");
+        assert!(rel(volume(&mut s), baseline) < 1e-10);
+
+        // Before this fix a valid tall hollow rest was rejected by a comparison
+        // against the wall thickness, not the opening at its top.
+        run(&mut s, "plastic.rest", json!({
+            "position":[30,30,3], "width":10, "length":20,
+            "height":16, "thickness":1, "draft":"2 deg",
+        }));
+        let after = volume(&mut s);
+        assert!(after > baseline && after < baseline + 896.0, "{after} {baseline}");
+        let saved = s.doc.to_json();
+        assert!(s.execute("plastic.rest", &json!({
+            "position":[10,10,3], "width":4, "height":15,
+            "thickness":1.7, "draft":"2 deg",
+        })).is_err(), "collapsed inner opening must be refused");
+        assert_eq!(s.doc.to_json(), saved);
+        assert!(rel(volume(&mut s), after) < 1e-10);
+    }
+
+    #[test]
     fn boss_with_hole_fillet_and_ribs() {
         let mut s = Session::default();
         run(&mut s, "solid.box", json!({"length": 60, "width": 60, "height": 3, "body_name": "Plate"}));
