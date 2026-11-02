@@ -7,7 +7,12 @@ use solidcraft_doc::config::{Column, ConfigRow, MAX_COLUMNS, MAX_ROWS, RuleTrace
 
 use super::CommandSpec;
 use crate::params::{bad, bool_, str_, string_list};
+use crate::schema::config::{SweepParams, SweepResult, ValidateParams, ValidateResult};
+use crate::schema::{TypedContract, output_schema_for};
 use crate::{Result, Session};
+
+const SWEEP_CONTRACT: TypedContract<SweepParams> = TypedContract::new();
+const VALIDATE_CONTRACT: TypedContract<ValidateParams> = TypedContract::new();
 
 pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("config.configure", "Configure", configure).at("SOLID", "CONFIGURE").icon("params").params(
@@ -25,10 +30,12 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("config.activate", "Activate Configuration", activate).icon("activate").params("row: name — sets its parameter values and suppressions"),
     CommandSpec::new("config.preview", "Preview Configuration", preview).icon("eye").noundo().params("row: name — validates a rebuild without changing the design or history"),
 
-    CommandSpec::new("config.sweep", "Configuration Sweep", sweep).icon("configuration_table").params(
+    CommandSpec::new("config.sweep", "Configuration Sweep", crate::checked!("config.sweep", sweep))
+        .icon("configuration_table").contract(&SWEEP_CONTRACT).output(output_schema_for::<SweepResult>).params(
         "prefix?: name; from?: existing row (defaults to active row); axes: {column key or parameter name: [expressions...]}; preview?: bool — atomically generate and validate up to 128 configurations",
     ),
-    CommandSpec::new("config.validate", "Validate Configurations", validate).icon("configuration_table").noundo().params(
+    CommandSpec::new("config.validate", "Validate Configurations", crate::checked!("config.validate", validate))
+        .icon("configuration_table").noundo().contract(&VALIDATE_CONTRACT).output(output_schema_for::<ValidateResult>).params(
         "details?: bool — independently rebuild every configuration row and report all errors without modifying the design",
     ),
     CommandSpec::new("config.rule", "Configuration Rule", rule).icon("configuration_table").params(
