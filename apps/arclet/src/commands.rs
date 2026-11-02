@@ -171,7 +171,7 @@ const ALIASES: &[(&str, &str)] = &[
     ("polygon", "sketch.polygon.inscribed"),
     ("polygoncircumscribed", "sketch.polygon.circumscribed"),
     ("polygonedge", "sketch.polygon.edge"),
-    ("polyline", "sketch.chain"),
+    ("polyline", "sketch.line"),
     ("presspull", "solid.press_pull"),
     ("project", "sketch.project"),
     ("projecttosurface", "sketch.project_to_surface"),
@@ -413,7 +413,7 @@ mod tests {
     fn rhino_style_names_resolve() {
         for (name, id) in [
             ("arc", "sketch.arc.three_point"),
-            ("polyline", "sketch.chain"),
+            ("polyline", "sketch.line"),
             ("ellipse", "sketch.ellipse"),
             ("polygon", "sketch.polygon.inscribed"),
             ("point", "sketch.point"),
