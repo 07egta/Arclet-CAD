@@ -14,6 +14,8 @@ use crate::{EngineError, Result, Session};
 
 #[path = "appearance_chain.rs"]
 mod appearance_chain;
+#[path = "inspect_inertia.rs"]
+mod inspect_inertia;
 
 pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("inspect.colored_components", "Enable Component Colors", colored_components)
@@ -24,7 +26,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         .icon("measure")
         .key("I")
         .noundo()
-        .params("bodies?: [names] (default all); quality?: bool to add per-body validity and edge diagnostics; min_edge_mm?: positive threshold (default 0.01) when quality is requested. Only valid closed bodies return volume_mm3/center_of_mass; area/bbox for other measurable bodies, method and unknown error bounds are marked. Totals are null when measurements fail. Or items: [1-2 selections] (face/edge/body/sketch) → length/area/volume, distance, angle, analytic-versus-sampled method and witness points"),
+        .params("bodies?: [names] (default all); quality?: bool to add per-body validity and edge diagnostics; inertia?: bool for opt-in approximate mass inertia tensor; min_edge_mm?: positive threshold (default 0.01) when quality is requested. Only valid closed bodies return volume_mm3/center_of_mass; area/bbox for other measurable bodies, method and unknown error bounds are marked. Totals are null when measurements fail. Or items: [1-2 selections] (face/edge/body/sketch) → length/area/volume, distance, angle, analytic-versus-sampled method and witness points"),
     CommandSpec::new("document.inspect", "Inspect Design", inspect).icon("inspect").noundo().params("measure?: bool (include body measurements)"),
     CommandSpec::new("document.revision", "Design Revision", revision).icon("inspect").noundo().params(
         "→ document_id (this open design's id: kept while it stays open, another for each design started or opened), \
@@ -141,12 +143,15 @@ pub fn measure_json(b: &solidcraft_doc::ModelBody) -> Value {
 
 /// Expensive opt-in diagnostics, not a claim of certified manifoldness or watertightness.
 /// A bounding-box dimension is a *screening heuristic*, never a wall thickness.
-fn body_quality(b: &solidcraft_doc::ModelBody, measured: &Value, min_edge_mm: f64) -> Value {
+fn body_quality(b: &solidcraft_doc::ModelBody, measured: &Value, min_edge_mm: f64, with_inertia: bool) -> Value {
     let mut issues = b.body.validity();
     if let Some(err) = measured["error"].as_str()
         && !issues.iter().any(|s| s.contains(err))
     {
         issues.push(err.to_string());
+    }
+    if with_inertia && let Some(err) = measured["inertia"]["error"].as_str() {
+        issues.push(format!("inertia: {err}"));
     }
     let tol = (b.body.size() * 2e-3).max(1e-3);
     let mut short_edges = Vec::new();
@@ -175,6 +180,15 @@ fn body_quality(b: &solidcraft_doc::ModelBody, measured: &Value, min_edge_mm: f6
         let hi: solidcraft_geom::Vec3 = serde_json::from_value(b.get("max")?.clone()).ok()?;
         Some((hi.x - lo.x).min(hi.y - lo.y).min(hi.z - lo.z))
     });
+    let mut not_checked = vec![
+        "certified_wall_thickness", "self_intersection", "global_nonmanifold_classification",
+        "certified_nurbs_measure_error",
+    ];
+    if !with_inertia {
+        not_checked.push("mass_inertia_tensor");
+    } else if measured["inertia"]["error"].is_string() {
+        not_checked.push("mass_inertia_tensor_unavailable");
+    }
     json!({
         "body": b.name,
         "passed_available_checks": issues.is_empty(),
@@ -187,10 +201,7 @@ fn body_quality(b: &solidcraft_doc::ModelBody, measured: &Value, min_edge_mm: f6
         "minimum_bbox_dimension_mm": minimum_bbox_dimension_mm,
         "minimum_bbox_dimension_is_wall_thickness": false,
         "checked": ["shell_closure", "face_tessellation", "positive_volume", "edge_lengths"],
-        "not_checked": [
-            "certified_wall_thickness", "self_intersection", "global_nonmanifold_classification",
-            "certified_nurbs_measure_error", "mass_inertia_tensor"
-        ],
+        "not_checked": not_checked,
     })
 }
 
@@ -229,6 +240,11 @@ fn measure(s: &mut Session, p: &Value) -> Result<Value> {
         None => false,
         Some(Value::Bool(v)) => *v,
         _ => return Err(bad(cmd, "`quality` must be a boolean")),
+    };
+    let with_inertia = match p.get("inertia") {
+        None => false,
+        Some(Value::Bool(v)) => *v,
+        _ => return Err(bad(cmd, "`inertia` must be a boolean")),
     };
     let min_edge_mm = match p.get("min_edge_mm") {
         None => 0.01,
@@ -287,15 +303,38 @@ fn measure(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
     }
+    // A virtual perforation is not cut into the B-rep. Its mass distribution is
+    // unknown, even when the perforation's area/volume correction is available.
+    // The inertia tensor is therefore refused rather than integrating the uncut sheet.
+    if with_inertia {
+        for (row, model) in bodies.iter_mut().zip(&selected) {
+            let virtual_perforation = sheets.iter().any(|sh| sh.body == row["name"].as_str().unwrap_or("") && sh.perforated_area() > 0.0);
+            let volume = row["volume_mm3"].as_f64();
+            let center: Option<solidcraft_geom::Vec3> = serde_json::from_value(row["center_of_mass"].clone()).ok();
+            let density = row["density_g_cm3"].as_f64();
+            row["inertia"] = match (volume, center, density) {
+                _ if virtual_perforation => json!({"error": "inertia of virtual sheet perforations is not modeled"}),
+                (Some(volume), Some(center), Some(density)) if row["error"].is_null() => {
+                    inspect_inertia::measure(&model.body, volume, center, density)
+                }
+                _ => json!({"error": "inertia requires an intact, valid closed solid and finite material density"}),
+            };
+        }
+    }
     // A failed closed body's contribution is *unknown*, not zero.
     let mut quality_rows = Vec::new();
     if quality {
         // Preserve the names and ordering of the requested bodies.
         for (b, v) in selected.iter().zip(&bodies) {
-            quality_rows.push(body_quality(b, v, min_edge_mm));
+            quality_rows.push(body_quality(b, v, min_edge_mm, with_inertia));
         }
     }
-    let total = measurement_totals(&bodies);
+    let mut total = measurement_totals(&bodies);
+    if with_inertia {
+        let failures = bodies.iter().filter(|b| b["inertia"]["error"].is_string()).count();
+        total["inertia_complete"] = json!(failures == 0);
+        total["inertia_failures"] = json!(failures);
+    }
     let mut result = json!({"body_count": bodies.len(), "bodies": bodies, "total": total});
     if quality {
         let failed = quality_rows.iter().filter(|q| q["passed_available_checks"] == false).count();
@@ -1045,6 +1084,47 @@ mod geometry_inspection_tests {
     }
 
     #[test]
+    fn box_inertia_tensormap_matches_analytic_mass_moments() {
+        let mut s = Session::default();
+        run(&mut s, "solid.box", json!({
+            "length": 10, "width": 20, "height": 30, "corner": [0, 0, 0], "body_name": "Block"
+        }));
+        run(&mut s, "material.assign", json!({"bodies": ["Block"], "material": "Steel"}));
+        let report = run(&mut s, "inspect.measure", json!({"inertia": true}));
+        let body = &report["bodies"][0];
+        let inertia = &body["inertia"];
+        assert_eq!(inertia["method"], "signed_tetrahedra_fine_tessellation", "{report}");
+        assert_eq!(report["total"]["inertia_complete"], true, "{report}");
+        assert_eq!(inertia["error_bound_g_mm2"], Value::Null);
+        let mass = inertia["mass_g"].as_f64().unwrap();
+        assert!(mass > 0.0);
+        for (axis, d2) in [20.0_f64.powi(2) + 30.0_f64.powi(2), 10.0_f64.powi(2) + 30.0_f64.powi(2), 10.0_f64.powi(2) + 20.0_f64.powi(2)].iter().enumerate() {
+            let expected = mass * d2 / 12.0;
+            close(&inertia["tensor_g_mm2"][axis][axis], expected, expected * 1e-4, "g mm^2");
+            for other in 0..3 {
+                if other != axis {
+                    close(&inertia["tensor_g_mm2"][axis][other], 0.0, expected * 1e-6, "g mm^2");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn sphere_inertia_near_two_fifths_mass_radius_squared() {
+        let mut s = Session::default();
+        run(&mut s, "solid.sphere", json!({"radius": 5.0, "center": [0, 0, 0], "body_name": "Sphere"}));
+        run(&mut s, "material.assign", json!({"bodies": ["Sphere"], "material": "Steel"}));
+        let report = run(&mut s, "inspect.measure", json!({"inertia": true}));
+        let inertia = &report["bodies"][0]["inertia"];
+        let mass = inertia["mass_g"].as_f64().unwrap_or(f64::NAN);
+        assert!(mass.is_finite() && mass > 0.0, "{report}");
+        let expected = 0.4 * mass * 25.0;
+        for axis in 0..3 {
+            close(&inertia["tensor_g_mm2"][axis][axis], expected, 0.02 * expected, "g mm^2");
+        }
+    }
+
+    #[test]
     fn hostile_quality_thresholds_are_rejected() {
         let mut s = Session::default();
         for value in [json!(0.0), json!(-1.0), json!("tiny"), Value::Null, json!(1e20)] {
@@ -1052,6 +1132,7 @@ mod geometry_inspection_tests {
         }
         for value in [Value::Null, json!("yes"), json!(1)] {
             assert!(s.execute("inspect.measure", &json!({"quality": value})).is_err(), "{value}");
+            assert!(s.execute("inspect.measure", &json!({"inertia": value})).is_err(), "{value}");
         }
     }
 }
