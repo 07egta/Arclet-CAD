@@ -494,6 +494,30 @@ mod tests {
         let _ = std::fs::remove_dir_all(d);
     }
 
+
+    #[test]
+    fn scan_to_cad_body_distance_is_an_unsigned_mesh_based_deviation() {
+        let d = dir("cad-distance");
+        let points: Vec<[f32; 3]> = (1..9).flat_map(|x| (1..9).map(move |y| {
+            [x as f32, y as f32, 10.25]
+        })).collect();
+        let file = ply(&d, "above-top.ply", &points, false);
+        let mut s = Session::default();
+        s.execute("solid.box", &json!({"length":10,"width":10,"height":10,"body_name":"Target"})).unwrap();
+        let body = s.model.state().bodies.first().unwrap().name.clone();
+        let scan = s.execute("pointcloud.insert", &json!({"path":file})).unwrap()["cloud"].as_u64().unwrap();
+        let before = s.doc.clone();
+        let result = s.execute("pointcloud.analyze", &json!({"cloud":scan,"mode":"cad_distance","body":body,"tolerance_mm":0.3})).unwrap();
+        assert_eq!(result["result"]["method"], "unsigned_distance_to_reference_tessellation");
+        let rms = result["result"]["quality"]["rms_mm"].as_f64().unwrap();
+        assert!((rms - 0.25).abs() < 1e-5, "{result}");
+        assert_eq!(result["result"]["quality"]["inlier_fraction"], 1.0);
+        assert_eq!(s.doc, before);
+        assert!(s.execute("pointcloud.analyze", &json!({"cloud":scan,"mode":"cad_distance","body":"Missing"})).is_err());
+        assert_eq!(s.doc, before);
+        let _ = std::fs::remove_dir_all(d);
+    }
+
     #[test]
     fn scan_alignment_returns_translation_but_never_applies_it() {
         let d = dir("alignment");
