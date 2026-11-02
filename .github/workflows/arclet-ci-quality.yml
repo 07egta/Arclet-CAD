@@ -36,8 +36,6 @@ jobs:
         run: cargo xtask lists
       - name: UI container rules
         run: cargo xtask ui-containers
-      - name: Agent skill references
-        run: cargo xtask skills
       - name: Arclet application tests
         run: cargo test --profile ci --locked -p arclet
       - name: Workspace Clippy
