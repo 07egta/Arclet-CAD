@@ -20,6 +20,8 @@ use solidcraft_ui_egui::theme::Tokens;
 use solidcraft_ui_egui::ui_kit::{self, Button, Container, Edge, Surface};
 use solidcraft_ui_egui::{SolveApp, icons, prefs};
 
+use crate::classic_look::chrome;
+
 const OPEN_WIDTH: f32 = 300.0;
 const COLLAPSED_WIDTH: f32 = 28.0;
 
@@ -102,6 +104,7 @@ pub fn show(ui: &mut Ui, cad: &mut SolveApp, state: &mut PanelState) {
 
 impl PanelState {
     fn body(&mut self, cad: &mut SolveApp, ui: &mut Ui) {
+        ui.spacing_mut().item_spacing.y = chrome::PANEL_ROW_GAP;
         if !self.open {
             // The thin edge button: the only thing drawn while the panel is folded away.
             ui.vertical_centered(|ui| {
@@ -111,34 +114,47 @@ impl PanelState {
             });
             return;
         }
-        ui.horizontal_wrapped(|ui| {
-            for (tab, label) in [
-                (Tab::Properties, "arclet.panel.tab.properties"),
-                (Tab::Groups, "arclet.panel.tab.groups"),
-                (Tab::Layers, "arclet.panel.tab.layers"),
-                (Tab::Display, "arclet.panel.tab.display"),
-            ] {
-                let style = if self.tab == tab { Button::Primary } else { Button::Ghost };
-                if ui_kit::button(ui, tr(label), style).clicked() {
-                    self.tab = tab;
-                }
-            }
-        });
+        // Keep the tab strip at one height across languages, instead of jumping
+        // between one and two rows as translated labels or panel width change.
+        egui::ScrollArea::horizontal()
+            .id_salt("arclet_inspector_tabs")
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = chrome::ITEM_GAP;
+                    for (tab, label) in [
+                        (Tab::Properties, "arclet.panel.tab.properties"),
+                        (Tab::Groups, "arclet.panel.tab.groups"),
+                        (Tab::Layers, "arclet.panel.tab.layers"),
+                        (Tab::Display, "arclet.panel.tab.display"),
+                    ] {
+                        let style = if self.tab == tab { Button::SmallSelected } else { Button::Ghost };
+                        if ui_kit::button(ui, tr(label), style).clicked() {
+                            self.tab = tab;
+                        }
+                    }
+                });
+            });
         ui.separator();
         if let Some(error) = &self.error {
             ui.colored_label(Tokens::get().error, error);
         }
-        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| match self.tab {
-            Tab::Properties => self.properties(cad, ui),
-            Tab::Groups => self.groups(cad, ui),
-            Tab::Layers => self.layers(cad, ui),
-            Tab::Display => self.display(cad, ui),
-        });
+        // Reserve the fold control before the scroll area claims the available
+        // vertical space. Long property lists can scroll without burying Close.
         ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
             if ui_kit::button(ui, "›", Button::Small).on_hover_text(tr("arclet.panel.collapse")).clicked() {
                 self.open = false;
             }
         });
+        egui::ScrollArea::vertical()
+            .id_salt(("arclet_inspector_content", self.tab as u8))
+            .auto_shrink([false, false])
+            .show(ui, |ui| match self.tab {
+                Tab::Properties => self.properties(cad, ui),
+                Tab::Groups => self.groups(cad, ui),
+                Tab::Layers => self.layers(cad, ui),
+                Tab::Display => self.display(cad, ui),
+            });
     }
 
     /// Run a command through the shared host. A refusal is kept for the panel to show.
@@ -164,10 +180,12 @@ impl PanelState {
         };
         let (kind, name) = describe(&cad.session, first);
         let bodies = selected_bodies(&cad.session.selection);
+        ui.label(RichText::new(kind_label(kind)).size(tokens.font_small).color(tokens.text_dim));
         rows(ui, "arclet_panel_props", &[("arclet.panel.name", name)]);
-        ui.label(RichText::new(kind_label(kind)).color(tokens.text_dim));
-        ui.label(RichText::new(message("arclet.panel.selected_count", &[("count", &count.to_string())])).color(tokens.text_dim));
+        ui.label(RichText::new(message("arclet.panel.selected_count", &[("count", &count.to_string())])).size(tokens.font_caption).color(tokens.text_dim));
         if !bodies.is_empty() {
+            ui.add_space(tokens.space_8);
+            ui.separator();
             self.refresh_measure(cad, &bodies);
             if let Some(measured) = &self.measured {
                 match &measured.result {
@@ -542,25 +560,32 @@ fn measurement_rows(ui: &mut Ui, cad: &SolveApp, value: &Value) {
         }
     }
     lines.push(("arclet.panel.counts", format!("{} / {} / {}", count(&total["faces"]), count(&total["edges"]), count(&total["vertices"]))));
-    egui::Grid::new("arclet_panel_measure").num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
-        for (label, text) in lines {
-            ui.label(RichText::new(tr(label)).color(tokens.text_dim));
-            ui.label(text);
-            ui.end_row();
-        }
-    });
+    egui::Grid::new("arclet_panel_measure")
+        .num_columns(2)
+        .spacing([chrome::PROPERTY_COLUMN_GAP, chrome::PANEL_ROW_GAP])
+        .show(ui, |ui| {
+            for (label, text) in lines {
+                ui.label(RichText::new(tr(label)).size(tokens.font_caption).color(tokens.text_dim));
+                ui.add(egui::Label::new(RichText::new(text.as_str()).monospace()).truncate()).on_hover_text(text.as_str());
+                ui.end_row();
+            }
+        });
 }
 
 /// Name / value rows for the selection summary.
 fn rows(ui: &mut Ui, id: &str, lines: &[(&str, String)]) {
     let tokens = Tokens::get();
-    egui::Grid::new(id).num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
-        for (label, text) in lines {
-            ui.label(RichText::new(tr(label)).color(tokens.text_dim));
-            ui.label(text.as_str());
-            ui.end_row();
-        }
-    });
+    egui::Grid::new(id)
+        .num_columns(2)
+        .spacing([chrome::PROPERTY_COLUMN_GAP, chrome::PANEL_ROW_GAP])
+        .show(ui, |ui| {
+            for (label, text) in lines {
+                ui.label(RichText::new(tr(label)).size(tokens.font_caption).color(tokens.text_dim));
+                ui.add(egui::Label::new(RichText::new(text.as_str()).strong().color(tokens.text)).truncate())
+                    .on_hover_text(text.as_str());
+                ui.end_row();
+            }
+        });
 }
 
 /// A count from the measurement JSON, or a dash when the engine did not report it.
