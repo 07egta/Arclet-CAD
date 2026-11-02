@@ -398,6 +398,55 @@ impl Sketch {
         Ok(n)
     }
 
+    /// Insert a fit point inside a drawn smooth 3D spline. Preserve both endpoints and
+    /// the wire id used by downstream pipe/sweep features. No mutation takes place unless
+    /// both the new spline and the sketch's total wire budget are valid.
+    pub fn insert_drawn_fit_point(&mut self, wire: &str, before: usize, at: Vec3) -> Result<usize> {
+        let index = self.wire_index(wire).ok_or_else(|| SketchError::Unknown(wire.into()))?;
+        let original = self.wires.get(index).ok_or_else(|| SketchError::Unknown(wire.into()))?;
+        if original.link.is_some() || original.arc.is_some() || original.fit.len() < 3 {
+            return Err(SketchError::Invalid("fit-point insertion needs an editable 3D spline (not an arc, line or link)".into()));
+        }
+        if before == 0 || before >= original.fit.len() || original.fit.len() >= MAX_FIT_POINTS {
+            return Err(SketchError::Invalid("insert before an interior fit point (spline fit-point limit: 500)".into()));
+        }
+        let mut fit = original.fit.clone();
+        fit.insert(before, at);
+        self.replace_drawn_fit(index, fit)
+    }
+
+    /// Remove an interior fit point without detaching references to the curve itself.
+    /// If three fit points become two the resulting curve is intentionally a straight line.
+    pub fn remove_drawn_fit_point(&mut self, wire: &str, index: usize) -> Result<usize> {
+        let w = self.wire_index(wire).ok_or_else(|| SketchError::Unknown(wire.into()))?;
+        let original = self.wires.get(w).ok_or_else(|| SketchError::Unknown(wire.into()))?;
+        if original.link.is_some() || original.arc.is_some() || original.fit.len() < 3 {
+            return Err(SketchError::Invalid("fit-point removal needs an editable 3D spline (not an arc, line or link)".into()));
+        }
+        if index == 0 || index >= original.fit.len() - 1 {
+            return Err(SketchError::Invalid("only an interior spline fit point may be removed".into()));
+        }
+        let mut fit = original.fit.clone();
+        fit.remove(index);
+        self.replace_drawn_fit(w, fit)
+    }
+
+    /// Commit a replacement only after re-sampling, coordinate and budget validation.
+    fn replace_drawn_fit(&mut self, index: usize, fit: Vec<Vec3>) -> Result<usize> {
+        let pts = drawn_polyline(&fit)?;
+        let count = self.wires.iter().enumerate().filter(|(i, _)| *i != index).fold(pts.len().saturating_add(fit.len()), |sum, (_, w)| {
+            sum.saturating_add(w.pts.len()).saturating_add(w.fit.len())
+        });
+        if count > 1_000_000 {
+            return Err(SketchError::Invalid("3D curves exceed the stored geometry budget".into()));
+        }
+        let len = fit.len();
+        let wire = self.wires.get_mut(index).ok_or_else(|| SketchError::Invalid("3D curve disappeared".into()))?;
+        wire.fit = fit;
+        wire.pts = pts;
+        Ok(len)
+    }
+
     /// Remove wires by id.
     pub fn remove_wires(&mut self, ids: &[String]) {
         self.wires.retain(|w| !ids.contains(&w.id));
