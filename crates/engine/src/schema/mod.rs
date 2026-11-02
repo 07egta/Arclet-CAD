@@ -63,6 +63,7 @@ pub mod layers;
 pub mod point_cloud;
 pub mod sketch_constraints;
 pub mod sketch_create;
+pub mod sketch_modeling;
 pub mod sketch_rebuild;
 pub mod view_navigation;
 
