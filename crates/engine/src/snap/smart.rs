@@ -377,7 +377,7 @@ pub fn query_snaps(objects: &[SnapObject], query: &SnapQuery) -> Result<SnapResu
     let mut out = Collector { query, candidates: Vec::new() };
     let mut active: Vec<(&SnapObject, WorldGeometry<'_>)> = objects.iter()
         .filter(|o| (o.visible || settings.include_hidden) && (!o.locked || settings.include_locked))
-        .filter_map(|o| Some((o, world_geometry(o)?))).collect();
+        .filter_map(|o| world_geometry(o).map(|geometry| (o, geometry))).collect();
     // Pairwise floating-point calculations must see the same orientation, no
     // matter how the renderer or caller ordered the input object list.
     active.sort_by(|a, b| a.0.id.cmp(&b.0.id));
@@ -709,15 +709,69 @@ fn offer_shape(out: &mut Collector<'_>, id: &str, shape: &WorldGeometry<'_>) {
             ) {
                 out.offer(id, SnapKind::Nearest, p, SnapAccuracy::Evaluated);
             }
-            if let Some(r) = reference
-                && let Some(p) = evaluated_nearest(
+            if let Some(r) = reference {
+                if let Some(p) = evaluated_nearest(
                     |t| sample_curve_point(curve, *tr, t),
                     |p| Some(length(p - r)),
                 ) {
-                out.offer(id, SnapKind::Perpendicular, p, SnapAccuracy::Evaluated);
+                    out.offer(id, SnapKind::Perpendicular, p, SnapAccuracy::Evaluated);
+                }
+                if query.settings.enabled.contains(&SnapKind::Tangent) {
+                    for p in nurbs_tangencies(curve, *tr, r) {
+                        out.offer(id, SnapKind::Tangent, p, SnapAccuracy::Evaluated);
+                    }
+                }
             }
         }
     }
+}
+
+/// Numerically find transverse tangent contacts from an external point to an
+/// editable spline. A zero angle residual verifies collinearity with the exact
+/// NURBS derivative; sampling may miss a very narrow or multiple root.
+fn nurbs_tangencies(curve: &NurbsCurve, transform: SnapTransform, reference: Vec3) -> Vec<Vec3> {
+    let shape = WorldGeometry::Nurbs(curve, transform);
+    let angle_error = |t: f64| -> Option<f64> {
+        let (p, direction) = curve_point_and_tangent(&shape, t)?;
+        let q = p - reference;
+        let denom = length(q) * length(direction);
+        if !(denom > 0.0 && denom.is_finite()) {
+            return None;
+        }
+        let error = length(q.cross(direction)) / denom;
+        error.is_finite().then_some(error)
+    };
+    let values: Vec<f64> = (0..=SEARCH_STEPS)
+        .map(|i| angle_error(i as f64 / SEARCH_STEPS as f64).unwrap_or(f64::INFINITY))
+        .collect();
+    let mut points = Vec::new();
+    for i in 1..SEARCH_STEPS {
+        let v = values[i];
+        if !v.is_finite() || v > values[i - 1] || v > values[i + 1] {
+            continue;
+        }
+        let mut low = (i - 1) as f64 / SEARCH_STEPS as f64;
+        let mut high = (i + 1) as f64 / SEARCH_STEPS as f64;
+        for _ in 0..42 {
+            let a = low + (high - low) * 0.3819660112501051;
+            let b = high - (high - low) * 0.3819660112501051;
+            if angle_error(a).unwrap_or(f64::INFINITY) <= angle_error(b).unwrap_or(f64::INFINITY) {
+                high = b;
+            } else {
+                low = a;
+            }
+        }
+        let t = (low + high) * 0.5;
+        if angle_error(t).is_some_and(|e| e <= 1e-7)
+            && let Some((p, _)) = curve_point_and_tangent(&shape, t)
+            && !points.iter().any(|existing: &Vec3| length(*existing - p) <= 1e-8 * (1.0 + length(p - reference))) {
+            points.push(p);
+            if points.len() >= 8 {
+                break;
+            }
+        }
+    }
+    points
 }
 
 fn circle_tangencies(circle: Round, reference: Vec3) -> Vec<Vec3> {
