@@ -1,0 +1,98 @@
+name: Arclet industrial UI visual review
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'apps/arclet/**'
+      - 'assets/styles/ui/themes/classic.json'
+      - 'assets/locales/pending/arclet-ultimate-ui-polish.json'
+      - 'docs/arclet-ui-polish.md'
+      - '.github/workflows/arclet-visual-review.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: arclet-visual-review-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  arclet:
+    name: Arclet lint, interaction tests and real screenshots
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Install native display libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb libxkbcommon-dev libwayland-dev libx11-dev mesa-vulkan-drivers
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Check locale catalog integrity
+        run: cargo xtask lists
+      - name: Check UI container boundaries
+        run: cargo xtask ui-containers
+      - name: Run Arclet tests
+        run: cargo test --profile ci --locked -p arclet
+      - name: Strict Arclet Clippy
+        run: cargo clippy --profile ci --locked -p arclet --all-targets -- -D warnings
+      - name: Build the real desktop application
+        run: cargo build --profile ci --locked -p arclet
+      - name: Capture real Arclet states under Xvfb
+        shell: bash
+        run: |
+          set -euo pipefail
+          output="$RUNNER_TEMP/arclet-visual-review"
+          mkdir -p "$output"
+          cp docs/screenshots/arclet-ui-2026-11-02.png "$output/reference-existing.png"
+          for state in empty model sketch nodes zebra; do
+            args=()
+            case "$state" in
+              empty) ;;
+              model) args=(--sample) ;;
+              sketch) args=(--curve-sample) ;;
+              nodes) args=(--nodes) ;;
+              zebra) args=(--sample --zebra) ;;
+            esac
+            echo "::group::Native Arclet capture: $state"
+            LIBGL_ALWAYS_SOFTWARE=1 WGPU_BACKEND=vulkan \
+              xvfb-run -a -s "-screen 0 1920x1200x24" \
+              timeout 180s target/ci/arclet "${args[@]}" --screenshot "$output/after-$state.png" \
+              2>&1 | tee "$output/$state.log"
+            test -s "$output/after-$state.png"
+            echo "::endgroup::"
+          done
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          import os
+          import struct
+
+          root = Path(os.environ["RUNNER_TEMP"]) / "arclet-visual-review"
+          images = sorted(root.glob("*.png"))
+          if len(images) != 6:
+              raise SystemExit(f"Expected five actual captures and one repository reference, got {len(images)}")
+          for path in images:
+              blob = path.read_bytes()
+              if len(blob) < 24 or blob[:8] != bytes.fromhex("89504e470d0a1a0a"):
+                  raise SystemExit(f"Not a valid PNG header: {path}")
+              width, height = struct.unpack(">II", blob[16:24])
+              if width < 800 or height < 500:
+                  raise SystemExit(f"Capture too small: {path} ({width}x{height})")
+              print(f"{path.name}: {width}x{height}, sha256={hashlib.sha256(blob).hexdigest()}")
+          PY
+      - name: Preserve captures and logs even when capture fails
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: arclet-industrial-ui-evidence
+          path: ${{ runner.temp }}/arclet-visual-review/
+          if-no-files-found: warn
+          retention-days: 14
