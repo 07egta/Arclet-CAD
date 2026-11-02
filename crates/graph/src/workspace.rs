@@ -5,10 +5,12 @@
 //! validate geometry and commit changes transactionally.
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
+use solidcraft_slice::Tri;
 
-use crate::{DataType, Graph, GraphError, MAX_DOCUMENT_BYTES, MAX_NODES, NodeId, output_type};
+use crate::{DataType, Evaluation, Graph, GraphError, MAX_DOCUMENT_BYTES, MAX_NODES, NodeId, Value, output_type};
 
 const FORMAT: &str = "arclet.graph-workspace";
 const VERSION: u32 = 1;
@@ -42,6 +44,15 @@ pub struct ModelOutputLink {
     pub node: NodeId,
     pub output: usize,
     pub model_object_id: String,
+}
+
+/// Output geometry prepared for a CAD host to validate and commit.
+/// This never mutates a CAD document, and is not persisted as a mesh cache.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ModelMeshSnapshot {
+    pub model_object_id: String,
+    /// Multiple tree items can form one CAD object; each mesh is Arc-shared.
+    pub meshes: Vec<Arc<Vec<Tri>>>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -93,6 +104,33 @@ fn invalid(message: impl Into<String>) -> GraphError {
 }
 
 impl GraphWorkspace {
+    /// Resolve **all** configured solid outputs without modifying the model.
+    /// An errored/missing/non-solid output rejects the entire snapshot so a
+    /// host can validate the full set before starting a document transaction.
+    pub fn resolved_model_meshes(&self, evaluation: &Evaluation) -> Result<Vec<ModelMeshSnapshot>, GraphError> {
+        self.validate()?;
+        let mut snapshots = Vec::with_capacity(self.model_links.len());
+        for link in &self.model_links {
+            let tree = evaluation.outputs.get(&(link.node, link.output)).ok_or_else(|| {
+                invalid(format!("model link '{}' has no successful evaluation output", link.model_object_id))
+            })?;
+            let mut meshes = Vec::new();
+            for value in tree.branches.values().flatten() {
+                match value {
+                    Value::Solid(triangles) => meshes.push(Arc::clone(triangles)),
+                    other => return Err(invalid(format!(
+                        "model link '{}' expects Solid, received {}", link.model_object_id, other.kind()
+                    ))),
+                }
+            }
+            if meshes.is_empty() {
+                return Err(invalid(format!("model link '{}' resolved to an empty output", link.model_object_id)));
+            }
+            snapshots.push(ModelMeshSnapshot { model_object_id: link.model_object_id.clone(), meshes });
+        }
+        Ok(snapshots)
+    }
+
     pub fn new(graph: Graph) -> Self {
         Self { graph, ..Self::default() }
     }
