@@ -350,12 +350,18 @@ impl ArcletApp {
                         }
                     }
                     ui.separator();
-                    ui.add_enabled_ui(!self.cad.nodes.open, |ui| self.menus(ui));
-                    ui_kit::Menu::button(ui, tr("arclet.menu.help"), |ui| {
-                        if ui_kit::button(ui, tr("arclet.help"), ui_kit::Button::Normal).clicked() {
-                            self.help = !self.help;
-                            ui.close();
-                        }
+                    // Menu titles are plain text until hovered, like a classic menu bar.
+                    ui.scope(|ui| {
+                        let widgets = &mut ui.visuals_mut().widgets;
+                        widgets.inactive.weak_bg_fill = egui::Color32::TRANSPARENT;
+                        widgets.inactive.bg_stroke = egui::Stroke::NONE;
+                        ui.add_enabled_ui(!self.cad.nodes.open, |ui| self.menus(ui));
+                        ui_kit::Menu::button(ui, tr("arclet.menu.help"), |ui| {
+                            if ui_kit::button(ui, tr("arclet.help"), ui_kit::Button::Normal).clicked() {
+                                self.help = !self.help;
+                                ui.close();
+                            }
+                        });
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui_kit::button(ui, tr("arclet.settings"), ui_kit::Button::Ghost).clicked() {
@@ -465,7 +471,9 @@ impl ArcletApp {
     }
 
     fn tools(&mut self, ui: &mut Ui) {
-        if self.cad.nodes.open {
+        // The left main toolbar and the Curve menu already start every drawing tool, so this
+        // strip only appears while a sketch is open, with that sketch's own tools.
+        if self.cad.nodes.open || self.cad.session.active_sketch.is_none() {
             return;
         }
         let tokens = Tokens::get();
@@ -474,26 +482,15 @@ impl ArcletApp {
             .frame(Container::new(ui.ctx(), Surface::ApplicationBar).edge_frame(tokens.panel).inner_margin(egui::Margin::symmetric(12, 6)))
             .show(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
-                    for &(label, id) in CURVES {
+                    for (label, id) in
+                        [("arclet.trim", "sketch.trim"), ("arclet.offset", "sketch.offset"), ("arclet.point", "sketch.spline.insert_point")]
+                    {
                         if tool_button(ui, label, id).clicked() {
                             self.start(id);
                         }
                     }
-                    ui.separator();
-                    if self.cad.session.active_sketch.is_some() {
-                        for (label, id) in
-                            [("arclet.trim", "sketch.trim"), ("arclet.offset", "sketch.offset"), ("arclet.point", "sketch.spline.insert_point")]
-                        {
-                            if tool_button(ui, label, id).clicked() {
-                                self.start(id);
-                            }
-                        }
-                        if ui_kit::button(ui, tr("arclet.finish_sketch"), ui_kit::Button::Primary).clicked() {
-                            self.cad.finish_sketch();
-                        }
-                    }
-                    if ui_kit::button(ui, tr("arclet.all_tools"), ui_kit::Button::Ghost).clicked() {
-                        self.start("ui.palette");
+                    if ui_kit::button(ui, tr("arclet.finish_sketch"), ui_kit::Button::Primary).clicked() {
+                        self.cad.finish_sketch();
                     }
                 });
             });

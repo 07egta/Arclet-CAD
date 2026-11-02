@@ -630,7 +630,6 @@ fn chevron(tip: (f32, f32), dir: (f32, f32), len: f32) -> [(f32, f32); 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use solidcraft_engine::find_command;
 
     #[test]
     fn every_toolbar_button_starts_an_engine_command() {
