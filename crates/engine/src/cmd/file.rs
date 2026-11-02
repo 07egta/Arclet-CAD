@@ -45,7 +45,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         .icon("save")
         .key("Ctrl+Shift+S")
         .noundo()
-        .params("path; format?: container|json (default: json for .json, otherwise container); compression?: fast|compact (default: fast); cache?: bool (the evaluated model, so the design opens without rebuilding; default: true); preview?: bool (saved display meshes, default: false); overwrite?: bool (as file.save, when `path` is the design's own file)"),
+        .params("path; format?: container|json (default: json for .json, otherwise container); compression?: fast|compact (default: fast); cache?: bool (the evaluated model, so the design opens without rebuilding; default: true); preview?: bool (saved display meshes, default: false); overwrite?: bool (replace an existing destination; false by default for a different file, to avoid silently losing another design)"),
     CommandSpec::new("doc.recovery_list", "Recoverable Designs", recovery_list).icon("restore")
         .noundo()
         .params("dir? (default: the recovery folder) → designs autosaved by apps that crashed or closed with unsaved changes"),
@@ -404,9 +404,26 @@ fn rename_design(s: &mut Session, from: &str, to: &str) {
     }
 }
 
-fn write(s: &mut Session, path: &str, format: &str, compression: &str, preview: bool, cache: bool, overwrite: bool) -> Result<Value> {
+/// Compare canonical targets, not only path spelling. A symlink, relative path
+/// or case variant must not bypass the read-only or external-edit guard.
+fn same_save_target(old: &str, path: &str) -> bool {
+    if old == path {
+        return true;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        matches!((std::fs::canonicalize(old), std::fs::canonicalize(path)), (Ok(a), Ok(b)) if a == b)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        false
+    }
+}
+
+fn write(s: &mut Session, path: &str, format: &str, compression: &str, preview: bool, cache: bool, overwrite: bool, save_as: bool) -> Result<Value> {
     solidcraft_io::vfs::check(path).map_err(|e| EngineError::Other(e.to_string()))?;
-    if s.path.as_deref() == Some(path) {
+    let same_target = s.path.as_deref().is_some_and(|old| same_save_target(old, path));
+    if same_target {
         if s.read_only {
             return Err(EngineError::Other(format!("{path}: the design was opened read-only; save it to another file with file.save_as")));
         }
@@ -416,13 +433,19 @@ fn write(s: &mut Session, path: &str, format: &str, compression: &str, preview: 
             )));
         }
     }
+    // Save As to another path must not silently overwrite another design. The
+    // native writer also checks atomically at publication time (not only here).
+    let create_only = save_as && !same_target && !overwrite;
+    if create_only && solidcraft_io::vfs::exists(path) {
+        return Err(EngineError::Other(format!("{path}: destination already exists; choose another name or pass `overwrite: true`")));
+    }
     // Saving an unnamed design, or one named after the file it was saved as, names it after its
     // file (not an undoable edit).
     let renamed = saved_name(&s.doc.name, s.path.as_deref(), path).map(|stem| (s.doc.name.clone(), stem));
     if let Some((from, to)) = &renamed {
         rename_design(s, from, to);
     }
-    let r = write_file(s, path, format, compression, preview, cache);
+    let r = write_file(s, path, format, compression, preview, cache, create_only);
     if r.is_err()
         && let Some((from, to)) = &renamed
     {
@@ -431,13 +454,13 @@ fn write(s: &mut Session, path: &str, format: &str, compression: &str, preview: 
     r
 }
 
-fn write_file(s: &mut Session, path: &str, format: &str, compression: &str, preview: bool, cache: bool) -> Result<Value> {
+fn write_file(s: &mut Session, path: &str, format: &str, compression: &str, preview: bool, cache: bool, create_only: bool) -> Result<Value> {
     let compression = match compression {
         "fast" => solidcraft_io::DesignCompression::Fast,
         "compact" => solidcraft_io::DesignCompression::Compact,
         _ => return Err(bad("file.save", "compression must be fast or compact")),
     };
-    write_bytes(s, path, format, compression, preview, cache)
+    write_bytes(s, path, format, compression, preview, cache, create_only)
 }
 
 fn write_bytes(
@@ -447,14 +470,28 @@ fn write_bytes(
     compression: solidcraft_io::DesignCompression,
     preview: bool,
     cache: bool,
+    create_only: bool,
 ) -> Result<Value> {
     let bytes = match format {
         "container" => s.design_container_at(Some(path), compression, preview, cache)?,
-        "json" => solidcraft_io::write_design(&s.design_at(Some(path))),
+        "json" => solidcraft_io::try_write_design(&s.design_at(Some(path)))?,
         _ => return Err(bad("file.save", "format must be container or json")),
     };
-    // Atomic, keeping the version being replaced as `<file>.bak`.
-    solidcraft_io::write_atomic(std::path::Path::new(path), &bytes, true).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
+    // Existing targets are replaced atomically with a backup; a new Save As
+    // destination is published only if nobody else created it meanwhile.
+    let target = std::path::Path::new(path);
+    let written = if create_only {
+        solidcraft_io::safe_write::create_atomic(target, &bytes)
+    } else {
+        solidcraft_io::write_atomic(target, &bytes, true)
+    };
+    written.map_err(|e| {
+        if create_only && e.kind() == std::io::ErrorKind::AlreadyExists {
+            EngineError::Other(format!("{path}: destination already exists; choose another name or pass `overwrite: true`"))
+        } else {
+            EngineError::Other(format!("{path}: {e}"))
+        }
+    })?;
     s.path = Some(path.to_string());
     s.disk = solidcraft_io::design_lock::stamp(path);
     s.read_only = false;
@@ -493,7 +530,13 @@ impl Session {
     /// here would have left them. What is saved is the design the file holds, `done`'s, not this
     /// one's: a change made here while the save was written is not in the file, so it stays
     /// unsaved (#6003).
-    pub fn adopt_save(&mut self, done: &Session) {
+    pub fn adopt_save(&mut self, done: &Session) -> bool {
+        // The worker may have written a perfectly valid old design after New
+        // or Open replaced this session. Never attach that file or its clean
+        // snapshot to a different document.
+        if self.uid != done.uid || self.document_id != done.document_id {
+            return false;
+        }
         if done.doc.name != self.doc.name {
             let (from, to) = (self.doc.name.clone(), done.doc.name.clone());
             rename_design(self, &from, &to);
@@ -503,6 +546,7 @@ impl Session {
         self.read_only = done.read_only;
         self.saved = done.saved.clone();
         self.saved_visibility = done.saved_visibility.clone();
+        true
     }
 
     /// Another program or computer wrote the design's file since it was opened or last saved:
@@ -587,6 +631,7 @@ fn save(s: &mut Session, p: &Value) -> Result<Value> {
         bool_(p, "preview").unwrap_or(false),
         bool_(p, "cache").unwrap_or(true),
         bool_(p, "overwrite").unwrap_or(false),
+        false,
     )
 }
 
@@ -604,6 +649,7 @@ fn save_as(s: &mut Session, p: &Value) -> Result<Value> {
         bool_(p, "preview").unwrap_or(false),
         bool_(p, "cache").unwrap_or(true),
         bool_(p, "overwrite").unwrap_or(false),
+        true,
     )
 }
 
@@ -629,7 +675,7 @@ fn export_to(s: &Session, path: &str, format: Format, bodies: &[String], quality
         if !bodies.is_empty() {
             return Err(bad("file.export", "design JSON exports the complete document; omit bodies"));
         }
-        solidcraft_io::write_design(&s.design())
+        solidcraft_io::try_write_design(&s.design())?
     } else if format == Format::Step && bodies.is_empty() && !s.doc.occurrences.is_empty() {
         solidcraft_io::step_assembly(&s.doc, &s.doc.painted(&s.model.state()), &name)?
     } else {
@@ -1610,5 +1656,102 @@ mod tests {
         for o in formats::DESIGN_SAVE_OPTIONS {
             assert!(params_of("file.save_as").contains(o.param), "`{}` is not a documented parameter of file.save_as", o.param);
         }
+    }
+
+    /// A different Save As target is not an implicit request to overwrite it.
+    /// Failed publication preserves both files, the live document and its undo stack.
+    #[test]
+    fn save_as_refuses_existing_target_without_discarding_edits() {
+        let dir = name_dir("reliable-save-as");
+        let existing = dir.join("existing.sc");
+        let mut other = Session::default();
+        other.execute("solid.box", &json!({"length": 8, "width": 9, "height": 10})).unwrap();
+        other.execute("file.save_as", &json!({"path": existing})).unwrap();
+        let original = std::fs::read(&existing).unwrap();
+
+        let mut s = Session::default();
+        s.execute("solid.sphere", &json!({"diameter": 10})).unwrap();
+        let before = s.doc.clone();
+        let undo_len = s.undo.len();
+        let error = s.execute("file.save_as", &json!({"path": existing})).unwrap_err().to_string();
+        assert!(error.contains("destination already exists"), "{error}");
+        assert_eq!(std::fs::read(&existing).unwrap(), original);
+        assert_eq!(s.doc, before);
+        assert_eq!(s.undo.len(), undo_len);
+        assert!(s.path.is_none() && s.is_dirty());
+        // Explicit replacement succeeds; reopening sees the new design.
+        s.execute("file.save_as", &json!({"path": existing, "overwrite": true})).unwrap();
+        assert!(!s.is_dirty());
+        let mut reopened = Session::default();
+        reopened.execute("doc.open", &json!({"path": existing})).unwrap();
+        assert_eq!(reopened.doc.features.len(), 1);
+        assert!(matches!(reopened.doc.features[0].kind, solidcraft_doc::FeatureKind::Sphere { .. }));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A failed write must not acknowledge the document as saved; after a
+    /// successful retry, Undo/Redo must still follow the same feature identities.
+    #[test]
+    fn failed_save_keeps_dirty_history_then_reopens_and_reedits() {
+        let dir = name_dir("reliable-save-retry");
+        let missing = dir.join("missing").join("part.sc");
+        let target = dir.join("part.sc");
+        let mut s = Session::default();
+        s.execute("solid.box", &json!({"length": 10, "width": 20, "height": 30})).unwrap();
+        let original_ids: Vec<_> = s.doc.features.iter().map(|f| f.id).collect();
+        let undo_count = s.undo.len();
+        assert!(s.execute("file.save_as", &json!({"path": missing})).is_err());
+        assert!(s.is_dirty() && s.path.is_none());
+        assert_eq!(s.undo.len(), undo_count);
+        assert_eq!(s.doc.features.iter().map(|f| f.id).collect::<Vec<_>>(), original_ids);
+        s.execute("file.save_as", &json!({"path": target})).unwrap();
+        assert!(!s.is_dirty());
+        let mut reopened = Session::default();
+        reopened.execute("doc.open", &json!({"path": target})).unwrap();
+        assert!(!reopened.is_dirty());
+        assert_eq!(reopened.doc.features.iter().map(|f| f.id).collect::<Vec<_>>(), original_ids);
+        reopened.execute("solid.sphere", &json!({"diameter": 4})).unwrap();
+        assert!(reopened.is_dirty());
+        reopened.execute("edit.undo", &json!({})).unwrap();
+        assert!(!reopened.is_dirty());
+        reopened.execute("edit.redo", &json!({})).unwrap();
+        assert!(reopened.is_dirty());
+        reopened.execute("file.save", &json!({})).unwrap();
+        assert!(!reopened.is_dirty());
+        let mut final_open = Session::default();
+        final_open.execute("doc.open", &json!({"path": target})).unwrap();
+        assert_eq!(final_open.doc.features.len(), 2);
+        assert_eq!(final_open.doc.features[0].id, original_ids[0]);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A read-only or externally changed file cannot be overwritten by giving
+    /// an alternative spelling of the same path to Save As.
+    #[test]
+    fn save_as_alias_cannot_bypass_same_file_protection() {
+        let dir = name_dir("reliable-alias");
+        std::fs::create_dir_all(dir.join("subdir")).unwrap();
+        let target = dir.join("part.sc");
+        let alias = dir.join("subdir").join("..").join("part.sc");
+        let mut s = Session::default();
+        s.execute("solid.box", &json!({"length": 3, "width": 4, "height": 5})).unwrap();
+        s.execute("file.save_as", &json!({"path": target})).unwrap();
+        let old = std::fs::read(&target).unwrap();
+        let mut read_only = Session::default();
+        read_only.execute("doc.open", &json!({"path": target, "read_only": true})).unwrap();
+        read_only.execute("solid.sphere", &json!({"diameter": 3})).unwrap();
+        assert!(read_only.execute("file.save_as", &json!({"path": alias})).unwrap_err().to_string().contains("read-only"));
+        assert!(read_only.is_dirty());
+        assert_eq!(std::fs::read(&target).unwrap(), old);
+        s.execute("solid.sphere", &json!({"diameter": 3})).unwrap();
+        let mut elsewhere = Session::default();
+        elsewhere.execute("doc.open", &json!({"path": target})).unwrap();
+        elsewhere.execute("solid.sphere", &json!({"diameter": 6})).unwrap();
+        elsewhere.execute("file.save", &json!({})).unwrap();
+        let updated = std::fs::read(&target).unwrap();
+        assert!(s.execute("file.save_as", &json!({"path": alias})).is_err());
+        assert!(s.is_dirty());
+        assert_eq!(std::fs::read(&target).unwrap(), updated);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

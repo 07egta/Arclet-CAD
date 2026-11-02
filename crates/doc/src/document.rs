@@ -3373,8 +3373,16 @@ impl Document {
         }
         Ok(d)
     }
+    /// Serialise a design for a durable write. Unlike `to_json`, a failed
+    /// serialisation is never disguised as an empty, successfully saved file.
+    pub fn to_json_checked(&self) -> Result<String> {
+        serde_json::to_string_pretty(self).map_err(|e| DocError::Invalid(format!("could not serialise design: {e}")))
+    }
+
+    /// Convenience API for non-authoritative JSON display. File saves must use
+    /// `to_json_checked` so a serialisation failure cannot erase a design.
     pub fn to_json(&self) -> String {
-        serde_json::to_string_pretty(self).unwrap_or_default()
+        self.to_json_checked().unwrap_or_default()
     }
 
     pub fn feature(&self, id: u64) -> Option<&Feature> {

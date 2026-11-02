@@ -806,7 +806,14 @@ pub fn read_design(bytes: &[u8]) -> Result<Document> {
     })
 }
 
-/// Design file bytes.
+/// Design file bytes for an authoritative save. Never return an empty
+/// success value when serialisation fails.
+pub fn try_write_design(doc: &Document) -> Result<Vec<u8>> {
+    doc.to_json_checked().map(String::into_bytes).map_err(IoError::from)
+}
+
+/// Design file bytes for callers that cannot report a failure. Save and export
+/// operations must use `try_write_design` instead.
 pub fn write_design(doc: &Document) -> Vec<u8> {
     doc.to_json().into_bytes()
 }
