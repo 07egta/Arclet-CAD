@@ -34,6 +34,9 @@ jobs:
       - name: Execute independent geometry and I/O smoke cases
         if: success()
         run: python3 qa/real_workflows/run.py --cli target/ci/solidcraft-cli --ids G01,G02,G03,G04,H01,H02,H03,H04,H05,H06,J01 --json-out arclet-m40-geometry-io.json
+      - name: Execute all non-stress real workflows
+        if: ${{ !cancelled() }}
+        run: python3 qa/real_workflows/run.py --cli target/ci/solidcraft-cli --json-out arclet-m40-full-nonstress.json
       - name: Preserve scenario evidence
         if: always()
         uses: actions/upload-artifact@v4
