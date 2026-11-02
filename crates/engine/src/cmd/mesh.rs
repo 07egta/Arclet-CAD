@@ -5,7 +5,10 @@ use std::collections::{HashMap, HashSet};
 use serde_json::{Value, json};
 use solidcraft_doc::FeatureKind;
 use solidcraft_doc::expr::Kind;
-use solidcraft_geom::Vec3;
+use solidcraft_geom::{Aabb3, Vec3};
+
+#[path = "mesh_manufacturing.rs"]
+mod manufacturing;
 
 use super::{
     CommandSpec,
@@ -26,7 +29,11 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("mesh.check", "Check Mesh", check)
         .icon("inspect")
         .noundo()
-        .params("body?: mesh body name (default: the selected mesh body); tolerance?: length expression (default 0.0 mm: exact vertex-index topology; a larger length welds vertices within it) → body, tolerance_mm, vertices, triangles, degenerate_triangles (repeated index or zero area), duplicate_vertices (within the tolerance), naked_edges (shared by one triangle), non_manifold_edges (shared by more than two), boundary_loops (connected pieces of the naked edges), closed. Read-only"),
+        .params("body?: imported mesh (default selected); tolerance?: length (default 0 mm, exact-position welding). Reports invalid indices, nonfinite vertices, zero-area/collapsed triangles, repeated faces, naked/nonmanifold edges, winding conflicts, boundary loops and signed volume. closed is true only for a valid outward-oriented closed mesh; this does not prove absence of self-intersections."),
+    CommandSpec::new("mesh.manufacturing_check", "Manufacturing Mesh Check", manufacturing::check)
+        .icon("inspect")
+        .noundo()
+        .params("body?: named solid or mesh; weld_tolerance_mm?: number (default 0); chord_mm?: B-rep tessellation tolerance (default size*0.00005, min 0.0001); nozzle_diameter_mm?: number (default 0.4); overhang_deg?: number (default 45); bed_size_mm?: [width,depth,height] (optional). Reports manifold/orientation/duplicate/invalid checks, bounded potential self-intersections, bounds, volume, bed fit, overhang screening, build-plate contact and thin-feature warning. No wall-thickness certification, no printer compatibility guarantee."),
 ];
 
 /// The mesh body to inspect: `body`, else the one selected body.
@@ -91,56 +98,117 @@ fn check(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(report)
 }
 
+
+/// Mesh topology classification is deliberately independent of the display
+/// tessellation and material settings: callers can refuse invalid export meshes.
 /// The integrity report of a triangle mesh. Pure, read-only, and bounded by the two slices: a
 /// triangle that names a vertex that is not there is counted as degenerate and kept out of the
 /// topology, so no index is ever used unchecked.
 pub(crate) fn analyze(positions: &[Vec3], triangles: &[[u32; 3]], tolerance: f64) -> Value {
     let (welded, unique, duplicate_vertices) = weld_vertices(positions, tolerance);
-    let mut degenerate_triangles = 0usize;
-    let mut edges: HashMap<(usize, usize), u32> = HashMap::new();
+    let nonfinite_vertices = positions.iter().filter(|p| !p.is_finite()).count();
+    let bounds: Aabb3 = positions.iter().copied().collect();
+    let origin = bounds.center();
+
+    // Undirected incidence and net winding on each edge. A count of two alone is
+    // insufficient: two triangles can traverse a shared edge in the same direction.
+    let mut edges: HashMap<(usize, usize), (u32, i32)> = HashMap::new();
+    let mut faces: HashSet<[usize; 3]> = HashSet::new();
+    let (mut degenerate_triangles, mut invalid_index_triangles, mut nonfinite_triangles) = (0usize, 0usize, 0usize);
+    let (mut zero_area_triangles, mut collapsed_after_weld, mut duplicate_faces) = (0usize, 0usize, 0usize);
+    let (mut area_mm2, mut six_volume_mm3) = (0.0, 0.0);
+
     for triangle in triangles {
         let [a, b, c] = *triangle;
-        let (Some(&pa), Some(&pb), Some(&pc)) = (positions.get(a as usize), positions.get(b as usize), positions.get(c as usize)) else {
+        let (Some(&pa), Some(&pb), Some(&pc)) =
+            (positions.get(a as usize), positions.get(b as usize), positions.get(c as usize))
+        else {
+            invalid_index_triangles += 1;
             degenerate_triangles += 1;
             continue;
         };
-        if a == b || b == c || c == a || flat(pa, pb, pc) {
+        if !(pa.is_finite() && pb.is_finite() && pc.is_finite()) {
+            nonfinite_triangles += 1;
             degenerate_triangles += 1;
             continue;
         }
-        let (Some(&wa), Some(&wb), Some(&wc)) = (welded.get(a as usize), welded.get(b as usize), welded.get(c as usize)) else {
+        if a == b || b == c || c == a || flat(pa, pb, pc) {
+            zero_area_triangles += 1;
+            degenerate_triangles += 1;
+            continue;
+        }
+        let (Some(&wa), Some(&wb), Some(&wc)) =
+            (welded.get(a as usize), welded.get(b as usize), welded.get(c as usize))
+        else {
             degenerate_triangles += 1;
             continue;
         };
         if wa == wb || wb == wc || wc == wa {
-            // Welding collapsed the triangle: it has no side to count.
+            // A nonzero input triangle collapsed under the requested weld radius.
+            collapsed_after_weld += 1;
+            degenerate_triangles += 1;
             continue;
         }
-        for (u, v) in [(wa, wb), (wb, wc), (wc, wa)] {
-            let key = if u < v { (u, v) } else { (v, u) };
-            let n = edges.entry(key).or_insert(0);
-            *n = n.saturating_add(1);
+        let mut ordered = [wa, wb, wc];
+        ordered.sort_unstable();
+        if !faces.insert(ordered) {
+            duplicate_faces += 1;
         }
+        for (u, v) in [(wa, wb), (wb, wc), (wc, wa)] {
+            let (key, dir) = if u < v { ((u, v), 1) } else { ((v, u), -1) };
+            let entry = edges.entry(key).or_insert((0, 0));
+            entry.0 = entry.0.saturating_add(1);
+            entry.1 += dir;
+        }
+        let cross = (pb - pa).cross(pc - pa);
+        area_mm2 += cross.len() * 0.5;
+        six_volume_mm3 += (pa - origin).dot((pb - origin).cross(pc - origin));
     }
-    let mut naked_edges = 0usize;
-    let mut non_manifold_edges = 0usize;
-    for &n in edges.values() {
-        match n {
+    let (mut naked_edges, mut non_manifold_edges, mut winding_conflicts) = (0usize, 0usize, 0usize);
+    let mut incidence: HashMap<(usize, usize), u32> = HashMap::with_capacity(edges.len());
+    for (edge, &(count, winding)) in &edges {
+        incidence.insert(*edge, count);
+        match count {
             1 => naked_edges += 1,
+            2 if winding != 0 => winding_conflicts += 1,
             2 => {}
             _ => non_manifold_edges += 1,
         }
     }
-    let boundary_loops = boundary_loops(&edges, unique);
+    let topology_closed =
+        !triangles.is_empty() && degenerate_triangles == 0 && nonfinite_vertices == 0
+        && duplicate_faces == 0 && naked_edges == 0 && non_manifold_edges == 0;
+    let consistently_oriented = topology_closed && winding_conflicts == 0;
+    // Relative to a nearby origin to avoid catastrophic cancellation when a
+    // small printable part lies far from the world origin.
+    let signed_volume = if consistently_oriented && six_volume_mm3.is_finite() {
+        Some(six_volume_mm3 / 6.0)
+    } else {
+        None
+    };
+    let outward = signed_volume.is_some_and(|v| v > 0.0);
+    let closed = consistently_oriented && outward && area_mm2.is_finite();
     json!({
         "vertices": positions.len(),
         "triangles": triangles.len(),
         "degenerate_triangles": degenerate_triangles,
+        "invalid_index_triangles": invalid_index_triangles,
+        "nonfinite_vertices": nonfinite_vertices,
+        "nonfinite_triangles": nonfinite_triangles,
+        "zero_area_triangles": zero_area_triangles,
+        "collapsed_after_weld": collapsed_after_weld,
         "duplicate_vertices": duplicate_vertices,
+        "duplicate_faces": duplicate_faces,
         "naked_edges": naked_edges,
         "non_manifold_edges": non_manifold_edges,
-        "boundary_loops": boundary_loops,
-        "closed": !triangles.is_empty() && naked_edges == 0 && non_manifold_edges == 0,
+        "winding_conflicts": winding_conflicts,
+        "boundary_loops": boundary_loops(&incidence, unique),
+        "topologically_closed": topology_closed,
+        "consistently_oriented": consistently_oriented,
+        "outward_oriented": outward,
+        "signed_volume_mm3": signed_volume,
+        "surface_area_mm2": area_mm2.is_finite().then_some(area_mm2),
+        "closed": closed,
     })
 }
 
