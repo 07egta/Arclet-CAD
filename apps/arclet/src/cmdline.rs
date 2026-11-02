@@ -4,12 +4,12 @@
 
 use std::collections::VecDeque;
 
-use egui::{RichText, Ui, vec2};
+use egui::{RichText, Ui, pos2, vec2};
 use solidcraft_ui_egui::i18n::{format as message, tr};
 use solidcraft_ui_egui::keymap;
 use solidcraft_ui_egui::scenario::publish_handle;
 use solidcraft_ui_egui::theme::Tokens;
-use solidcraft_ui_egui::ui_kit;
+use solidcraft_ui_egui::ui_kit::{self, Container, Surface};
 use solidcraft_ui_egui::{SolveApp, dialogs, tools};
 
 use crate::commands::{self, Suggestion};
@@ -71,6 +71,20 @@ impl CommandHistory {
     pub(crate) fn iter(&self) -> impl Iterator<Item = &HistoryLine> {
         self.lines.iter()
     }
+
+    /// Recall only what the user actually entered, not the second "started"
+    /// or error message produced when it ran.
+    fn entered_commands(&self) -> Vec<&str> {
+        self.lines
+            .iter()
+            .filter(|line| matches!(line.kind, LineKind::Entered | LineKind::Repeat) && !line.fill.trim().is_empty())
+            .map(|line| line.fill.as_str())
+            .collect()
+    }
+
+    fn latest(&self) -> Option<&HistoryLine> {
+        self.lines.back()
+    }
 }
 
 /// Which suggestion the keys have highlighted. `None` until the first Up, Down or Tab, so an
@@ -115,6 +129,56 @@ impl SuggestCursor {
     }
 }
 
+/// Keeps the unfinished edit when browsing backward into command history, so a
+/// Down arrow can restore it. Offsets count from newest (zero) to oldest.
+#[derive(Default, Debug)]
+struct HistoryRecall {
+    offset: Option<usize>,
+    draft: String,
+}
+
+impl HistoryRecall {
+    fn reset(&mut self) {
+        self.offset = None;
+        self.draft.clear();
+    }
+
+    fn step(&mut self, history: &CommandHistory, edit: &mut String, older: bool) {
+        let commands = history.entered_commands();
+        if commands.is_empty() {
+            return;
+        }
+        let next = if older {
+            Some(self.offset.map_or(0, |offset| offset.saturating_add(1).min(commands.len() - 1)))
+        } else {
+            match self.offset {
+                Some(0) => None,
+                Some(offset) => Some(offset.min(commands.len() - 1) - 1),
+                None => return,
+            }
+        };
+        if self.offset.is_none() && next.is_some() {
+            self.draft.clone_from(edit);
+        }
+        self.offset = next;
+        match next {
+            Some(offset) => *edit = commands[commands.len() - 1 - offset].to_owned(),
+            None => *edit = self.draft.clone(),
+        }
+    }
+}
+
+/// Size and position of a history/suggestion popup in **logical points**.
+/// Popups rise above the prompt rather than consuming viewport height.
+fn popup_rect(viewport: egui::Rect, editor: egui::Rect, desired_height: f32) -> egui::Rect {
+    const MARGIN: f32 = 8.0;
+    let width = editor.width().max(220.0).min((viewport.width() - MARGIN * 2.0).max(1.0));
+    let height = desired_height.min((viewport.height() - MARGIN * 2.0).max(1.0)).max(1.0);
+    let left = editor.left().clamp(viewport.left() + MARGIN, (viewport.right() - width - MARGIN).max(viewport.left() + MARGIN));
+    let top = (editor.top() - height - 4.0).clamp(viewport.top() + MARGIN, (viewport.bottom() - height - MARGIN).max(viewport.top() + MARGIN));
+    egui::Rect::from_min_size(pos2(left, top), vec2(width, height))
+}
+
 /// What the command line asks the app to do after this frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Action {
@@ -140,6 +204,8 @@ pub(crate) struct CommandLine {
     /// The text the suggestions were made for, so they are only recomputed when it changes.
     query: String,
     suggestions: Vec<Suggestion>,
+    history_open: bool,
+    recall: HistoryRecall,
 }
 
 impl CommandLine {
@@ -178,6 +244,12 @@ impl CommandLine {
         }
         self.cursor.clamp(self.suggestions.len());
     }
+
+    fn recall(&mut self, command: &mut String, older: bool) {
+        self.recall.step(&self.history, command, older);
+        self.history_open = false;
+        self.refresh(command);
+    }
 }
 
 /// Draw the command line and report what the user asked for. `focus` is taken (cleared) when
@@ -187,89 +259,170 @@ pub(crate) fn show(ui: &mut Ui, line: &mut CommandLine, command: &mut String, fo
     line.refresh(command);
     let input_id = egui::Id::new(INPUT_ID);
     let mut action = Action::Nothing;
+    let mut recalled_by_keyboard = false;
+
     if ui.ctx().memory(|m| m.has_focus(input_id)) {
-        // These keys belong to the suggestion list while the prompt has the focus. They are
-        // taken before the text field sees them (Tab would move the focus away).
-        let len = line.suggestions.len();
+        // Consume keys before the text field, including Tab (which would otherwise
+        // leave the command prompt). Ctrl+Up/Down always recalls history; ordinary
+        // arrows browse suggestions when present, then fall back to history.
         if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
-            command.clear();
-            line.cursor.reset();
-            action = Action::Cancel;
+            if line.history_open {
+                line.history_open = false;
+            } else {
+                command.clear();
+                line.cursor.reset();
+                line.recall.reset();
+                action = Action::Cancel;
+            }
+        }
+        if ui.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::ArrowUp)) {
+            line.recall(command, true);
+            recalled_by_keyboard = true;
+        }
+        if ui.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::ArrowDown)) {
+            line.recall(command, false);
+            recalled_by_keyboard = true;
         }
         if ui.input_mut(|i| i.consume_key(egui::Modifiers::SHIFT, egui::Key::Tab)) {
-            line.cursor.prev(len);
+            line.cursor.prev(line.suggestions.len());
         }
         if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Tab)) {
-            line.cursor.next(len);
+            line.cursor.next(line.suggestions.len());
         }
         if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown)) {
-            line.cursor.next(len);
+            if line.suggestions.is_empty() {
+                line.recall(command, false);
+                recalled_by_keyboard = true;
+            } else {
+                line.cursor.next(line.suggestions.len());
+            }
         }
         if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp)) {
-            line.cursor.prev(len);
-        }
-    }
-
-    if !line.history.is_empty() {
-        let row = ui.text_style_height(&egui::TextStyle::Monospace) + ui.spacing().item_spacing.y;
-        let mut recalled: Option<String> = None;
-        egui::ScrollArea::vertical()
-            .id_salt(input_id.with("history"))
-            .max_height(row * HISTORY_ROWS as f32)
-            .auto_shrink([false, true])
-            .stick_to_bottom(true)
-            .show_rows(ui, row, line.history.len(), |ui, range| {
-                for entry in line.history.iter().skip(range.start).take(range.len()) {
-                    let color = match entry.kind {
-                        LineKind::Failed => tokens.error,
-                        LineKind::Entered => tokens.text,
-                        LineKind::Repeat | LineKind::Started => tokens.text_dim,
-                    };
-                    let label = egui::Label::new(RichText::new(entry.text.as_str()).monospace().color(color)).sense(egui::Sense::click());
-                    if ui.add(label).clicked() && !entry.fill.is_empty() {
-                        recalled = Some(entry.fill.clone());
-                    }
-                }
-            });
-        if let Some(text) = recalled {
-            *command = text;
-            line.cursor.reset();
-            *focus = true;
-        }
-    }
-
-    if !line.suggestions.is_empty() {
-        for (index, suggestion) in line.suggestions.iter().enumerate() {
-            let selected = line.cursor.selected() == Some(index);
-            let text = format!("{}  {}", suggestion.label, suggestion.id);
-            if ui.selectable_label(selected, text).clicked() {
-                action = Action::Suggested { id: suggestion.id, label: suggestion.label };
+            if line.suggestions.is_empty() {
+                line.recall(command, true);
+                recalled_by_keyboard = true;
+            } else {
+                line.cursor.prev(line.suggestions.len());
             }
         }
     }
 
-    ui.horizontal(|ui| {
-        ui.label(RichText::new(tr("arclet.command")).strong());
+    // A single truncated feedback line is much less intrusive than a permanent
+    // six-line history dock. Full history is accessible by keyboard or button.
+    if !invalid && let Some(last) = line.history.latest() {
+        let color = if last.kind == LineKind::Failed { tokens.error } else { tokens.text_dim };
+        ui.add(egui::Label::new(RichText::new(&last.text).monospace().small().color(color)).truncate())
+            .on_hover_text(&last.text);
+    }
+
+    let initial = command.clone();
+    let mut run_requested = false;
+    let mut picked = Action::Nothing;
+    let mut editor = egui::Rect::NOTHING;
+
+    ui.horizontal_centered(|ui| {
+        ui.label(RichText::new(tr("arclet.command")).strong().color(tokens.text));
+        let available = ui.available_width();
+        let compact = available < 530.0;
+        if !line.history.is_empty() {
+            let history_label = if line.history_open { tr("arclet.cmd.hide_history") } else { tr("arclet.cmd.show_history") };
+            if ui_kit::button(ui, history_label, ui_kit::Button::Ghost).clicked() {
+                line.history_open = !line.history_open;
+            }
+        }
+        let reserve = if compact { 128.0 } else { 182.0 };
+        let width = (ui.available_width() - reserve).max(110.0);
         let response = ui
-            .allocate_ui(vec2((ui.available_width() - 170.0).max(100.0), 28.0), |ui| {
+            .allocate_ui(vec2(width, 30.0), |ui| {
                 ui_kit::bounded_cell_editor(ui, input_id, &mut *command, tr("arclet.command_hint"), invalid, INPUT_LIMIT)
             })
             .inner;
-        publish_handle("arclet:command", response.rect.center());
+        editor = response.rect;
+        publish_handle("arclet:command", editor.center());
         if std::mem::take(focus) {
             response.request_focus();
         }
         if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-            action = submit(line);
+            run_requested = true;
         }
         if ui_kit::button(ui, tr("arclet.run"), ui_kit::Button::Primary).clicked() {
-            action = submit(line);
+            run_requested = true;
         }
-        if ui_kit::button(ui, tr("arclet.finish"), ui_kit::Button::Normal).clicked() {
-            action = Action::Finish;
+        if !compact && ui_kit::button(ui, tr("arclet.finish"), ui_kit::Button::Normal).clicked() {
+            picked = Action::Finish;
         }
-        ui.label(RichText::new("mm").color(tokens.text_dim));
     });
+
+    if command != &initial {
+        // Text may have changed inside the egui editor in this same frame.
+        // Refresh *before* Enter chooses the highlighted suggestion, otherwise
+        // a stale highlight could execute a different command.
+        line.refresh(command);
+        if !recalled_by_keyboard {
+            line.recall.reset();
+        }
+    }
+    if run_requested {
+        action = submit(line);
+    }
+    if picked != Action::Nothing {
+        action = picked;
+    }
+    // Compact chrome never removes Finish: put it on a second line only on
+    // very small logical screens, while the editor keeps a usable hit target.
+    if ui.available_width() < 530.0 && ui_kit::button(ui, tr("arclet.finish"), ui_kit::Button::Normal).clicked() {
+        action = Action::Finish;
+    }
+
+    let history = line.history_open && !line.history.is_empty();
+    if editor != egui::Rect::NOTHING && (history || !line.suggestions.is_empty()) {
+        let entries = if history { line.history.len().min(HISTORY_ROWS) } else { line.suggestions.len().min(POPUP_ROWS) };
+        let height = (entries as f32 * 29.0 + 22.0).min(ui.ctx().viewport_rect().height() * 0.55);
+        let rect = popup_rect(ui.ctx().viewport_rect(), editor, height);
+        let area = Container::new(ui.ctx(), Surface::Popup)
+            .area(egui::Id::new("arclet_command_popup"))
+            .fixed_pos(rect.min);
+        let shown = area.show(ui.ctx(), |ui| {
+            Container::popup_frame(ui.style()).show(ui, |ui| {
+                ui.set_min_width((rect.width() - 20.0).max(40.0));
+                egui::ScrollArea::vertical()
+                    .id_salt("arclet_command_popup_scroll")
+                    .max_height((rect.height() - 12.0).max(1.0))
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        if history {
+                            let start = line.history.len().saturating_sub(HISTORY_ROWS);
+                            for entry in line.history.iter().skip(start) {
+                                let color = if entry.kind == LineKind::Failed { tokens.error } else { tokens.text };
+                                let label = egui::Label::new(RichText::new(&entry.text).monospace().color(color))
+                                    .sense(egui::Sense::click())
+                                    .truncate();
+                                if ui.add(label).on_hover_text(&entry.text).clicked() && !entry.fill.is_empty() {
+                                    *command = entry.fill.clone();
+                                    *focus = true;
+                                    line.history_open = false;
+                                    line.recall.reset();
+                                }
+                            }
+                        } else {
+                            for (index, suggestion) in line.suggestions.iter().enumerate() {
+                                let selected = line.cursor.selected() == Some(index);
+                                let label = format!("{}    {}", suggestion.label, suggestion.id);
+                                if ui.selectable_label(selected, label).clicked() {
+                                    picked = Action::Suggested { id: suggestion.id, label: suggestion.label };
+                                }
+                            }
+                        }
+                    });
+            });
+        });
+        // Give a pointer click on a suggestion precedence over Enter from the
+        // editor. No file operation or CAD modification occurs in popup painting.
+        if picked != Action::Nothing {
+            action = picked;
+        }
+        let _ = shown;
+    }
     action
 }
 
