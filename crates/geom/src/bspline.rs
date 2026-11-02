@@ -486,6 +486,92 @@ pub struct NurbsSurface {
     ctrl: Vec<HPoint>,
 }
 
+/// Analytic two-parameter derivatives of an editable NURBS surface.
+/// All derivatives refer to the original u and v parameters, not display tessellation.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SurfaceJet {
+    pub point: Vec3,
+    pub du: Vec3,
+    pub dv: Vec3,
+    pub duu: Vec3,
+    pub duv: Vec3,
+    pub dvv: Vec3,
+}
+
+/// Principal curvature invariants of a regular surface at one parameter pair.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SurfaceCurvature {
+    /// Unit normal, with the orientation given by du × dv.
+    pub normal: Vec3,
+    /// Signed mean curvature in inverse millimetres.
+    pub mean_per_mm: f64,
+    /// Gaussian curvature in inverse square millimetres.
+    pub gaussian_per_mm2: f64,
+}
+
+impl SurfaceJet {
+    /// First and second fundamental forms. A collapsed or nearly parallel parameter
+    /// frame has no numerically reliable curvature: return an error instead of NaN.
+    pub fn curvature(self) -> SplineResult<SurfaceCurvature> {
+        if [self.point, self.du, self.dv, self.duu, self.duv, self.dvv].iter().any(|v| !v.is_finite()) {
+            return invalid("surface derivatives must be finite");
+        }
+        let length = |v: Vec3| v.x.hypot(v.y).hypot(v.z);
+        let speed_u = length(self.du);
+        let speed_v = length(self.dv);
+        if !(speed_u > 0.0 && speed_u.is_finite() && speed_v > 0.0 && speed_v.is_finite()) {
+            return invalid("surface curvature needs two finite nonzero parameter tangents");
+        }
+        let tu = self.du / speed_u;
+        let tv = self.dv / speed_v;
+        let cross = tu.cross(tv);
+        let sine = length(cross);
+        // The test is relative to the parameter tangent lengths; an absolute
+        // determinant test would incorrectly reject very small valid surfaces.
+        if !(sine > 1e-12 && sine.is_finite()) {
+            return invalid("surface tangents are numerically dependent");
+        }
+        let normal = cross / sine;
+        let cosine = tu.dot(tv).clamp(-1.0, 1.0);
+        // Divide successively so squaring a large speed does not overflow before
+        // a representable curvature can be obtained.
+        let e = normal.dot((self.duu / speed_u) / speed_u);
+        let f = normal.dot((self.duv / speed_u) / speed_v);
+        let g = normal.dot((self.dvv / speed_v) / speed_v);
+        let determinant = sine * sine;
+        let gaussian_per_mm2 = (e * g - f * f) / determinant;
+        let mean_per_mm = (e + g - 2.0 * cosine * f) / (2.0 * determinant);
+        if !normal.is_finite() || !mean_per_mm.is_finite() || !gaussian_per_mm2.is_finite() {
+            return invalid("surface curvature is outside the finite numerical range");
+        }
+        Ok(SurfaceCurvature { normal, mean_per_mm, gaussian_per_mm2 })
+    }
+}
+
+/// Compensated sum for signed basis derivatives and local-coordinate numerators.
+/// It also reduces the loss of low-order terms when control weights differ.
+#[derive(Clone, Copy, Default)]
+struct SplineSum {
+    sum: f64,
+    correction: f64,
+}
+
+impl SplineSum {
+    fn add(&mut self, x: f64) {
+        let next = self.sum + x;
+        self.correction += if self.sum.abs() >= x.abs() {
+            (self.sum - next) + x
+        } else {
+            (x - next) + self.sum
+        };
+        self.sum = next;
+    }
+
+    fn total(self) -> f64 {
+        self.sum + self.correction
+    }
+}
+
 impl NurbsSurface {
     /// A surface from Cartesian points and positive weights (one per point, u fastest).
     pub fn new(degree: [usize; 2], knots: [Vec<f64>; 2], points: &[Vec3], weights: &[f64]) -> SplineResult<NurbsSurface> {
@@ -550,25 +636,154 @@ impl NurbsSurface {
         [d(0), d(1)]
     }
 
-    /// The point at `(u, v)`, which must lie in the domain.
+    /// The exact NURBS point at `(u, v)` (not a display mesh), within the parameter domain.
     pub fn eval(&self, u: f64, v: f64) -> SplineResult<Vec3> {
-        let dom = self.domain();
-        let mut spans = [0; 2];
-        let mut basis: [Vec<f64>; 2] = [Vec::new(), Vec::new()];
-        for (d, x) in [u, v].into_iter().enumerate() {
-            let (p, n, kn) = (self.degree[d], self.count[d], &self.knots[d]);
-            let span = find_span(kn, p, n, x).ok_or_else(|| SplineError::Invalid(format!("({u}, {v}) is outside the domain")))?;
-            let side = if x >= dom[d][1] { Side::Left } else { Side::Right };
-            spans[d] = span;
-            basis[d] = (span - p..=span).map(|i| kn.get(i..i + p + 2).map_or(0.0, |k| local_basis(k, x, side, 0)[0])).collect();
-        }
-        let mut acc = HPoint::ZERO;
-        for (b, nj) in basis[1].iter().enumerate() {
-            for (a, ni) in basis[0].iter().enumerate() {
-                acc += self.point(spans[0] - self.degree[0] + a, spans[1] - self.degree[1] + b) * (ni * nj);
+        Ok(self.evaluate(u, v, false)?.point)
+    }
+
+    /// Analytic first and second partial derivatives. At an interior repeated knot,
+    /// one-sided derivatives are taken from the right; at the domain end, from the left.
+    /// A requested derivative that overflows f64 is an error, not an invented zero.
+    pub fn jet(&self, u: f64, v: f64) -> SplineResult<SurfaceJet> {
+        self.evaluate(u, v, true)
+    }
+
+    fn evaluate(&self, u: f64, v: f64, derivatives: bool) -> SplineResult<SurfaceJet> {
+        let domain = self.domain();
+        let mut starts = [0; 2];
+        let mut basis: [Vec<[f64; 3]>; 2] = [Vec::new(), Vec::new()];
+        let order = if derivatives { 2 } else { 0 };
+        for (d, parameter) in [u, v].into_iter().enumerate() {
+            let (p, n, knots) = (self.degree[d], self.count[d], &self.knots[d]);
+            let span = find_span(knots, p, n, parameter)
+                .ok_or_else(|| SplineError::Invalid(format!("({u}, {v}) is outside the surface domain")))?;
+            let side = if parameter >= domain[d][1] { Side::Left } else { Side::Right };
+            starts[d] = span - p;
+            for i in starts[d]..=span {
+                let Some(local_knots) = knots.get(i..i + p + 2) else {
+                    return invalid("a local surface basis has an invalid knot window");
+                };
+                let values = local_basis_array(local_knots, parameter, side, order);
+                if values.iter().take(order + 1).any(|x| !x.is_finite()) {
+                    return invalid("surface basis derivatives overflowed");
+                }
+                basis[d].push([values[0], values[1], values[2]]);
             }
         }
-        acc.project().ok_or_else(|| SplineError::Invalid("the surface's weights vanish there".into()))
+
+        // Only controls with a nonzero *value* basis enter the normalizing
+        // weight. A huge weight at a zero-basis endpoint must not erase a tiny,
+        // but perfectly representable, endpoint contribution.
+        let mut max_weight = 0.0_f64;
+        for (j, bv) in basis[1].iter().enumerate() {
+            for (i, bu) in basis[0].iter().enumerate() {
+                if bu[0] * bv[0] > 0.0 {
+                    max_weight = max_weight.max(self.point(starts[0] + i, starts[1] + j).w);
+                }
+            }
+        }
+        if !(max_weight > 0.0 && max_weight.is_finite()) {
+            return invalid("the surface has no contributing positive weight");
+        }
+
+        let mut strongest = -1.0_f64;
+        let mut origin = None;
+        for (j, bv) in basis[1].iter().enumerate() {
+            for (i, bu) in basis[0].iter().enumerate() {
+                let h = self.point(starts[0] + i, starts[1] + j);
+                let coefficient = bu[0] * bv[0] * (h.w / max_weight);
+                if coefficient > strongest {
+                    strongest = coefficient;
+                    let point = Vec3::new(h.x / h.w, h.y / h.w, h.z / h.w);
+                    origin = point.is_finite().then_some(point);
+                }
+            }
+        }
+        let Some(origin) = origin else {
+            return invalid("the surface has no finite contributing control point");
+        };
+
+        // Recover Cartesian control positions *before* differencing them from
+        // an active local origin. Differentiating large absolute world positions
+        // would otherwise produce spurious tangents for translated surfaces.
+        let mut controls = [[Vec3::ZERO; MAX_SPLINE_DEGREE + 1]; MAX_SPLINE_DEGREE + 1];
+        let mut half_scale = false;
+        for (j, bv) in basis[1].iter().enumerate() {
+            for (i, bu) in basis[0].iter().enumerate() {
+                let active = bu.iter().take(order + 1).any(|x| *x != 0.0)
+                    && bv.iter().take(order + 1).any(|x| *x != 0.0);
+                if !active {
+                    continue;
+                }
+                let h = self.point(starts[0] + i, starts[1] + j);
+                let point = Vec3::new(h.x / h.w, h.y / h.w, h.z / h.w);
+                if !point.is_finite() {
+                    return invalid("a contributing surface control point cannot be projected");
+                }
+                controls[j][i] = point;
+                half_scale |= !(point - origin).is_finite();
+            }
+        }
+
+        // Rational tensor quotient rule through total order two:
+        // C_u = (A_u - W_u C) / W, and similarly for uv, uu and vv.
+        // A is the *local* numerator sum of weight × (P - origin).
+        const ORDERS: [(usize, usize); 6] = [(0, 0), (1, 0), (0, 1), (2, 0), (1, 1), (0, 2)];
+        let count = if derivatives { ORDERS.len() } else { 1 };
+        let mut sums = [[SplineSum::default(); 3]; 6];
+        let mut weight_sums = [SplineSum::default(); 6];
+        for (j, bv) in basis[1].iter().enumerate() {
+            for (i, bu) in basis[0].iter().enumerate() {
+                let h = self.point(starts[0] + i, starts[1] + j);
+                let weight = h.w / max_weight;
+                let point = controls[j][i];
+                let relative = if half_scale { point * 0.5 - origin * 0.5 } else { point - origin };
+                for (k, &(a, b)) in ORDERS.iter().take(count).enumerate() {
+                    let factor = weight * bu[a] * bv[b];
+                    if factor == 0.0 {
+                        continue;
+                    }
+                    weight_sums[k].add(factor);
+                    sums[k][0].add(relative.x * factor);
+                    sums[k][1].add(relative.y * factor);
+                    sums[k][2].add(relative.z * factor);
+                }
+            }
+        }
+        let mut weights = [0.0; 6];
+        let mut numerators = [Vec3::ZERO; 6];
+        for k in 0..count {
+            weights[k] = weight_sums[k].total();
+            numerators[k] = Vec3::new(sums[k][0].total(), sums[k][1].total(), sums[k][2].total());
+            if !weights[k].is_finite() || !numerators[k].is_finite() {
+                return invalid("surface rational sums overflowed");
+            }
+        }
+        if !(weights[0] > 0.0) {
+            return invalid("the surface rational denominator is not positive");
+        }
+        let local = numerators[0] / weights[0];
+        let (mut du, mut dv, mut duu, mut duv, mut dvv) = (Vec3::ZERO, Vec3::ZERO, Vec3::ZERO, Vec3::ZERO, Vec3::ZERO);
+        if derivatives {
+            du = (numerators[1] - local * weights[1]) / weights[0];
+            dv = (numerators[2] - local * weights[2]) / weights[0];
+            duu = (numerators[3] - du * (2.0 * weights[1]) - local * weights[3]) / weights[0];
+            duv = (numerators[4] - du * weights[2] - dv * weights[1] - local * weights[4]) / weights[0];
+            dvv = (numerators[5] - dv * (2.0 * weights[2]) - local * weights[5]) / weights[0];
+        }
+        let point = if half_scale { (origin * 0.5 + local) * 2.0 } else { origin + local };
+        if half_scale {
+            du = du * 2.0;
+            dv = dv * 2.0;
+            duu = duu * 2.0;
+            duv = duv * 2.0;
+            dvv = dvv * 2.0;
+        }
+        let jet = SurfaceJet { point, du, dv, duu, duv, dvv };
+        if [jet.point, jet.du, jet.dv, jet.duu, jet.duv, jet.dvv].iter().any(|v| !v.is_finite()) {
+            return invalid("surface evaluation exceeded the finite numerical range");
+        }
+        Ok(jet)
     }
 
     /// The same surface with the knot `x` inserted once in direction `dir` ([`Dir::S`] = u).
