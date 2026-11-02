@@ -10,7 +10,7 @@ Arcletの既存樹脂形状フィーチャを改善する。UI全体・B-repカ�
 | 補強リブ／ウェブ | `solid.rib`、`solid.web` | 既存のスケッチ曲線ベース形状生成を再利用 |
 | ケース合わせ面・溝 | `plastic.lip` | `type:lip` または `type:groove` を使用、既存のShellへ接続 |
 | カンチレバー式スナップ | `plastic.snap_fit` | 既存のキャッチ／アーム、別ボディ生成を再利用 |
-| 支持台・中空支持台 | `plastic.rest` | 抜き勾配で内側開口が消える条件を修正 |
+| 支持台・中空支持台 | `plastic.rest` | テーパーで壁または内側開口が消える条件を検査 |
 | 抜き勾配 | `plastic.boss`、`plastic.rest`、`solid.draft` | 専用フィーチャの成立性を検証、汎用Draftは維持 |
 | ケースの肉抜き | `solid.shell` | 既存実装を維持 |
 | 材料・寸法ルール | `plastic.manage_rules`、`plastic.assign_rule`、`plastic.rules` | 不正限界値の拒否・名目警告 |
@@ -28,7 +28,7 @@ Arcletの既存樹脂形状フィーチャを改善する。UI全体・B-repカ�
 2. **厚さルールの自己矛盾**：最小肉厚が0以下、または最大肉厚を超える定義を拒否する。名目寸法だけが推奨範囲外の場合は互換性を保って警告する。
 3. **Bossの穴と勾配**：円筒穴がテーパーの根元・先端に収まるか評価し、穴深さがボス高さを超える定義を拒否する。
 4. **Bossの無効入力**：負の根元フィレット、約57°以上の抜き勾配、小数のリブ本数、負のリブオフセットを拒否する。
-5. **中空Restのテーパー**：壁厚と勾配量を比較するのでなく、頂部まで保たれる**内側開口寸法**を基準にする。
+5. **中空Restのテーパー**：正の抜き勾配では外周が縮み穴が広がるため、頂部の肉厚消失を拒否する。負の勾配では内側開口の消失と根元の薄肉化を別に検証する。
 
 ## 実設計シナリオと数値オラクル
 
@@ -42,7 +42,7 @@ Arcletの既存樹脂形状フィーチャを改善する。UI全体・B-repカ�
 | Shell後のLip | 80×50×30、シェル2 mm、Lip幅1・高さ2：追加体積496 mm³ | `lip_and_groove_on_a_shelled_box` |
 | Shell後のGroove | 上記に溝幅1・深さ2：除去体積512 mm³ | `lip_and_groove_on_a_shelled_box` |
 | スナップ嵌合 | アーム15×1.5×6＋キャッチ：追加体積144 mm³ | `snap_fit_arm_and_catch` |
-| 抜き勾配付き中空Rest | 20×10、壁厚1、高さ16、勾配2°で開口が残ること | `plastic_preflight_rejects_bad_boss_and_rest_without_mutation` |
+| 抜き勾配付き中空Rest | 20×10、壁厚1、高さ6、勾配2°で成立。高さ16では壁が消失するため拒否。負の勾配でも開口消失を拒否 | `plastic_preflight_rejects_bad_boss_and_rest_without_mutation` |
 | 上下ケース | ケース、Shell、複数スタンドオフ、コネクタ穴、スナップ、蓋、ねじ穴 | `examples/acceptance/sensor_enclosure.json` |
 | 再計算・再読み込み | ボスの直径変更後の体積、JSON設計の保存相当往復後の再評価 | `plastic_audit_tracks_parametric_boss_wall_and_roundtrip` |
 | 失敗時の原状維持 | 無効な穴深さ・フィレット・リブ数・中空開口で旧モデルを維持 | `plastic_preflight_rejects_bad_boss_and_rest_without_mutation` |
