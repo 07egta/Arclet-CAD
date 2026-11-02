@@ -33,14 +33,15 @@ fn match_surface(s: &mut Session, p: &Value) -> Result<Value> {
     if s.model.state().body(&target).is_none() {
         return Err(bad(cmd, format!("no body `{target}`")));
     }
-    let faces: Vec<solidcraft_geom::Vec3> = p.get("faces").and_then(Value::as_array).map(|a| a.iter().filter_map(vec3).collect()).unwrap_or_default();
-    if faces.len() > 64 {
-        return Err(bad(cmd, "too many points on the face to rebuild"));
-    }
-    let edges: Vec<solidcraft_geom::Vec3> = p.get("edges").and_then(Value::as_array).map(|a| a.iter().filter_map(vec3).collect()).unwrap_or_default();
-    if edges.is_empty() || edges.len() > 10_000 {
-        return Err(bad(cmd, "`edges` must list 1 to 10000 points on the target's edge chain"));
-    }
+    let faces: Vec<solidcraft_geom::Vec3> = match p.get("faces") {
+        None => Vec::new(),
+        Some(Value::Array(list)) if list.len() <= 64 => list.iter()
+            .enumerate()
+            .map(|(i, p)| vec3(p).ok_or_else(|| bad(cmd, format!("`faces[{i}]` must be a finite point [x,y,z]"))))
+            .collect::<Result<Vec<_>>>()?,
+        _ => return Err(bad(cmd, "`faces` must list at most 64 finite face points [x,y,z]")),
+    };
+    let edges = super::surface::edge_chain_points(p.get("edges"), cmd, "edges")?;
     let order = match p.get("order") {
         None => Continuity::G2,
         Some(v) => v.as_str().and_then(Continuity::parse).filter(|o| *o != Continuity::G0).ok_or_else(|| bad(cmd, "`order` must be g1, g2 or g3"))?,
