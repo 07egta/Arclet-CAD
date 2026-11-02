@@ -16,7 +16,7 @@ Its result contains:
 - `invalid_index_triangles`, `nonfinite_vertices`, `zero_area_triangles`,
   `collapsed_after_weld`, `duplicate_vertices`, `duplicate_faces`: malformed or
   duplicate geometry counters.
-- `naked_edges`, `non_manifold_edges`, `boundary_loops`: edge/topology diagnostics.
+- `naked_edges`, `non_manifold_edges`, `non_manifold_vertices`, `boundary_loops`: edge and vertex-fan diagnostics. A pair of otherwise closed shells touching at one vertex is rejected, even if all edges are paired.
   `boundary_loops` is **the count of connected naked-edge components**; a branching
   boundary is not necessarily a simple geometric loop.
 - `signed_volume_mm3`, `surface_area_mm2`: computed from valid oriented triangles.
@@ -47,6 +47,7 @@ The report separates:
   to place that plane at Z=0. No bridging or real support-path simulation is performed.
 - `bed_fit`: optional XY-bounding-box fit (translation allowed, rotation not considered)
   against [width, depth, height] in **millimetres**.
+- `blockers` / `warnings`: actionable reasons for rejecting or reviewing the candidate.
 - `verdict`: `invalid_mesh`, `inspection_incomplete`, `requires_review`, or
   `passed_limited_screening`. No verdict means "guaranteed printable".
   `manufacturing_certified` is always false.
@@ -75,10 +76,12 @@ printer-specific G-code nor physical print success is certified by this PR.
 - Outward 20×20×20 mm cube: exactly 8,000 mm³, 2,400 mm², correct winding.
 - Reversed single triangle and fully reversed cube: invalid winding and outwardness.
 - A cube with missing faces: exposed boundary edges and a boundary component.
+- Two valid tetrahedra touching at one point: disconnected vertex link; not a manifold solid.
 - Duplicate face, nonmanifold edge, out-of-range index, zero-area facet,
   non-finite vertex, over-aggressive weld of a 0.02 mm high box: refuse closure.
 - STL binary export/import: 12 faces, mm-sized coordinates and expected volume.
 - Two-object 3MF export/import: separate names, dimensions, positions, and RGB.
+- Capped cylinder and cylindrical through-hole annular plate: outward winding, zero nonmanifold edges, approximate analytic volume and underside area.
 - Crossing nonadjacent triangles: intersection screen returns a potential pair;
   an oversized test explicitly returns incomplete.
 - Thin open-top but watertight cylindrical vase: 0.2 mm candidate wall vs
@@ -99,3 +102,13 @@ non-manifold geometry, provide exhaustive minimal-thickness certificates, valida
 multiple body clearances, or promise machine-specific G-code. Use existing
 `inspect.clearance` for inter-part distance queries and inspect its `unchecked`
 array before relying on a negative result.
+
+### Preflight resource limits
+
+The read-only command refuses mesh candidates above 180,000 vertices or 60,000
+triangles **before** running the export-style weld, because T-junction splitting
+may be superlinear for hostile open meshes. That is a safe failure, not evidence
+that a larger model is unprintable. Vertex-fan manifold classification also
+returns an explicitly incomplete result above 500,000 triangles rather than
+pretending to certify the topology. The underlying STL/3MF format limits are
+separate and much higher.
