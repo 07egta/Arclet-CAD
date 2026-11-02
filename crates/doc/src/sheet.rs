@@ -8745,7 +8745,7 @@ mod tests {
             ("gap", "-1 mm", "flange gap"),
         ] {
             let mut rule = SheetRule::steel();
-            for (name, value, _) in rule.fields_mut() {
+            for (name, value) in rule.fields_mut() {
                 if name == field {
                     *value = expression.to_string();
                 }
