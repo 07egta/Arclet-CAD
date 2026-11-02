@@ -116,7 +116,7 @@ pub struct ViewportState {
     pub(crate) corner_ok: bool,
     pub gpu: Option<GpuTarget>,
     pub(crate) background_image: Option<egui::TextureHandle>,
-    pub(crate) orbit_allowed: bool,
+    pub(crate) orbit_locked: bool,
     /// The GPU plan evaluation still compiling: `gpu.tess` once it is ready (#4860).
     pub(crate) tess_ready: Option<crate::gpu::TessReady>,
     /// What the GPU drew last frame, shared with the renderer (the frame-rate details, #2548).
@@ -3877,7 +3877,7 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
         app.flat_view.fitted = false;
     }
     let input =
-        if flat { crate::dialogs_sheet::navigate(app, ui, rect, &resp) } else { crate::navigation::handle(app, ui, rect, &resp, NavCaps { orbit: app.viewport.orbit_allowed, pick: true }) };
+        if flat { crate::dialogs_sheet::navigate(app, ui, rect, &resp) } else { crate::navigation::handle(app, ui, rect, &resp, NavCaps { orbit: !app.viewport.orbit_locked, pick: true }) };
     let CameraInput { hover, scroll, mods, middle, secondary_down, primary_down, primary_pressed, inside, axes, pinch, pan, primary_nav, mode } =
         input;
     app.viewport.physical_scale = ui.ctx().pixels_per_point();
