@@ -18,11 +18,14 @@ fn slug(s: &str) -> bool {
         && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"_-".contains(&b))
 }
 fn relative_file(s: &str) -> bool {
-    s.len() <= 240 && !s.is_empty() && !s.contains('\\') && !s.contains(':')
+    s.len() <= 240 && !s.contains('\\') && !s.contains(':')
         && !s.starts_with('/') && !s.chars().any(char::is_control)
-        && s.split('/').all(|part| slug(part.trim_end_matches(".sc")) || (
-            part.ends_with(".sc") && slug(&part[..part.len()-3])))
-        && s.ends_with(".sc")
+        && s.strip_suffix(".sc").is_some_and(|stem| stem.split('/').all(slug))
+}
+/// Digest of the exact source bytes. This is a version pin, not a signature.
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{:x}", Sha256::digest(bytes))
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
@@ -93,7 +96,7 @@ impl ComponentLibrary {
         let mut ids = BTreeSet::new();
         let mut sources = BTreeSet::new();
         for entry in &self.entries {
-            if !slug(&entry.id) || !ids.insert(entry.id.clone()) || !label(&entry.name, 128)
+            if !slug(&entry.id) || !ids.insert((entry.id.clone(), entry.version)) || !label(&entry.name, 128)
                 || !relative_file(&entry.source) || !sources.insert(entry.source.clone())
                 || entry.sha256.len() != 64 || !entry.sha256.bytes().all(|b| b.is_ascii_hexdigit())
                 || entry.version == 0 || !matches!(entry.unit.as_str(), "mm" | "cm" | "m" | "in")
@@ -122,12 +125,14 @@ impl ComponentLibrary {
         if query.len() > 256 || query.chars().any(char::is_control) || tags.len() > 16 ||
             tags.iter().any(|tag| !slug(tag)) { return Err(invalid("invalid component search filter")); }
         let q = query.to_lowercase();
-        Ok(self.entries.iter().filter(|e| {
+        let mut found: Vec<_> = self.entries.iter().filter(|e| {
             category.is_none_or(|c| c == &e.category)
                 && tags.iter().all(|t| e.tags.contains(t))
                 && (q.is_empty() || e.id.contains(&q) || e.name.to_lowercase().contains(&q)
                     || e.tags.iter().any(|t| t.contains(&q)))
-        }).collect())
+        }).collect();
+        found.sort_by(|a, b| a.id.cmp(&b.id).then_with(|| b.version.cmp(&a.version)));
+        Ok(found)
     }
 }
 
@@ -145,6 +150,9 @@ mod tests {
             }
         ]}
     }
+    #[test] fn hash_exact_source_bytes() {
+        assert_eq!(sha256_hex(b"abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    }
     #[test] fn roundtrip_and_search() {
         let x=fixture(); let bytes=x.encode().unwrap(); let y=ComponentLibrary::decode(&bytes).unwrap();
         assert_eq!(x,y);
@@ -159,6 +167,10 @@ mod tests {
         }
         let mut y=x.clone(); y.entries[0].parameters[0].default=f64::NAN; assert!(y.encode().is_err());
         let mut y=x.clone(); y.entries.push(y.entries[0].clone()); assert!(y.encode().is_err());
+        let mut y=x.clone(); let mut second=y.entries[0].clone();
+        second.version=2; second.source="chair-v2.sc".into(); y.entries.push(second);
+        assert!(y.encode().is_ok());
+        assert_eq!(y.search("chair", None, &[]).unwrap().iter().map(|e| e.version).collect::<Vec<_>>(), vec![2,1]);
         let mut y=x.clone(); y.entries[0].sha256="bad".into(); assert!(y.encode().is_err());
         let mut y=x.clone(); y.entries[0].tags.push("seating".into()); assert!(y.encode().is_err());
         assert!(ComponentLibrary::decode(&vec![b'x';MAX_MANIFEST_BYTES+1]).is_err());
