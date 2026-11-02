@@ -1332,3 +1332,68 @@ fn a_move_before_a_long_history_of_one_body_fits_a_window_threads_stack() {
         .join();
     assert!(moved.is_ok());
 }
+
+
+/// A named reference must fail if its semantic edge disappears, even when another
+/// nearby straight edge is within the old geometric fallback radius.
+#[test]
+fn arclet_named_hole_reference_never_retargets_a_neighbor_after_history_edit() {
+    let mut s = Session::default();
+    run(&mut s, "solid.box", json!({"length": 80, "width": 60, "height": 10, "corner": [0,0,0], "name":"Plate"}));
+    run(&mut s, "solid.hole", json!({
+        "position":[20,20,10],"diameter":4,
+        "references":[{"edge":[40,0,10],"distance":"20 mm"}],
+        "name":"LocatedBore"
+    }));
+    let id = s.doc.find_feature("LocatedBore").unwrap().id;
+    let names = s.doc.find_feature("LocatedBore").unwrap().edge_names.clone();
+    assert_eq!(names.len(), 1);
+    assert!(!names[0].is_empty());
+    let good = s.doc.to_json();
+    let original = run(&mut s, "inspect.measure", json!({}))["total"]["volume_mm3"].as_f64().unwrap();
+
+    // Corrupt only the stored edge identity, as can happen when an upstream
+    // topology change removes its source. Geometric fallback would still find
+    // a different edge near the original pick.
+    let mut broken = (*s.doc).clone();
+    let hole = broken.feature_mut(id).unwrap();
+    hole.edge_names[0] = "F999999:obsolete|F999999:missing".into();
+    let mut reopened = Session::new(broken);
+    let error = reopened.model.result(id).and_then(|r| r.error.as_deref()).unwrap_or("");
+    assert!(error.contains("reference edge") && error.contains("no longer exists"), "{error}");
+    let present = reopened.model.state().bodies.iter().any(|b| b.feature == id);
+    assert!(!present, "a missing semantic reference must not publish a new hole");
+
+    // The untouched design keeps its values and survives save/reopen.
+    let mut clean = Session::new(solidcraft_doc::Document::from_json(&good).unwrap());
+    assert!(clean.model.results.iter().all(|r| r.error.is_none()));
+    let volume = run(&mut clean, "inspect.measure", json!({}))["total"]["volume_mm3"].as_f64().unwrap();
+    assert!((volume - original).abs() < 1e-6);
+}
+
+#[test]
+fn arclet_named_hole_reference_follows_upstream_resize_and_undo_redo() {
+    let mut s = Session::default();
+    run(&mut s, "solid.box", json!({"length":80,"width":60,"height":10,"corner":[0,0,0],"name":"Plate"}));
+    run(&mut s, "solid.hole", json!({
+        "position":[20,20,10],"diameter":4,
+        "references":[{"edge":[40,0,10],"distance":"20 mm"}],
+        "name":"LocatedBore"
+    }));
+    let ids: Vec<u64> = s.doc.features.iter().map(|f| f.id).collect();
+    let baseline = run(&mut s,"inspect.measure",json!({}))["total"]["volume_mm3"].as_f64().unwrap();
+    run(&mut s,"timeline.edit",json!({"feature":"Plate","set":{"length":"100 mm"}}));
+    assert!(s.model.results.iter().all(|r| r.error.is_none()), "{:?}",s.model.results);
+    assert_eq!(s.doc.features.iter().map(|f|f.id).collect::<Vec<_>>(),ids);
+    let edited = s.doc.to_json();
+    let volume = run(&mut s,"inspect.measure",json!({}))["total"]["volume_mm3"].as_f64().unwrap();
+    assert!(volume > baseline + 1000.0);
+    run(&mut s,"edit.undo",json!({}));
+    let undone = run(&mut s,"inspect.measure",json!({}))["total"]["volume_mm3"].as_f64().unwrap();
+    assert!((undone - baseline).abs() < 1e-6);
+    run(&mut s,"edit.redo",json!({}));
+    assert_eq!(s.doc.to_json(),edited);
+    let mut reopened = Session::new(solidcraft_doc::Document::from_json(&edited).unwrap());
+    assert!(reopened.model.results.iter().all(|r|r.error.is_none()));
+    assert!((run(&mut reopened,"inspect.measure",json!({}))["total"]["volume_mm3"].as_f64().unwrap()-volume).abs()<1e-6);
+}
