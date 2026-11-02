@@ -647,7 +647,7 @@ fn fit_round(st: &[Station], spec: &FillSpec, start: usize) -> SplineResult<Roun
         let (net, located) = fit_grid(&grid, st, &dev, spec, &near, &fade)?;
         let got = measure(&net, st, &dev, spec, &located, &near, &fade)?;
         best = best.min(got.shortfall);
-        let within = meets_fill_tolerances(&got, st, spec);
+        let within = meets_fill_tolerances(&got, spec);
         if within && holds {
             check_folds(&net, &dev.d, lo, hi)?;
             let ctrl: Vec<HPoint> = net.ctrl.iter().map(|p| HPoint::weighted(*p, 1.0)).collect();
@@ -678,37 +678,33 @@ fn fit_round(st: &[Station], spec: &FillSpec, start: usize) -> SplineResult<Roun
     Ok(Round::Exhausted(best))
 }
 
-/// All four measured conditions must hold. In particular a G2 patch does not
-/// pass on position and normal alone while reporting a curvature mismatch.
-fn meets_fill_tolerances(got: &Measured, st: &[Station], spec: &FillSpec) -> bool {
+/// All the sampled conditions must hold. A G2 fit cannot pass on G0 and
+/// G1 alone when its *local*, normalised curvature mismatch is excessive.
+fn meets_fill_tolerances(got: &Measured, spec: &FillSpec) -> bool {
     got.shortfall.deviation <= spec.tol
         && got.shortfall.angle <= spec.angle_tol
         && got.shortfall.points <= spec.tol
-        && got.curvature <= g2_curvature_tolerance(st)
+        && got.curvature_ratio <= G2_CURVATURE_REL_TOL
 }
 
-/// Scale-aware normal-curvature tolerance in 1/mm at the sampled G2 stations.
-/// A zero-curvature neighbour needs an absolute tolerance tied to model size.
-fn g2_curvature_tolerance(st: &[Station]) -> f64 {
-    let mut low = Vec3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
-    let mut high = Vec3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
-    let mut curvature = 0.0_f64;
-    let mut has_g2 = false;
+/// Reference inverse length in 1/mm for a nearly planar neighbouring face:
+/// when its normal curvature is zero there is no nonzero curvature to divide by.
+fn inverse_loop_size(st: &[Station]) -> f64 {
+    let (mut low, mut high) = (
+        Vec3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY),
+        Vec3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY),
+    );
     for station in st {
         low = low.min(station.p);
         high = high.max(station.p);
-        if let Some(across) = station.across
-            && let Some(bend) = across.bend
-        {
-            has_g2 = true;
-            curvature = curvature.max(across.normal.dot(bend).abs());
-        }
     }
-    if !has_g2 {
-        return f64::INFINITY;
-    }
-    let scale = low.dist(high);
-    G2_CURVATURE_REL_TOL * curvature.max(1.0 / scale.max(1e-9))
+    1.0 / low.dist(high).max(1e-9)
+}
+
+/// Normalised mismatch at one G2 station. Using the *local* neighbouring
+/// curvature avoids a highly curved side hiding bad G2 behaviour on a flat side.
+fn relative_curvature_mismatch(actual: f64, expected: f64, inverse_size: f64) -> f64 {
+    (actual - expected).abs() / expected.abs().max(inverse_size)
 }
 
 /// Which stations are close to a corner, and to a corner whose neighbours disagree, on one grid.
@@ -1083,14 +1079,18 @@ fn locate(net: &Net, d: &[[f64; 2]], p: Vec3) -> SplineResult<[f64; 2]> {
 struct Measured {
     shortfall: Shortfall,
     angle_all: f64,
+    /// Maximum absolute normal-curvature discrepancy (1/mm) for reports.
     curvature: f64,
+    /// Worst mismatch divided by the local neighbour's curvature scale.
+    curvature_ratio: f64,
 }
 
 /// Measure a fit against every station and the points.
 fn measure(net: &Net, st: &[Station], dev: &Developed, spec: &FillSpec, located: &[[f64; 2]], near: &Near, fade: &Fade) -> SplineResult<Measured> {
     let off = |what: &str| SplineError::Invalid(format!("the fit cannot be evaluated {what}"));
     let sense = if dev.counter_clockwise { 1.0 } else { -1.0 };
-    let (mut deviation, mut angle, mut angle_all, mut curvature) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
+    let (mut deviation, mut angle, mut angle_all, mut curvature, mut curvature_ratio) = (0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64);
+    let inverse_size = inverse_loop_size(st);
     for (k, s) in st.iter().enumerate() {
         let (Some(&q), Some(&nu)) = (dev.d.get(k), dev.nu.get(k)) else { continue };
         deviation = deviation.max(net.point(q).ok_or_else(|| off("on the loop"))?.dist(s.p));
@@ -1111,7 +1111,12 @@ fn measure(net: &Net, st: &[Station], dev: &Developed, spec: &FillSpec, located:
             let second = uu * (nu[0] * nu[0]) + uv * (2.0 * nu[0] * nu[1]) + vv * (nu[1] * nu[1]);
             let speed2 = first.dot(first);
             if speed2 > 0.0 {
-                curvature = curvature.max((normal.dot(second) / speed2 - want.dot(bend)).abs());
+                let measured = normal.dot(second) / speed2;
+                let expected = want.dot(bend);
+                curvature = curvature.max((measured - expected).abs());
+                curvature_ratio = curvature_ratio.max(relative_curvature_mismatch(measured, expected, inverse_size));
+            } else {
+                curvature_ratio = f64::INFINITY;
             }
         }
     }
@@ -1119,10 +1124,10 @@ fn measure(net: &Net, st: &[Station], dev: &Developed, spec: &FillSpec, located:
     for (q, p) in located.iter().zip(spec.points) {
         points = points.max(net.point(*q).ok_or_else(|| off("at a point"))?.dist(*p));
     }
-    if ![deviation, angle, angle_all, curvature, points].iter().all(|x| x.is_finite()) {
+    if ![deviation, angle, angle_all, curvature, curvature_ratio, points].iter().all(|x| x.is_finite()) {
         return invalid("the fit is not finite");
     }
-    Ok(Measured { shortfall: Shortfall { deviation, angle, points, curvature }, angle_all, curvature })
+    Ok(Measured { shortfall: Shortfall { deviation, angle, points, curvature }, angle_all, curvature, curvature_ratio })
 }
 
 /// The fill with its crown (see [`FillSpec::crown`]).
