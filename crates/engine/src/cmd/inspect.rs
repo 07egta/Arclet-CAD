@@ -244,7 +244,7 @@ fn measure(s: &mut Session, p: &Value) -> Result<Value> {
         .map(|(m, b)| m.unwrap_or_else(|| json!({"name": b.name, "error": "measuring this body failed"})))
         .collect();
     // Mass from each body's material.
-    for (b, body) in bodies.iter_mut().zip(selected) {
+    for (b, body) in bodies.iter_mut().zip(&selected) {
         let source = body.definition_name();
         // Every body's material, measured or not: naming it takes no measuring.
         b["material"] = json!(s.doc.body_material(source));
@@ -300,10 +300,11 @@ fn measure(s: &mut Session, p: &Value) -> Result<Value> {
     if quality {
         let failed = quality_rows.iter().filter(|q| q["passed_available_checks"] == false).count();
         let warnings = quality_rows.iter().filter(|q| q["short_edges"].as_array().is_some_and(|a| !a.is_empty())).count();
+        let checked_bodies = quality_rows.len();
         result["quality"] = json!({
             "bodies": quality_rows,
             "summary": {
-                "checked_bodies": quality_rows.len(),
+                "checked_bodies": checked_bodies,
                 "failed": failed,
                 "short_edge_warnings": warnings,
                 "certified": false,
