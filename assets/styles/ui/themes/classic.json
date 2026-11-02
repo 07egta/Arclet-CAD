@@ -3,49 +3,49 @@
   "name": "Classic",
   "base": "light",
   "colors": {
-    "accent": "#2f6fd6",
-    "accent_soft": "#d5e3f8",
+    "accent": "#315f98",
+    "accent_soft": "#dae4f1",
     "on_accent": "#ffffff",
-    "selected_ink": "#14284a",
-    "selected_bg": "#cfdcf3",
-    "chip": "#2f6fd6",
-    "text": "#1d2025",
-    "text_dim": "#5b6069",
-    "app_bar": "#d6d8dc",
-    "app_bar_text": "#1d2025",
-    "app_bar_separator": "#9ea3ab",
-    "app_bar_tab_active": "#f5f6f7",
-    "toolbar": "#e3e4e7",
-    "panel": "#e9eaed",
-    "panel_header": "#dcdee2",
-    "border": "#b4b8be",
+    "selected_ink": "#19293f",
+    "selected_bg": "#dae4f1",
+    "chip": "#315f98",
+    "text": "#22262d",
+    "text_dim": "#515965",
+    "app_bar": "#e7e9ed",
+    "app_bar_text": "#22262d",
+    "app_bar_separator": "#b3b8c0",
+    "app_bar_tab_active": "#fbfbfc",
+    "toolbar": "#edf0f3",
+    "panel": "#f0f2f4",
+    "panel_header": "#e5e8ec",
+    "border": "#b9bec5",
     "field": "#ffffff",
     "control_fill": "#ffffff",
-    "control_border": "#a7acb4",
-    "dialog_bg": "#f4f5f7",
-    "dialog_body": "#f4f5f7",
-    "dialog_footer": "#e6e8eb",
-    "dialog_border": "#b4b8be",
-    "dialog_rule": "#c9ccd1",
-    "dialog_label": "#1d2025",
-    "hover": "#d3d7dd",
-    "viewport_top": "#9ea2a8",
-    "viewport_bottom": "#7c8189",
+    "control_border": "#aab2bd",
+    "dialog_bg": "#f5f6f8",
+    "dialog_body": "#f5f6f8",
+    "dialog_footer": "#e9ecf0",
+    "dialog_border": "#b9bec5",
+    "dialog_rule": "#c6cbd2",
+    "dialog_label": "#22262d",
+    "hover": "#dde5ee",
+    "viewport_top": "#a8adb4",
+    "viewport_bottom": "#828993",
     "dimension": "#04102e",
     "dimension_driven": "#2a0f3d",
-    "grid": "#6d7179",
-    "grid_major": "#4c5058",
-    "body": "#cfd2d7",
-    "body_edge": "#2b2e33",
-    "body_selected": "#f2d55c",
-    "sel_face": "#2f6fd640",
-    "sel_edge": "#1f5fc4",
+    "grid": "#6e747d",
+    "grid_major": "#525963",
+    "body": "#d2d5da",
+    "body_edge": "#2c3036",
+    "body_selected": "#e5ca7a",
+    "sel_face": "#315f9840",
+    "sel_edge": "#315f98",
     "sel_edge_rim": "#ffffff",
-    "sel_vertex": "#1f5fc4",
-    "hover_edge": "#1f5fc4",
+    "sel_vertex": "#315f98",
+    "hover_edge": "#315f98",
     "hover_edge_halo": "#ffffff",
-    "error": "#c0392b",
-    "warning": "#b7791f",
+    "error": "#a82e28",
+    "warning": "#875515",
     "sketch_accent": "#2e8b57",
     "sketch_ink": "#1d4d31",
     "sketch_soft": "#dcefe2",
@@ -69,25 +69,68 @@
     "axis_z": "#2f6fd6"
   },
   "borders": {
-    "primary": {"width": 1, "color": "#9ea3ab"},
-    "secondary": {"width": 1, "color": "#c4c8ce"},
-    "tertiary": {"width": 1, "color": "#d0d3d8"},
-    "container": {"width": 1, "color": "#aeb3bb"},
-    "control": {"width": 1, "color": "#a7acb4"}
+    "primary": {
+      "width": 1,
+      "color": "#b3b8c0"
+    },
+    "secondary": {
+      "width": 1,
+      "color": "#c6cbd2"
+    },
+    "tertiary": {
+      "width": 1,
+      "color": "#d3d7dc"
+    },
+    "container": {
+      "width": 1,
+      "color": "#b9bec5"
+    },
+    "control": {
+      "width": 1,
+      "color": "#aab2bd"
+    }
   },
   "icon_palette": {
-    "ink": "#1d2025",
-    "line": "#33373e",
-    "passive-1": "#d9dce1",
-    "passive-2": "#aeb3bb",
-    "passive-3": "#7f8590",
-    "guide": "#6d7179",
-    "solid": ["#d5e3f8", "#7aa6e8", "#2f6fd6"],
-    "surface": ["#f6e5d4", "#d9a26a", "#a3642a"],
-    "mesh": ["#f4efc9", "#d6c24a", "#8a7a12"],
-    "form": ["#e7def8", "#a88ee0", "#6b4bb0"],
-    "sketch": ["#dcefe2", "#7fc29a", "#2f7d52"],
-    "constraint": ["#f5dde7", "#e08aaa", "#b03a67"],
-    "construction": ["#e9e9ec", "#a9abb2", "#6b6f78"]
+    "ink": "#22262d",
+    "line": "#414852",
+    "passive-1": "#e4e7eb",
+    "passive-2": "#b4bac4",
+    "passive-3": "#79838e",
+    "guide": "#6e747d",
+    "solid": [
+      "#dae4f1",
+      "#8daece",
+      "#315f98"
+    ],
+    "surface": [
+      "#f6e5d4",
+      "#d9a26a",
+      "#a3642a"
+    ],
+    "mesh": [
+      "#f4efc9",
+      "#d6c24a",
+      "#8a7a12"
+    ],
+    "form": [
+      "#e7def8",
+      "#a88ee0",
+      "#6b4bb0"
+    ],
+    "sketch": [
+      "#dcefe2",
+      "#7fc29a",
+      "#2f7d52"
+    ],
+    "constraint": [
+      "#f5dde7",
+      "#e08aaa",
+      "#b03a67"
+    ],
+    "construction": [
+      "#f0f2f4",
+      "#b6bcc5",
+      "#626c77"
+    ]
   }
 }
