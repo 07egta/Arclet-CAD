@@ -1,4 +1,18 @@
-# Optional C++ polygon spike (`solidcraft-polyclip-cpp`)
+# C++ libraries in Arclet (`solidcraft-polyclip-cpp` is the first)
+
+## Direction (decided by the project owner, 2026-11-02)
+
+- Arclet is a **desktop** application. It does not have to run in the browser, so desktop builds
+  may use C++ libraries freely where they give a real gain. The wasm build keeps the pure-Rust
+  fallback only.
+- Reusing parts of the SolidCraft code base is allowed where it helps (Arclet is built on it).
+- Licence limits still apply until the owner changes them: no GPL/LGPL/AGPL (so no OpenCASCADE),
+  and nothing whose licence grant is unclear (so no openNURBS yet). See `docs/cpp-library-survey.md`.
+- Candidates in order: Clipper2 (2D offset/boolean, BSL-1.0, spike done), Manifold (solid
+  booleans, Apache-2.0), Eigen and Ceres (linear algebra and constraint solving, MPL-2.0 and BSD-3).
+- The old text below was written before this decision. Where it says "not in wasm" or "off by
+  default", read it as the current state of the spike, not as a ban on enabling it for desktop.
+
 
 Status: spike. Not part of any default build, not part of the product, and not in wasm.
 
