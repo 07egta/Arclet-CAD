@@ -317,3 +317,149 @@ pub(super) fn check(s: &mut Session, p: &Value) -> Result<Value> {
         ],
     }))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn box_mesh(x: f64, y: f64, z: f64) -> (Vec<Vec3>, Vec<[u32; 3]>) {
+        let positions = vec![
+            Vec3::new(0.0, 0.0, 0.0), Vec3::new(x, 0.0, 0.0),
+            Vec3::new(x, y, 0.0), Vec3::new(0.0, y, 0.0),
+            Vec3::new(0.0, 0.0, z), Vec3::new(x, 0.0, z),
+            Vec3::new(x, y, z), Vec3::new(0.0, y, z),
+        ];
+        let triangles = vec![
+            [0, 2, 1], [0, 3, 2], [4, 5, 6], [4, 6, 7],
+            [0, 1, 5], [0, 5, 4], [3, 6, 2], [3, 7, 6],
+            [0, 4, 7], [0, 7, 3], [1, 2, 6], [1, 6, 5],
+        ];
+        (positions, triangles)
+    }
+
+    /// An open-top, closed-volume thin-walled vase: both wall surfaces, the
+    /// rim, a solid bottom and an inner floor, with outward winding.
+    fn thin_vase(radius_mm: f64, wall_mm: f64, bottom_mm: f64, height_mm: f64)
+        -> (Vec<Vec3>, Vec<[u32; 3]>) {
+        let n = 48u32;
+        let mut positions = Vec::new();
+        for (radius, z) in [
+            (radius_mm, 0.0), (radius_mm, height_mm),
+            (radius_mm - wall_mm, bottom_mm), (radius_mm - wall_mm, height_mm),
+        ] {
+            for k in 0..n {
+                let angle = std::f64::consts::TAU * f64::from(k) / f64::from(n);
+                positions.push(Vec3::new(radius * angle.cos(), radius * angle.sin(), z));
+            }
+        }
+        let bottom_centre = positions.len() as u32;
+        positions.push(Vec3::new(0.0, 0.0, 0.0));
+        let inner_centre = positions.len() as u32;
+        positions.push(Vec3::new(0.0, 0.0, bottom_mm));
+        let mut triangles = Vec::new();
+        for i in 0..n {
+            let j = (i + 1) % n;
+            let (ob, on) = (i, j);
+            let (ot, tn) = (i + n, j + n);
+            let (ib, bn) = (i + 2 * n, j + 2 * n);
+            let (it, itn) = (i + 3 * n, j + 3 * n);
+            // exterior cylinder, interior cylinder, upper lip, underside,
+            // and interior floor of the vase.
+            triangles.extend([
+                [ob, on, tn], [ob, tn, ot],
+                [ib, itn, bn], [ib, it, itn],
+                [ot, tn, itn], [ot, itn, it],
+                [bottom_centre, on, ob],
+                [inner_centre, ib, bn],
+            ]);
+        }
+        (positions, triangles)
+    }
+
+    #[test]
+    fn cube_preflight_has_analytic_20mm_bounds_and_bed_contact() {
+        let (positions, triangles) = box_mesh(20.0, 20.0, 20.0);
+        let topo = super::super::analyze(&positions, &triangles, 0.0);
+        assert_eq!(topo["closed"], true, "{topo}");
+        let self_check = intersection_screen(&positions, &triangles, 1e-9);
+        assert_eq!(self_check["complete"], true, "{self_check}");
+        assert_eq!(self_check["potential_pairs"], 0, "{self_check}");
+        let bounds: Aabb3 = positions.iter().copied().collect();
+        let support = overhang_screen(&positions, &triangles, bounds, 45.0);
+        assert!((support["horizontal_bed_contact_area_mm2"].as_f64().unwrap() - 400.0).abs() < 1e-8);
+        assert_eq!(support["has_flat_bed_contact"], true);
+        assert_eq!(support["possible_support_area_mm2"], 0.0);
+        let thickness = wall_screen(&positions, &triangles, 0.4, 20.0);
+        assert_eq!(thickness["below_nozzle_diameter"], false, "{thickness}");
+        let nearest = thickness["minimum_sampled_mm"].as_f64().unwrap_or(f64::NAN);
+        assert!((nearest - 20.0).abs() < 1e-8, "{thickness}");
+    }
+
+    #[test]
+    fn crossed_nonadjacent_triangles_are_detected_without_shared_vertices() {
+        let points = vec![
+            Vec3::new(-3.0, -3.0, 0.0), Vec3::new(3.0, -3.0, 0.0), Vec3::new(0.0, 3.0, 0.0),
+            Vec3::new(-3.0, 0.0, -1.0), Vec3::new(3.0, 0.0, -1.0), Vec3::new(0.0, 0.0, 3.0),
+        ];
+        let report = intersection_screen(&points, &[[0, 1, 2], [3, 4, 5]], 1e-9);
+        assert_eq!(report["complete"], true);
+        assert_eq!(report["potential_pairs"], 1, "{report}");
+        assert_eq!(report["examples"][0], json!([0, 1]));
+    }
+
+    #[test]
+    fn extremely_large_self_intersection_workload_is_not_marked_clear() {
+        let positions = [
+            Vec3::ZERO, Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0),
+        ];
+        let triangles = vec![[0, 1, 2]; MAX_INTERSECTION_TRIANGLES + 1];
+        let report = intersection_screen(&positions, &triangles, 1e-9);
+        assert_eq!(report["complete"], false);
+        assert_eq!(report["potential_pairs"], Value::Null);
+    }
+
+    #[test]
+    fn a_0_2mm_wall_is_only_a_warning_not_a_printability_certificate() {
+        let (vertices, faces) = thin_vase(10.0, 0.2, 0.2, 20.0);
+        let topology = super::super::analyze(&vertices, &faces, 0.0);
+        assert_eq!(topology["closed"], true, "{topology}");
+        let bounds: Aabb3 = vertices.iter().copied().collect();
+        assert!((bounds.size().z - 20.0).abs() < 1e-12);
+        let wall = wall_screen(&vertices, &faces, 0.4, 20.0);
+        assert_eq!(wall["certified_minimum_wall_thickness"], false);
+        assert_eq!(wall["below_nozzle_diameter"], true, "{wall}");
+        let distance = wall["minimum_sampled_mm"].as_f64().unwrap_or(f64::NAN);
+        assert!((distance - 0.2).abs() < 0.03, "{wall}");
+        let support = overhang_screen(&vertices, &faces, bounds, 45.0);
+        assert!(support["horizontal_bed_contact_area_mm2"].as_f64().unwrap_or(0.0) > 300.0);
+    }
+
+    #[test]
+    fn independent_session_command_reports_invalid_threshold_and_bed_size() {
+        let mut s = Session::default();
+        s.execute("solid.box", &json!({
+            "length": 20, "width": 20, "height": 20, "corner": [0, 0, 0],
+            "body_name": "Cube20",
+        })).unwrap();
+        let result = s.execute("mesh.manufacturing_check", &json!({
+            "body": "Cube20", "bed_size_mm": [180, 180, 180],
+            "nozzle_diameter_mm": 0.4,
+        })).unwrap();
+        assert_eq!(result["units"], "millimeter");
+        assert_eq!(result["source"], "brep_tessellation");
+        assert_eq!(result["topology"]["closed"], true, "{result}");
+        assert_eq!(result["bed_fit"]["fits_current_xy_orientation"], true);
+        assert_eq!(result["manufacturing_certified"], false);
+        for bad in [json!(-0.2), json!(0.0), json!("0.4"), Value::Null, json!(100.0)] {
+            assert!(s.execute("mesh.manufacturing_check", &json!({
+                "body": "Cube20", "nozzle_diameter_mm": bad,
+            })).is_err());
+        }
+        for bad in [json!([0, 180, 180]), json!([180, 180]), json!("180x180x180")] {
+            assert!(s.execute("mesh.manufacturing_check", &json!({
+                "body": "Cube20", "bed_size_mm": bad,
+            })).is_err());
+        }
+    }
+}
