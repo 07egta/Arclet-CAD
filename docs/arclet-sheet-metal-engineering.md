@@ -56,6 +56,7 @@ These checks are additive for valid inputs and do not change the serialization l
 - `arclet_sheet_rule_deletion_preserves_existing_flat_pattern_and_dxf`: active and explicit rule references, unused rule removal, unchanged DXF on rejected operation.
 - `arclet_k_factor_and_radius_recompute_flats_and_dxf_after_save_reload`: formula, parametric rule edit, DXF difference, reload, unfold and refold.
 - `arclet_invalid_sheet_rule_and_custom_bend_radius_leave_design_unchanged`: command-level invalid-input protection and unchanged feature JSON/flat.
+- `arclet_ninety_degree_dxf_outline_reimports_at_its_analytic_flat_dimensions`: DXF outline measurements against the analytic neutral-axis blank, preserved bend line length, and cutting-only DXF imported back into a new sketch with the expected area for two different radii/K-factors.
 
 **Pre-existing cases still necessary for full acceptance:** L bracket, tray/U-channel, contour flanges, multi-flange boxes, reliefs at corners, round holes and slots, notches, converted fillets/chamfers, exact DXF arcs/ellipses, sketch attachments surviving fold/unfold, edit/undo and parameter changes. The extensive existing tests are in `crates/doc/src/sheet.rs`, `crates/engine/src/cmd/sheet_tests.rs`, `sheet_convert_tests.rs`, `sheet_dxf_tests.rs` and `sheet_face_names_tests.rs`. This PR does not claim these broader tests passed without seeing an actual CI run.
 
