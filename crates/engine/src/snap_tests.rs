@@ -327,7 +327,7 @@ mod smart_snap_tests {
         q.cursor_px = SnapScreenPoint { x: 625.0, y: 500.0 };
         let got = query_snaps(&[line], &q).unwrap();
         near(got.candidates[0].at, Vec3::new(6.0 / 7.0, 0.0, 3.0 / 7.0), 1e-12);
-        q.cursor_px.x += 20.0;
+        q.cursor_px.y += 20.0;
         q.settings.radius_px = 1.0;
         assert!(query_snaps(&[segment("line", Vec3::new(0.0, 0.0, 0.0), Vec3::new(2.0, 0.0, 1.0))], &q)
             .unwrap().candidates.is_empty());
