@@ -464,19 +464,22 @@ struct LayerRow {
 
 fn layer_rows(session: &Session) -> Vec<LayerRow> {
     let layers = &session.doc.layers;
+    let valid: std::collections::HashSet<u64> = layers.items.iter().map(|layer| layer.id).collect();
     let mut counts = std::collections::HashMap::<u64, usize>::new();
-    for id in layers.of.values() {
-        if layers.get(*id).is_some() {
-            *counts.entry(*id).or_default() += 1;
-        }
+    for id in layers.of.values().filter(|id| valid.contains(id)) {
+        *counts.entry(*id).or_default() += 1;
     }
+    // Bodies with no explicit assignment (or a stale, deleted assignment) are
+    // on Default; count from the evaluated body names, not from the assignment map.
+    let default_count = session.world_state().bodies.iter()
+        .filter(|body| layers.layer_of(&body.name) == DEFAULT).count();
     let mut rows = vec![LayerRow {
         id: DEFAULT,
         name: tr("arclet.layers.default").to_string(),
         colour: String::new(),
         visible: true,
         locked: false,
-        count: 0,
+        count: default_count,
     }];
     rows.extend(layers.items.iter().map(|l| LayerRow {
         id: l.id,
