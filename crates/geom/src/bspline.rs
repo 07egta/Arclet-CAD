@@ -677,7 +677,7 @@ impl NurbsSurface {
         let mut max_weight = 0.0_f64;
         for (j, bv) in basis[1].iter().enumerate() {
             for (i, bu) in basis[0].iter().enumerate() {
-                if bu[0] * bv[0] > 0.0 {
+                if bu[0] > 0.0 && bv[0] > 0.0 {
                     max_weight = max_weight.max(self.point(starts[0] + i, starts[1] + j).w);
                 }
             }
@@ -690,6 +690,9 @@ impl NurbsSurface {
         let mut origin = None;
         for (j, bv) in basis[1].iter().enumerate() {
             for (i, bu) in basis[0].iter().enumerate() {
+                if bu[0] <= 0.0 || bv[0] <= 0.0 {
+                    continue;
+                }
                 let h = self.point(starts[0] + i, starts[1] + j);
                 let coefficient = bu[0] * bv[0] * (h.w / max_weight);
                 if coefficient > strongest {
@@ -739,6 +742,10 @@ impl NurbsSurface {
                 let point = controls[j][i];
                 let relative = if half_scale { point * 0.5 - origin * 0.5 } else { point - origin };
                 for (k, &(a, b)) in ORDERS.iter().take(count).enumerate() {
+                    // Never form infinity × zero for a large off-end control weight.
+                    if bu[a] == 0.0 || bv[b] == 0.0 {
+                        continue;
+                    }
                     let factor = weight * bu[a] * bv[b];
                     if factor == 0.0 {
                         continue;
@@ -1039,6 +1046,154 @@ pub(crate) mod tests {
         // A clamped surface interpolates its corner control points.
         let corner = c.eval(3.0, 1.5).unwrap();
         assert!(corner.dist(c.point(0, 0).project().unwrap()) < 1e-12);
+    }
+
+    fn assert_vector_near(actual: Vec3, expected: Vec3, scale: f64) {
+        let error = (actual.x - expected.x).abs().max((actual.y - expected.y).abs()).max((actual.z - expected.z).abs());
+        assert!(error <= 2e-12 * scale, "got {actual:?}, expected {expected:?}, scale {scale}, error {error}");
+    }
+
+    #[test]
+    fn analytic_plane_surface_jet_and_curvature_are_scale_aware() {
+        // Bilinear plane: S(u,v) = (2u, 3v, 0). The exact second derivatives
+        // and both curvatures vanish, independent of model scale.
+        for scale in [1e-6, 1.0, 1e9] {
+            let points = [
+                Vec3::new(0.0, 0.0, 0.0),
+                Vec3::new(2.0 * scale, 0.0, 0.0),
+                Vec3::new(0.0, 3.0 * scale, 0.0),
+                Vec3::new(2.0 * scale, 3.0 * scale, 0.0),
+            ];
+            let patch = NurbsSurface::new(
+                [1, 1], [vec![0.0, 0.0, 1.0, 1.0], vec![0.0, 0.0, 1.0, 1.0]],
+                &points, &[1.0; 4],
+            ).unwrap();
+            for (u, v) in [(0.0, 0.0), (0.25, 0.75), (1.0, 1.0)] {
+                let j = patch.jet(u, v).unwrap();
+                assert_vector_near(j.point, Vec3::new(2.0 * scale * u, 3.0 * scale * v, 0.0), scale);
+                assert_vector_near(j.du, Vec3::new(2.0 * scale, 0.0, 0.0), scale);
+                assert_vector_near(j.dv, Vec3::new(0.0, 3.0 * scale, 0.0), scale);
+                for d in [j.duu, j.duv, j.dvv] {
+                    assert_vector_near(d, Vec3::ZERO, scale);
+                }
+                let c = j.curvature().unwrap();
+                assert_vector_near(c.normal, Vec3::Z, 1.0);
+                assert_eq!(c.mean_per_mm, 0.0);
+                assert_eq!(c.gaussian_per_mm2, 0.0);
+            }
+        }
+    }
+
+    fn quarter_cylinder(radius: f64, height: f64, common_weight: f64) -> NurbsSurface {
+        // A quadratic rational quarter circle extruded linearly along z.
+        // Every point lies exactly on x²+y²=R², without tessellation.
+        let points = [
+            Vec3::new(radius, 0.0, 0.0), Vec3::new(radius, radius, 0.0), Vec3::new(0.0, radius, 0.0),
+            Vec3::new(radius, 0.0, height), Vec3::new(radius, radius, height), Vec3::new(0.0, radius, height),
+        ];
+        let c = std::f64::consts::FRAC_1_SQRT_2;
+        NurbsSurface::new(
+            [2, 1],
+            [vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0], vec![0.0, 0.0, 1.0, 1.0]],
+            &points, &[common_weight, c * common_weight, common_weight,
+                common_weight, c * common_weight, common_weight],
+        ).unwrap()
+    }
+
+    #[test]
+    fn rational_quarter_cylinder_matches_analytic_shape_tangent_and_curvature() {
+        for radius in [1e-4, 4.0, 1e5] {
+            let s = quarter_cylinder(radius, 2.0 * radius, 1.0);
+            let j = s.jet(0.5, 0.4).unwrap();
+            let a = radius * std::f64::consts::FRAC_1_SQRT_2;
+            assert_vector_near(j.point, Vec3::new(a, a, 0.8 * radius), radius);
+            let speed = 4.0 * (1.0 - std::f64::consts::FRAC_1_SQRT_2);
+            assert_vector_near(j.du, Vec3::new(-speed * radius, speed * radius, 0.0), radius);
+            assert_vector_near(j.dv, Vec3::new(0.0, 0.0, 2.0 * radius), radius);
+            let c = j.curvature().unwrap();
+            assert_vector_near(c.normal, Vec3::new(std::f64::consts::FRAC_1_SQRT_2, std::f64::consts::FRAC_1_SQRT_2, 0.0), 1.0);
+            assert!((c.mean_per_mm + 0.5 / radius).abs() <= 2e-12 / radius, "{c:?}");
+            assert!(c.gaussian_per_mm2.abs() <= 2e-12 / (radius * radius), "{c:?}");
+        }
+    }
+
+    #[test]
+    fn surface_weight_normalization_recovers_tiny_positive_weights() {
+        let canonical = quarter_cylinder(8.0, 2.0, 1.0);
+        let expected = canonical.jet(0.3, 0.7).unwrap();
+        for weight in [1e-200, 1e-100, 1e100, 1e200] {
+            let scaled = quarter_cylinder(8.0, 2.0, weight);
+            let result = scaled.jet(0.3, 0.7).unwrap();
+            assert_vector_near(result.point, expected.point, 8.0);
+            assert_vector_near(result.du, expected.du, 8.0);
+            assert_vector_near(result.dv, expected.dv, 8.0);
+            assert_vector_near(result.duu, expected.duu, 8.0);
+            assert_vector_near(result.duv, expected.duv, 8.0);
+            assert_vector_near(result.dvv, expected.dvv, 8.0);
+            assert_vector_near(scaled.eval(0.0, 0.0).unwrap(), Vec3::new(8.0, 0.0, 0.0), 8.0);
+        }
+    }
+
+    #[test]
+    fn translated_surface_has_no_spurious_derivatives_and_degenerate_curvature_fails() {
+        let origin = Vec3::new(1e14, -2e14, 3e14);
+        let points = [
+            origin, origin + Vec3::new(10.0, 0.0, 0.0),
+            origin + Vec3::new(0.0, 20.0, 0.0), origin + Vec3::new(10.0, 20.0, 0.0),
+        ];
+        let knots = [vec![0.0, 0.0, 1.0, 1.0], vec![0.0, 0.0, 1.0, 1.0]];
+        let patch = NurbsSurface::new([1, 1], knots.clone(), &points, &[1.0; 4]).unwrap();
+        let j = patch.jet(0.25, 0.75).unwrap();
+        assert_vector_near(j.point - origin, Vec3::new(2.5, 15.0, 0.0), 1e11);
+        assert_vector_near(j.du, Vec3::new(10.0, 0.0, 0.0), 10.0);
+        assert_vector_near(j.dv, Vec3::new(0.0, 20.0, 0.0), 20.0);
+        for d in [j.duu, j.duv, j.dvv] {
+            assert_vector_near(d, Vec3::ZERO, 20.0);
+        }
+        let collapsed = NurbsSurface::new([1, 1], knots, &[origin; 4], &[1.0; 4]).unwrap();
+        assert_eq!(collapsed.jet(0.5, 0.5).unwrap().point, origin);
+        assert!(collapsed.jet(0.5, 0.5).unwrap().curvature().is_err());
+    }
+
+    #[test]
+    fn surface_internal_knot_uses_right_hand_jet() {
+        // Quadratic Bézier pieces with a shared middle control and a C0
+        // repeated knot at u=0.5. Its right derivative is (1,0,4).
+        let row = [
+            Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.25, 0.0, 0.0),
+            Vec3::new(0.5, 0.0, 0.0), Vec3::new(0.75, 0.0, 1.0),
+            Vec3::new(1.0, 0.0, 1.0),
+        ];
+        let points: Vec<Vec3> = row.iter().copied().chain(row.iter().map(|p| *p + Vec3::Y)).collect();
+        let patch = NurbsSurface::new(
+            [2, 1],
+            [vec![0.0, 0.0, 0.0, 0.5, 0.5, 1.0, 1.0, 1.0], vec![0.0, 0.0, 1.0, 1.0]],
+            &points, &[1.0; 10],
+        ).unwrap();
+        let right = patch.jet(0.5, 0.3).unwrap();
+        assert_vector_near(right.point, Vec3::new(0.5, 0.3, 0.0), 1.0);
+        assert_vector_near(right.du, Vec3::new(1.0, 0.0, 4.0), 1.0);
+        assert_vector_near(right.dv, Vec3::Y, 1.0);
+        let left = patch.jet(0.5 - 1e-7, 0.3).unwrap();
+        assert!(left.du.z.abs() < 1e-12);
+        assert!(right.du.z - left.du.z > 3.9);
+    }
+
+    #[test]
+    fn surface_jet_rejects_unrepresentable_second_derivatives_without_breaking_eval() {
+        // A tiny but representable parameter domain produces finite points
+        // while individual basis second derivatives overflow f64.
+        let points = [
+            Vec3::ZERO, Vec3::X * 1e-300, Vec3::X * 2e-300,
+            Vec3::Y, Vec3::Y + Vec3::X * 1e-300, Vec3::Y + Vec3::X * 2e-300,
+        ];
+        let patch = NurbsSurface::new(
+            [2, 1],
+            [vec![0.0, 0.0, 0.0, 1e-300, 1e-300, 1e-300], vec![0.0, 0.0, 1.0, 1.0]],
+            &points, &[1.0; 6],
+        ).unwrap();
+        assert!(patch.eval(0.5e-300, 0.5).unwrap().is_finite());
+        assert!(patch.jet(0.5e-300, 0.5).is_err());
     }
 
     #[test]
