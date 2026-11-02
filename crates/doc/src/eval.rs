@@ -2152,6 +2152,10 @@ impl Model {
         for f in &doc.features {
             feature_component.entry(f.id).or_insert(f.component);
         }
+        // Resolve structural references once per evaluation. This lightweight, read-only
+        // graph must be checked before reusing snapshots or ahead results: a missing,
+        // cyclic or reordered sketch reference cannot be hidden by stale geometry.
+        let dependencies = doc.feature_dependency_graph();
         let watched = crate::progress::begin(doc.features.len());
         for (i, f) in doc.features.iter().enumerate() {
             self.placement_local = self.placement_local && placement_reuse::local_geometry(f, &feature_component);
@@ -2178,6 +2182,29 @@ impl Model {
             // A state the saved model did not keep is evaluated again from the one before it; the
             // results after it that the model did keep still stand (#3220).
             let unkept = reuse && self.results.get(i).filter(current).is_some_and(|old| old.unkept);
+            // Do not accept an old success, an ahead-computed result or cached geometry
+            // for a feature with invalid explicit dependencies. Preserve the last valid
+            // state for independent later features, but report the owning feature's ID
+            // and the missing/recursive reference that prevented this one from running.
+            if !f.suppressed && !rolled_back && !cancelled
+                && let Some(problem) = dependencies.blocking_error(f.id)
+            {
+                reuse = false;
+                out.push(FeatureResult {
+                    id: f.id,
+                    name: f.name.clone(),
+                    error: Some(problem.to_owned()),
+                    warning: None,
+                    boolean_diagnostics: Default::default(),
+                    ms: 0.0,
+                    skipped: false,
+                    stale: false,
+                    fingerprint: fp,
+                    unkept: false,
+                    state: state.clone(),
+                });
+                continue;
+            }
             if f.suppressed && !rolled_back {
                 reserved.extend(f.body_names.iter().map(|n| n.trim()).filter(|n| !n.is_empty()).map(str::to_string));
             }
