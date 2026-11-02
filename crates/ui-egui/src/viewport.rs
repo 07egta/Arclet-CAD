@@ -3876,8 +3876,9 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
     if !flat {
         app.flat_view.fitted = false;
     }
+    let navigation_caps = NavCaps { orbit: !app.viewport.orbit_locked, pick: true };
     let input =
-        if flat { crate::dialogs_sheet::navigate(app, ui, rect, &resp) } else { crate::navigation::handle(app, ui, rect, &resp, NavCaps { orbit: !app.viewport.orbit_locked, pick: true }) };
+        if flat { crate::dialogs_sheet::navigate(app, ui, rect, &resp) } else { crate::navigation::handle(app, ui, rect, &resp, navigation_caps) };
     let CameraInput { hover, scroll, mods, middle, secondary_down, primary_down, primary_pressed, inside, axes, pinch, pan, primary_nav, mode } =
         input;
     app.viewport.physical_scale = ui.ctx().pixels_per_point();
