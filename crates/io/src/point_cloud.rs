@@ -54,8 +54,15 @@ impl Keep {
             self.bad += 1;
             return;
         }
-        let o = *self.origin.get_or_insert(p);
+        let o = self.origin.unwrap_or(p);
         let d = p - o;
+        // Every stored offset must also satisfy the document's f32 coordinate bound.
+        // Two individually valid absolute positions can differ by more than MAX_COORD.
+        if ![d.x, d.y, d.z].iter().all(|v| v.is_finite() && v.abs() <= MAX_COORD) {
+            self.bad += 1;
+            return;
+        }
+        self.origin = Some(o);
         self.out.points.extend([d.x as f32, d.y as f32, d.z as f32]);
         if self.colored {
             self.out.colors.extend(rgb.unwrap_or([255; 3]));
@@ -127,14 +134,19 @@ fn numbers(line: &str, out: &mut Vec<f64>) -> bool {
 
 /// Read an XYZ file into `keep`; returns the thinning stride.
 fn read_xyz(bytes: &[u8], keep: &mut Keep) -> Result<u64> {
-    let text = String::from_utf8_lossy(bytes);
+    // A whole-file lossy UTF-8 conversion can duplicate an almost 1 GB input in RAM.
+    // Validate each line only when it is visited; malformed bytes count as bad input.
     let lines = bytes.iter().filter(|b| **b == b'\n').count() as u64 + 1;
     let stride = lines.div_ceil(keep.max as u64).max(1);
     let mut v = Vec::with_capacity(16);
     // Where the colour is: after x, y, z (6 numbers), or after an intensity too (7, as PTS).
     let mut rgb_at: Option<Option<usize>> = None;
     let mut data = 0u64;
-    for line in text.lines() {
+    for raw in bytes.split(|b| *b == b'\n') {
+        let Ok(line) = std::str::from_utf8(raw) else {
+            keep.bad += 1;
+            continue;
+        };
         if !numbers(line, &mut v) {
             if !line.trim().is_empty() && !line.trim_start().starts_with('#') && !line.trim_start().starts_with("//") {
                 keep.bad += 1;
@@ -215,6 +227,27 @@ mod tests {
         assert!((c.points[3] - 25.4).abs() < 1e-6);
         let plain = read_point_cloud(b"0 0 0\n1 0 0\n", "a.xyz", 1.0, 1).unwrap();
         assert_eq!(plain.points.len(), 3, "thinned to one point");
+    }
+
+    #[test]
+    fn remote_origin_keeps_local_offsets_without_accepting_an_oversized_span() {
+        let xyz = b"999999990 0 0\n999999990.125 0 0\n-999999990 0 0\n";
+        let read = read_point_cloud(xyz, "remote.xyz", 1.0, DEFAULT_MAX_POINTS).unwrap();
+        assert_eq!(read.origin, Vec3::new(999999990.0, 0.0, 0.0));
+        assert_eq!(read.points, [0.0, 0.0, 0.0, 0.125, 0.0, 0.0]);
+        assert_eq!(read.source_points, 3);
+        assert_eq!(read.warnings.len(), 1, "the far-away offset is outside the stored range");
+        assert!(read.warnings[0].contains("1 point"));
+    }
+
+    #[test]
+    fn non_utf8_and_nan_lines_are_skipped_without_a_full_file_copy() {
+        let xyz = b"10 20 30 1 2 3\n\xff\xfe\nNaN 0 0\n11 20 30 4 5 6\n";
+        let read = read_point_cloud(xyz, "bad.xyz", 1.0, DEFAULT_MAX_POINTS).unwrap();
+        assert_eq!(read.points, [0.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+        assert_eq!(read.colors, [1, 2, 3, 4, 5, 6]);
+        assert_eq!(read.warnings.len(), 1);
+        assert!(read.warnings[0].contains("2 point"));
     }
 
     #[test]
