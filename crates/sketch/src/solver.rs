@@ -997,9 +997,7 @@ fn distance_opening_slope(s: &State, b: &Block, v: usize) -> Option<f64> {
 /// difference and its length derivative is almost zero. For a small angle guide next
 /// to a large line, use the scale local to the variable, not the whole block's bounds.
 fn derivative_scale(s: &State, block: &Block, variable: usize) -> f64 {
-    let owns = |p: usize| {
-        s.lay.pvar.get(p).copied().flatten().is_some_and(|first| variable == first || variable == first + 1)
-    };
+    let owns = |p: usize| s.lay.pvar.get(p).copied().flatten().is_some_and(|first| variable == first || variable == first + 1);
     let mut points = Vec::new();
     let mut scale = f64::INFINITY;
     for reference in block_refs(s.sk, block) {
@@ -2576,9 +2574,7 @@ pub fn fillets_kept(before: &Sketch, after: &Sketch) -> bool {
 /// curves (which are evaluated without entering any component's Jacobian analysis).
 fn collapsed_angle_reference(sk: &Sketch, now: &State, kind: &ConstraintKind) -> bool {
     let lines = match *kind {
-        ConstraintKind::Angle { a, b, .. }
-        | ConstraintKind::Parallel { a, b }
-        | ConstraintKind::Perpendicular { a, b } => [a, b],
+        ConstraintKind::Angle { a, b, .. } | ConstraintKind::Parallel { a, b } | ConstraintKind::Perpendicular { a, b } => [a, b],
         ConstraintKind::LineAngle { l, .. } => [l, l],
         _ => return false,
     };

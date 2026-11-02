@@ -133,9 +133,11 @@ pub fn determined_vars(j: &Mat, tol: f64) -> (Vec<bool>, usize) {
     let mut a = j.clone();
     // Constraint equations use different units and geometry scales (distances in mm,
     // angles and normalized parallelism). Their nonzero row scale must not change
-    // the estimated geometric DOF. Normalize each reliable Jacobian row before
-    // elimination, just as redundancy detection uses relative row norms. Ignore
-    // rows at the floating-point noise floor instead of amplifying them.
+    // the estimated geometric DOF. Normalize each row by its largest magnitude before
+    // elimination, just as redundancy detection uses relative row norms. Rows whose
+    // largest magnitude is at or below the floating-point noise floor
+    // (64 * EPSILON) are left unscaled, so they are not amplified; they are still
+    // passed to elimination and are not dropped.
     for row in 0..a.rows {
         let begin = row.saturating_mul(a.cols);
         let end = begin.saturating_add(a.cols);
