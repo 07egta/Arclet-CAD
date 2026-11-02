@@ -1,0 +1,43 @@
+name: Arclet advanced surfaces
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'crates/geom/src/network.rs'
+      - 'crates/geom/src/fill_general.rs'
+      - 'crates/geom/src/fill_general_tests.rs'
+      - '.github/workflows/arclet-advanced-surfaces.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: arclet-surfaces-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  surface-quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Network Gordon and Loft tests
+        run: cargo test --locked -p solidcraft-geom --lib network::tests:: -- --nocapture
+      - name: General Fill G0/G1/G2 tests
+        if: ${{ !cancelled() }}
+        run: cargo test --locked -p solidcraft-geom --lib fill_general::tests:: -- --nocapture
+      - name: Entire geometry regression suite
+        if: ${{ !cancelled() }}
+        run: cargo test --locked -p solidcraft-geom --lib
+      - name: Rust formatting
+        if: ${{ !cancelled() }}
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        if: ${{ !cancelled() }}
+        run: cargo clippy --locked -p solidcraft-geom --all-targets -- -D warnings
