@@ -2,7 +2,7 @@ name: Arclet industrial UI visual review
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, feat/arclet-ultimate-ui-polish]
     paths:
       - 'apps/arclet/**'
       - 'assets/styles/ui/themes/arclet-industrial.json'
