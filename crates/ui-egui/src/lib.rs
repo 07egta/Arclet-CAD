@@ -69,6 +69,7 @@ pub mod fonts;
 pub mod frame;
 pub mod frame_rate;
 pub mod gizmo;
+mod scale_gizmo;
 pub mod gpu;
 pub mod help;
 pub(crate) mod history_rows;

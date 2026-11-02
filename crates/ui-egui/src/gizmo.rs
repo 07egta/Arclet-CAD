@@ -64,6 +64,8 @@ struct State {
     /// Ring: last angle seen and the angle turned so far.
     last: f64,
     turned: f64,
+    /// The camera projection from mouse-down, kept stable through the gesture.
+    projection: Proj,
 }
 
 const DIRS: [Vec3; 3] = [Vec3::X, Vec3::Y, Vec3::Z];
@@ -294,7 +296,10 @@ pub fn show(ui: &mut egui::Ui, painter: &egui::Painter, proj: &Proj, id: egui::I
     }
     let state: Option<State> = ui.data(|d| d.get_temp(id));
     let pointer = ui.input(|i| i.pointer.hover_pos());
-    let hovered = if state.is_none() { pointer.filter(|_| ui.rect_contains_pointer(proj.rect)).and_then(|p| hit(&sh, p)) } else { None };
+    let hovered = if state.is_none() {
+        ui.input(|i| i.pointer.press_origin()).or(pointer)
+            .filter(|p| proj.rect.contains(*p)).and_then(|p| hit(&sh, p))
+    } else { None };
     let active = state.map(|s| s.handle).or(hovered);
     let hot = |h: Handle| active == Some(h);
     let col = |h: Handle, i: usize| if hot(h) { tk.accent } else { tk.axes()[i.min(2)] };
@@ -334,7 +339,7 @@ pub fn show(ui: &mut egui::Ui, painter: &egui::Painter, proj: &Proj, id: egui::I
             let h = hovered?;
             let from = ui.input(|i| i.pointer.press_origin()).unwrap_or(p);
             let c = t.center;
-            let mut s = State { handle: h, center: c, grab: c, t0: 0.0, last: 0.0, turned: 0.0 };
+            let mut s = State { handle: h, center: c, grab: c, t0: 0.0, last: 0.0, turned: 0.0, projection: *proj };
             match h {
                 Handle::Axis(i) => s.t0 = along(proj, from, c, DIRS[i])?,
                 Handle::Ring(i) => {
@@ -348,6 +353,9 @@ pub fn show(ui: &mut egui::Ui, painter: &egui::Painter, proj: &Proj, id: egui::I
             s
         }
     };
+    // A drag must not switch its spatial frame when the camera or pane moves.
+    let frozen = st.projection;
+    let proj = &frozen;
     let done = r.drag_stopped() || !r.dragged() && !started;
     // The frame's events can hold the release and further movement — the hand keeps moving as
     // the button goes up, or input queued during a busy frame — and `p` is already past the
