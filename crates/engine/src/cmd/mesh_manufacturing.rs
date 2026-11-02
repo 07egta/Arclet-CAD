@@ -269,7 +269,7 @@ pub(super) fn check(s: &mut Session, p: &Value) -> Result<Value> {
     }
     // The default matches the actual STL/3MF export weld tolerance. A
     // B-rep's adjacent faces often have separate, coincident vertex indices.
-    let weld = number(p, cmd, "weld_tolerance_mm", (size * 1e-6).max(1e-7), 0.0, 1000.0)?;
+    let weld = number(p, cmd, "weld_tolerance_mm", (size * 1e-6).max(1e-7), 1e-12, 1000.0)?;
     // The default matches MeshQuality::Standard in the STL/3MF exporter.
     // An explicit chord_mm is an analysis override, not a saved export option.
     let chord = number(p, cmd, "chord_mm", (size * 2e-4).max(1e-3), 1e-6, 1000.0)?;
@@ -296,11 +296,7 @@ pub(super) fn check(s: &mut Session, p: &Value) -> Result<Value> {
     let source_topology = super::analyze(positions, triangles, 0.0);
     // Even a valid source triangle may disappear at the exporter's weld
     // tolerance. Detect that loss BEFORE the permissive weld drops it.
-    let pre_weld_topology = if weld > 0.0 {
-        super::analyze(positions, triangles, weld)
-    } else {
-        source_topology.clone()
-    };
+    let pre_weld_topology = super::analyze(positions, triangles, weld);
     let collapsed_by_weld = pre_weld_topology["collapsed_after_weld"].as_u64().unwrap_or(0) > 0;
     let malformed_input = ["invalid_index_triangles", "nonfinite_vertices",
         "degenerate_triangles", "duplicate_faces"]
@@ -309,7 +305,7 @@ pub(super) fn check(s: &mut Session, p: &Value) -> Result<Value> {
     let (print_positions, print_triangles) = if malformed_input {
         (Vec::new(), Vec::new())
     } else {
-        solidcraft_io::weld(positions, triangles, weld.max(1e-12))
+        solidcraft_io::weld(positions, triangles, weld)
     };
     let topology = if malformed_input {
         json!({"closed": false, "error": "source has invalid or duplicate facets; refusing to discard them"})
@@ -736,6 +732,11 @@ mod tests {
         for bad in [json!(-0.2), json!(0.0), json!("0.4"), Value::Null, json!(100.0)] {
             assert!(s.execute("mesh.manufacturing_check", &json!({
                 "body": "Cube20", "nozzle_diameter_mm": bad,
+            })).is_err());
+        }
+        for bad in [json!(0.0), json!(-0.1), json!("0 mm")] {
+            assert!(s.execute("mesh.manufacturing_check", &json!({
+                "body": "Cube20", "weld_tolerance_mm": bad,
             })).is_err());
         }
         for bad in [json!([0, 180, 180]), json!([180, 180]), json!("180x180x180")] {
