@@ -479,21 +479,36 @@ mod tests {
             "position":[30,30,3], "diameter":10, "height":12,
             "hole_diameter":11, "draft":"-5 deg",
         })).is_err(), "a widening boss still needs to fit the hole at its base");
+        assert!(s.execute("plastic.boss", &json!({
+            "position":[30,30,3], "diameter":10, "height":12,
+            "hole_depth":6,
+        })).is_err(), "hole_depth without a hole diameter is ambiguous");
         assert!(rel(volume(&mut s), baseline) < 1e-10);
 
-        // Before this fix a valid tall hollow rest was rejected by a comparison
-        // against the wall thickness, not the opening at its top.
-        run(&mut s, "plastic.rest", json!({
+        // Positive taper shrinks the outside and expands the hole: a too
+        // long hollow rest runs out of material at the top.
+        assert!(s.execute("plastic.rest", &json!({
             "position":[30,30,3], "width":10, "length":20,
             "height":16, "thickness":1, "draft":"2 deg",
+        })).is_err(), "taper must not consume the hollow rest wall");
+        assert!(rel(volume(&mut s), baseline) < 1e-10);
+
+        // A shorter tapered rest leaves its wall open and produces real volume.
+        run(&mut s, "plastic.rest", json!({
+            "position":[30,30,3], "width":10, "length":20,
+            "height":6, "thickness":1, "draft":"2 deg",
         }));
         let after = volume(&mut s);
-        assert!(after > baseline && after < baseline + 896.0, "{after} {baseline}");
+        assert!(after > baseline && after < baseline + 336.0, "{after} {baseline}");
         let saved = s.doc.to_json();
+        assert!(s.execute("plastic.rest", &json!({
+            "position":[10,10,3], "width":4, "height":20,
+            "thickness":0.5, "draft":"-5 deg",
+        })).is_err(), "negative taper must not close the inner opening");
         assert!(s.execute("plastic.rest", &json!({
             "position":[10,10,3], "width":4, "height":15,
             "thickness":1.7, "draft":"2 deg",
-        })).is_err(), "collapsed inner opening must be refused");
+        })).is_err(), "positive taper must not consume the wall");
         assert_eq!(s.doc.to_json(), saved);
         assert!(rel(volume(&mut s), after) < 1e-10);
     }
