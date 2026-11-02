@@ -5,6 +5,8 @@
 //! have a direction (planar faces, straight edges), the angle.
 
 use serde_json::{Value, json};
+use solidcraft_geom::compare::closest_on_triangle;
+use solidcraft_geom::mesh_distance::{TriangleSet, closest_on_segments};
 use solidcraft_geom::{Mesh, UnitVec3, Vec3};
 
 use super::measure_shape::{Shape, Slot, add_round, centre};
@@ -20,23 +22,6 @@ enum Geo {
 /// Caps that keep a measurement interactive on big meshes.
 const MAX_POINTS: usize = 4000;
 const MAX_TRIS: usize = 20000;
-
-fn closest_on_triangle(p: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Vec3 {
-    let n = (b - a).cross(c - a);
-    if let Some(nn) = n.normalized() {
-        let q = p - nn * (p - a).dot(nn);
-        if [(a, b), (b, c), (c, a)].iter().all(|(u, v)| (*v - *u).cross(q - *u).dot(n) >= -1e-12) {
-            return q;
-        }
-    }
-    let on_seg = |u: Vec3, v: Vec3| {
-        let d = v - u;
-        let l2 = d.dot(d);
-        let t = if l2 > 0.0 { ((p - u).dot(d) / l2).clamp(0.0, 1.0) } else { 0.0 };
-        u + d * t
-    };
-    [on_seg(a, b), on_seg(b, c), on_seg(c, a)].into_iter().min_by(|x, y| x.dist(p).total_cmp(&y.dist(p))).unwrap_or(a)
-}
 
 fn polyline_len(pts: &[Vec3]) -> f64 {
     pts.windows(2).map(|w| w[0].dist(w[1])).sum()
@@ -448,6 +433,21 @@ fn sample<T: Copy>(v: &[T], max: usize) -> Vec<T> {
     v.iter().step_by(step).copied().collect()
 }
 
+/// A bounded geometry-to-geometry query on a triangulated selection. The shared
+/// BVH implementation finds intersecting triangle edges as zero distance, which a
+/// vertex-against-triangle-only search can miss entirely.
+fn triangle_set(tris: &[[Vec3; 3]]) -> TriangleSet {
+    let mut mesh = Mesh::default();
+    mesh.positions.reserve(tris.len() * 3);
+    mesh.triangles.reserve(tris.len());
+    for triangle in tris {
+        let first = mesh.positions.len() as u32;
+        mesh.positions.extend_from_slice(triangle);
+        mesh.triangles.push([first, first + 1, first + 2]);
+    }
+    TriangleSet::new(&mesh)
+}
+
 /// Closest pair of points between two pieces of geometry.
 fn closest(a: &Geo, b: &Geo) -> Option<(Vec3, Vec3)> {
     let pts_to_tris = |pts: &[Vec3], tris: &[[Vec3; 3]]| -> Option<(Vec3, Vec3)> {
@@ -465,7 +465,6 @@ fn closest(a: &Geo, b: &Geo) -> Option<(Vec3, Vec3)> {
         }
         best.map(|(_, p, q)| (p, q))
     };
-    let verts = |tris: &[[Vec3; 3]]| -> Vec<Vec3> { tris.iter().flat_map(|t| t.iter().copied()).collect() };
     match (a, b) {
         (Geo::Points(p), Geo::Points(q)) => {
             let (p, q) = (sample(p, MAX_POINTS), sample(q, MAX_POINTS));
@@ -483,42 +482,11 @@ fn closest(a: &Geo, b: &Geo) -> Option<(Vec3, Vec3)> {
         (Geo::Points(p), Geo::Tris(t)) => pts_to_tris(p, t),
         (Geo::Tris(t), Geo::Points(p)) => pts_to_tris(p, t).map(|(x, y)| (y, x)),
         (Geo::Tris(t1), Geo::Tris(t2)) => {
-            let ab = pts_to_tris(&verts(t1), t2);
-            let ba = pts_to_tris(&verts(t2), t1).map(|(x, y)| (y, x));
-            [ab, ba].into_iter().flatten().min_by(|x, y| x.0.dist(x.1).total_cmp(&y.0.dist(y.1)))
+            let a = triangle_set(&sample(t1, MAX_TRIS));
+            let b = triangle_set(&sample(t2, MAX_TRIS));
+            a.closest(&b, f64::INFINITY).map(|hit| (hit.a, hit.b))
         }
     }
-}
-
-/// The closest point on a finite segment, with the endpoints included. A zero-length
-/// segment is a point rather than a division by zero.
-fn point_on_segment(p: Vec3, a: Vec3, b: Vec3) -> Vec3 {
-    let ab = b - a;
-    let n = ab.dot(ab);
-    if n <= 0.0 { a } else { a + ab * ((p - a).dot(ab) / n).clamp(0.0, 1.0) }
-}
-
-/// Exact finite segment/segment distance. The quadratic minimum is either interior to
-/// both segments, or on one of four endpoints' projections. Checking both cases also
-/// handles parallel, crossing, reversed and zero-length segments without a mesh.
-fn segments_closest(a: Vec3, b: Vec3, c: Vec3, d: Vec3) -> (Vec3, Vec3) {
-    let mut candidates = vec![
-        (a, point_on_segment(a, c, d)),
-        (b, point_on_segment(b, c, d)),
-        (point_on_segment(c, a, b), c),
-        (point_on_segment(d, a, b), d),
-    ];
-    let (u, v, w) = (b - a, d - c, a - c);
-    let (uu, uv, vv, uw, vw) = (u.dot(u), u.dot(v), v.dot(v), u.dot(w), v.dot(w));
-    let denom = uu * vv - uv * uv;
-    if denom > 1e-14 * uu * vv {
-        let s = (uv * vw - vv * uw) / denom;
-        let t = (uu * vw - uv * uw) / denom;
-        if (0.0..=1.0).contains(&s) && (0.0..=1.0).contains(&t) {
-            candidates.push((a + u * s, c + v * t));
-        }
-    }
-    candidates.into_iter().min_by(|x, y| x.0.dist(x.1).total_cmp(&y.0.dist(y.1))).unwrap_or((a, c))
 }
 
 /// This calculation applies only to geometries described as a point or a straight
@@ -533,7 +501,7 @@ fn linear_ends(shape: Shape) -> Option<(Vec3, Vec3)> {
 
 fn exact_linear_closest(a: Shape, b: Shape) -> Option<(Vec3, Vec3)> {
     let ((a, b), (c, d)) = (linear_ends(a)?, linear_ends(b)?);
-    Some(segments_closest(a, b, c, d))
+    Some(closest_on_segments(a, b, c, d))
 }
 
 fn exact_linear_farthest(a: Shape, b: Shape) -> Option<(Vec3, Vec3)> {
@@ -678,6 +646,8 @@ pub(crate) fn measure_items(s: &Session, items: &Value) -> Result<Value> {
             "analytic_recognized_linear"
         } else if plane_min.is_some() {
             "analytic_planar_interior"
+        } else if matches!((&a.geo, &b.geo), (Geo::Tris(_), Geo::Tris(_))) {
+            "mesh_triangle_distance"
         } else {
             "sampled_geometry"
         };
@@ -830,6 +800,30 @@ mod inspection_tests {
         assert_eq!(cylinder["principal_magnitudes_per_mm"], json!([0.0, 0.25]));
         assert_eq!(cylinder["mean_curvature_magnitude_per_mm"], 0.125);
         assert!(analytic_curvature(FaceSurface::Sphere { center: Vec3::ZERO, radius: 0.0 }).is_none());
+    }
+
+    #[test]
+    fn crossing_triangles_have_zero_distance_without_nearby_vertices() {
+        let a = Geo::Tris(vec![[
+            Vec3::new(-3.0, -3.0, 0.0),
+            Vec3::new(3.0, -3.0, 0.0),
+            Vec3::new(0.0, 3.0, 0.0),
+        ]]);
+        let b = Geo::Tris(vec![[
+            Vec3::new(-3.0, 0.0, -1.0),
+            Vec3::new(3.0, 0.0, -1.0),
+            Vec3::new(0.0, 0.0, 3.0),
+        ]]);
+        let (p, q) = closest(&a, &b).unwrap();
+        assert_close_mm(p.dist(q), 0.0, 1e-12);
+
+        let separated = Geo::Tris(vec![[
+            Vec3::new(-3.0, -3.0, 0.001),
+            Vec3::new(3.0, -3.0, 0.001),
+            Vec3::new(0.0, 3.0, 0.001),
+        ]]);
+        let (p, q) = closest(&a, &separated).unwrap();
+        assert_close_mm(p.dist(q), 0.001, 1e-12);
     }
 
     #[test]
