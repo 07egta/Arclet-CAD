@@ -8,6 +8,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <new>
+#include <memory>
+#include <cmath>
 #include <vector>
 
 using namespace Clipper2Lib;
@@ -29,7 +31,7 @@ Path64 to_path(const int64_t* xy, size_t n) {
 }
 
 pc2_result* to_result(const Paths64& paths) {
-  auto* r = new pc2_result();
+  auto r = std::make_unique<pc2_result>();
   for (const auto& path : paths) {
     r->lens.push_back(path.size());
     for (const auto& p : path) {
@@ -37,7 +39,7 @@ pc2_result* to_result(const Paths64& paths) {
       r->coords.push_back(p.y);
     }
   }
-  return r;
+  return r.release();
 }
 
 }  // namespace
@@ -45,6 +47,9 @@ pc2_result* to_result(const Paths64& paths) {
 extern "C" {
 
 pc2_result* pc2_offset(const int64_t* xy, size_t n, double delta, double miter_limit, int* status) {
+  if (!status) return nullptr;
+  *status = 1;
+  if (!xy || n < 3 || !std::isfinite(delta) || !std::isfinite(miter_limit)) return nullptr;
   try {
     ClipperOffset offset(miter_limit);
     offset.AddPath(to_path(xy, n), JoinType::Miter, EndType::Polygon);
@@ -61,6 +66,9 @@ pc2_result* pc2_offset(const int64_t* xy, size_t n, double delta, double miter_l
 }
 
 pc2_result* pc2_boolean(const int64_t* a, size_t na, const int64_t* b, size_t nb, int op, int* status) {
+  if (!status) return nullptr;
+  *status = 1;
+  if (!a || !b || na < 3 || nb < 3) return nullptr;
   ClipType type;
   switch (op) {
     case 0: type = ClipType::Union; break;
@@ -90,13 +98,13 @@ pc2_result* pc2_boolean(const int64_t* a, size_t na, const int64_t* b, size_t nb
   return nullptr;
 }
 
-size_t pc2_ring_count(const pc2_result* r) { return r->lens.size(); }
-
-size_t pc2_ring_len(const pc2_result* r, size_t i) { return i < r->lens.size() ? r->lens[i] : 0; }
+size_t pc2_ring_count(const pc2_result* r) noexcept { return r ? r->lens.size() : 0; }
+size_t pc2_coord_count(const pc2_result* r) noexcept { return r ? r->coords.size() : 0; }
+size_t pc2_ring_len(const pc2_result* r, size_t i) noexcept { return r && i < r->lens.size() ? r->lens[i] : 0; }
 
 // Null when the result has no points; callers only read it when a ring has points.
-const int64_t* pc2_coords(const pc2_result* r) { return r->coords.empty() ? nullptr : r->coords.data(); }
+const int64_t* pc2_coords(const pc2_result* r) noexcept { return r && !r->coords.empty() ? r->coords.data() : nullptr; }
 
-void pc2_free(pc2_result* r) { delete r; }
+void pc2_free(pc2_result* r) noexcept { delete r; }
 
 }  // extern "C"

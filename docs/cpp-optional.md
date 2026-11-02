@@ -107,3 +107,7 @@ Needs a C++17 compiler. The build fails with a clear message if `CLIPPER2_SRC` i
 - Clipper2 is not wired into the product, and no performance measurements exist for it here. The
   spike shows that the API can be called safely and that results agree with the pure backend on
   convex inputs. It does not show that it is better.
+
+## Mission 17 extension
+
+An independently built Manifold mesh Boolean bridge, updated Clipper2 FFI bounds/ownership checks and Windows/macOS CI have been proposed in docs/native-cpp-bridge.md. The distinction between mesh results and exact B-rep is mandatory. This section describes an optional experimental interface, not verified product-wide adoption; check the PR's actual OS CI evidence before declaring completion.
