@@ -7,15 +7,17 @@ use std::time::Duration;
 
 use egui::{Color32, Id, Painter, Rect, Shape, Stroke, Ui, pos2, vec2};
 use solidcraft_ui_egui::SolveApp;
+
+use crate::classic_look::chrome;
 use solidcraft_ui_egui::i18n::tr;
 use solidcraft_ui_egui::theme::Tokens;
 use solidcraft_ui_egui::toolbar::FileAction;
 use solidcraft_ui_egui::ui_kit::{self, Container, Edge, Surface};
 
-const STANDARD_BUTTON: f32 = 30.0;
-const MAIN_WIDTH: f32 = 44.0;
-const MAIN_BUTTON: f32 = 34.0;
-const ICON: f32 = 20.0;
+const STANDARD_BUTTON: f32 = chrome::STANDARD_BUTTON;
+const MAIN_WIDTH: f32 = chrome::MAIN_WIDTH;
+const MAIN_BUTTON: f32 = chrome::MAIN_BUTTON;
+const ICON: f32 = chrome::ICON_SIZE;
 /// How long a press must last before a button with a flyout opens it.
 const HOLD_SECONDS: f64 = 0.45;
 
@@ -241,21 +243,28 @@ impl Toolbars {
             .edge("arclet_standard", Edge::Top)
             .frame(Container::new(ui.ctx(), Surface::ApplicationBar).edge_frame(tokens.panel).inner_margin(egui::Margin::symmetric(12, 4)))
             .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 2.0;
-                    for (index, row) in STANDARD.iter().enumerate() {
-                        if index > 0 {
-                            ui.add_space(4.0);
-                            ui.separator();
-                            ui.add_space(4.0);
-                        }
-                        for group in row.iter() {
-                            if let Some(pick) = self.button(ui, cad, group, vec2(STANDARD_BUTTON, STANDARD_BUTTON)) {
-                                picked = Some(pick);
+                // All toolbar commands remain reachable on narrow or high-DPI windows.
+                // Do not wrap the row: wrapping would unexpectedly move the viewport.
+                egui::ScrollArea::horizontal()
+                    .id_salt("arclet_standard_scroll")
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = chrome::ITEM_GAP;
+                            for (index, row) in STANDARD.iter().enumerate() {
+                                if index > 0 {
+                                    ui.add_space(chrome::SECTION_GAP);
+                                    ui.separator();
+                                    ui.add_space(chrome::SECTION_GAP);
+                                }
+                                for group in row.iter() {
+                                    if let Some(pick) = self.button(ui, cad, group, vec2(STANDARD_BUTTON, STANDARD_BUTTON)) {
+                                        picked = Some(pick);
+                                    }
+                                }
                             }
-                        }
-                    }
-                });
+                        });
+                    });
             });
         picked
     }
@@ -276,12 +285,12 @@ impl Toolbars {
                 // Scrolls instead of clipping when the window is short (minimum 960x600).
                 egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                     ui.vertical_centered(|ui| {
-                        ui.spacing_mut().item_spacing.y = 2.0;
+                        ui.spacing_mut().item_spacing.y = chrome::ITEM_GAP;
                         for (index, row) in MAIN.iter().enumerate() {
                             if index > 0 {
-                                ui.add_space(4.0);
+                                ui.add_space(chrome::SECTION_GAP);
                                 ui.separator();
-                                ui.add_space(4.0);
+                                ui.add_space(chrome::SECTION_GAP);
                             }
                             for group in row.iter() {
                                 if let Some(pick) = self.button(ui, cad, group, vec2(MAIN_BUTTON, MAIN_BUTTON)) {
@@ -306,12 +315,16 @@ impl Toolbars {
         let has_flyout = group.more.len() >= 2;
         let open = self.flyout.is_some_and(|(key, _)| key == id);
         let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
-        if open {
+        if enabled && (open || response.is_pointer_button_down_on()) {
             ui.painter().rect_filled(rect, tokens.radius_sm, tokens.accent_soft);
+            ui.painter().rect_stroke(rect, tokens.radius_sm, Stroke::new(1.0, tokens.accent), egui::StrokeKind::Inside);
         } else if response.hovered() && enabled {
             ui.painter().rect_filled(rect, tokens.radius_sm, tokens.hover);
         }
-        let ink = if enabled { tokens.text } else { tokens.text_dim };
+        if response.has_focus() {
+            ui.painter().rect_stroke(rect, tokens.radius_sm, Stroke::new(1.0, tokens.accent), egui::StrokeKind::Inside);
+        }
+        let ink = if !enabled { tokens.text_dim } else if open { tokens.accent } else { tokens.text };
         paint(ui.painter(), Rect::from_center_size(rect.center(), vec2(ICON, ICON)), group.glyph, ink);
         if has_flyout {
             let corner = rect.right_bottom() - vec2(3.0, 3.0);
@@ -320,6 +333,11 @@ impl Toolbars {
         response.clone().on_hover_ui(|ui| {
             ui.label(tr(label));
             ui.weak(id);
+            if !enabled {
+                ui.label(tr("arclet.toolbar.unavailable_context"));
+            } else if has_flyout {
+                ui.label(tr("arclet.toolbar.more_hint"));
+            }
         });
         response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, tr(label)));
         solidcraft_ui_egui::scenario::publish_handle(&format!("arclet:tool:{id}"), rect.center());
@@ -336,7 +354,14 @@ impl Toolbars {
             }
         }
         if has_flyout {
-            if response.secondary_clicked() {
+            // Right click, Shift+F10 or Alt+Down open the same keyboard-accessible
+            // menu. The primary click always runs the command itself.
+            let keyboard_menu = response.has_focus()
+                && ui.input(|input| {
+                    (input.modifiers.shift && input.key_pressed(egui::Key::F10))
+                        || (input.modifiers.alt && input.key_pressed(egui::Key::ArrowDown))
+                });
+            if response.secondary_clicked() || keyboard_menu {
                 self.flyout = if open { None } else { Some((id, rect)) };
                 self.flyout_rect = None;
             }
@@ -371,16 +396,32 @@ impl Toolbars {
     /// The popup listing a button's command and its related commands. Returns a pick when one is clicked.
     fn draw_flyout(&mut self, ctx: &egui::Context, group: &Group, anchor: Rect) -> Option<Pick> {
         let mut chosen = None;
-        let area = Container::new(ctx, Surface::Popup).area(Id::new(("arclet_flyout", group.id))).fixed_pos(anchor.right_top() + vec2(4.0, 0.0));
+        let viewport = ctx.viewport_rect();
+        let max_width = (viewport.width() - 2.0 * chrome::FLOATING_MARGIN).max(1.0);
+        let max_height = (viewport.height() - 2.0 * chrome::FLOATING_MARGIN).max(1.0);
+        let width = chrome::FLYOUT_WIDTH.min(max_width);
+        let desired_height = (group.more.len() + 1) as f32
+            * (Tokens::get().control_height + chrome::FLYOUT_ROW_PADDING)
+            + Tokens::get().space_12;
+        let size = vec2(width, desired_height.min(max_height));
+        let origin = chrome::flyout_origin(viewport, anchor, size);
+        let area = Container::new(ctx, Surface::Popup).area(Id::new(("arclet_flyout", group.id))).fixed_pos(origin);
         let shown = area.show(ctx, |ui| {
             Container::popup_frame(ui.style()).show(ui, |ui| {
-                ui.vertical(|ui| {
-                    for &(label, id) in std::iter::once(&(group.label, group.id)).chain(group.more.iter()) {
-                        if ui_kit::button(ui, tr(label), ui_kit::Button::Ghost).on_hover_text(id).clicked() {
-                            chosen = Some(pick_for(id));
-                        }
-                    }
-                });
+                ui.set_min_width(width);
+                egui::ScrollArea::vertical()
+                    .id_salt(("arclet_flyout_scroll", group.id))
+                    .max_height(max_height)
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        ui.vertical(|ui| {
+                            for &(label, id) in std::iter::once(&(group.label, group.id)).chain(group.more.iter()) {
+                                if ui_kit::button(ui, tr(label), ui_kit::Button::Ghost).on_hover_text(id).clicked() {
+                                    chosen = Some(pick_for(id));
+                                }
+                            }
+                        });
+                    });
             });
         });
         self.flyout_rect = Some(shown.response.rect);
@@ -641,6 +682,16 @@ mod tests {
                 }
             }
         }
+    }
+
+
+    #[test]
+    fn toolbar_metrics_leave_room_for_pointer_targets() {
+        assert!(STANDARD_BUTTON >= 30.0);
+        assert!(MAIN_BUTTON >= 34.0);
+        assert!(MAIN_WIDTH >= MAIN_BUTTON + 2.0 * chrome::SECTION_GAP);
+        assert!(ICON < STANDARD_BUTTON && ICON < MAIN_BUTTON);
+        assert!(chrome::FLYOUT_WIDTH >= 200.0);
     }
 
     #[test]
