@@ -459,6 +459,46 @@ mod tests {
     use super::*;
 
     #[test]
+    fn editable_3d_spline_fit_points_preserve_identity_and_reject_bad_edits_atomically() {
+        let mut sketch = Sketch::new();
+        let wire = sketch
+            .add_drawn_wire_in(
+                &[Vec3::ZERO, Vec3::new(5.0, 0.0, 10.0), Vec3::new(10.0, 3.0, 20.0), Vec3::new(15.0, 5.0, 30.0)],
+                WireSpace::Component,
+            )
+            .unwrap();
+        let original = sketch.clone();
+        assert_eq!(sketch.insert_drawn_fit_point(&wire, 2, Vec3::new(8.0, 1.0, 15.0)).unwrap(), 5);
+        let edited = sketch.wires.iter().find(|w| w.id == wire).unwrap();
+        assert_eq!(edited.fit.len(), 5);
+        assert_eq!(edited.fit[2], Vec3::new(8.0, 1.0, 15.0));
+        assert_eq!(edited.pts.first(), Some(&Vec3::ZERO));
+        assert_eq!(edited.pts.last(), Some(&Vec3::new(15.0, 5.0, 30.0)));
+        sketch.validate_wires().unwrap();
+        let before_bad = sketch.clone();
+        for (index, at) in [
+            (0, Vec3::new(1.0, 2.0, 3.0)),
+            (1, Vec3::ZERO),
+            (2, Vec3::new(1e100, 0.0, 0.0)),
+            (5, Vec3::new(1.0, 2.0, 3.0)),
+        ] {
+            assert!(sketch.insert_drawn_fit_point(&wire, index, at).is_err());
+            assert_eq!(sketch, before_bad);
+        }
+        for index in [0, 4, usize::MAX] {
+            assert!(sketch.remove_drawn_fit_point(&wire, index).is_err());
+            assert_eq!(sketch, before_bad);
+        }
+        assert_eq!(sketch.remove_drawn_fit_point(&wire, 2).unwrap(), 4);
+        assert_eq!(sketch, original);
+        let line = sketch.add_drawn_wire_in(&[Vec3::ZERO, Vec3::Z], WireSpace::Component).unwrap();
+        let unchanged = sketch.clone();
+        assert!(sketch.insert_drawn_fit_point(&line, 1, Vec3::new(0.0, 1.0, 0.0)).is_err());
+        assert!(sketch.remove_drawn_fit_point(&line, 1).is_err());
+        assert_eq!(sketch, unchanged);
+    }
+
+    #[test]
     fn wire_space_defaults_and_preserves_detached_provenance() {
         let mut sk = Sketch::new();
         let id = sk.add_drawn_wire(&[Vec3::new(1.0, 2.0, 3.0)]).unwrap();
