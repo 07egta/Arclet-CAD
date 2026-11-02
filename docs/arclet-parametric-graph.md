@@ -12,7 +12,7 @@ This is not GH/GHX file compatibility or Grasshopper component/plugin compatibil
 
 | API | Behavior |
 | --- | --- |
-| `IncrementalEvaluator::update(&graph, &stop)` | Reuses outputs/errors for nodes with unchanged component and inputs and unchanged upstream dependencies. Ignores canvas position changes. |
+| `IncrementalEvaluator::update(&graph, &stop)` | Reuses outputs/errors when component, inputs, upstream dependencies **and available resource budget** are unchanged. Ignores canvas position changes. |
 | `IncrementalEvaluator::update_revision(&graph, revision, &latest, &stop)` | Cancels older revisions before publishing a cache update; caller still checks revision when delivering worker results to the UI. |
 | `IncrementalEvaluator::current()` / `clear()` | Reads last complete evaluation or releases cached geometry and errors. |
 | `Graph::connect_typed_checked(...)` | Rejects incompatible wires and cycles without mutating the previous connection. Does not replace the legacy `connect`/`connect_checked` APIs. |
@@ -26,7 +26,7 @@ The type checker models the types implemented by the runtime (`Number`, `Boolean
 ## Invalidation algorithm
 
 1. Validate the complete graph (nodes, sockets, references, DAG) and calculate a topological order.
-2. For each node in order, mark it dirty if its component or any input value/wire/modifier differs from the last completed graph, if an upstream node was dirtied, or if its cache is missing.
+2. For each node in order, mark it dirty if its component or any input value/wire/modifier differs from the last completed graph, if an upstream node was dirtied, if its cache is missing, or if earlier nodes changed its available global resource budget.
 3. Reuse retained output trees and node errors for clean nodes. Recalculate only dirty nodes with the existing per-item cancellation and shared output budget.
 4. Preserve existing per-node failure isolation. Before publishing, recheck the captured editor revision and cancellation token.
 5. Publish the new graph snapshot and results together, only when the entire update completed without cancellation. Cancellation/stale work leaves the previous result untouched.
