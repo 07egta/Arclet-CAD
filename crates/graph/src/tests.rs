@@ -350,3 +350,214 @@ fn extrusion_overflow_is_a_node_error_instead_of_a_non_finite_mesh() {
     assert!(result.errors.get(&id).is_some_and(|error| error.contains("finite")));
     assert!(!result.outputs.contains_key(&(id, 0)));
 }
+
+#[test]
+fn incremental_edit_evaluation_save_reload_and_legacy_mesh_work() {
+    let mut graph = Graph::new();
+    let radius = graph.add_node("Number", (0.0, 0.0)).unwrap();
+    let circle = graph.add_node("Circle", (100.0, 0.0)).unwrap();
+    let extrude = graph.add_node("Extrude", (200.0, 0.0)).unwrap();
+    let unrelated = graph.add_node("Add", (0.0, 100.0)).unwrap();
+    graph.connect_typed_checked(radius, 0, circle, 0).unwrap();
+    graph.connect_typed_checked(circle, 0, extrude, 0).unwrap();
+    graph.set_constant(unrelated, 0, Value::Number(40.0)).unwrap();
+    graph.set_constant(unrelated, 1, Value::Number(2.0)).unwrap();
+    assert!(graph.type_issues().unwrap().is_empty());
+
+    let mut cache = IncrementalEvaluator::new();
+    let initial = cache.update(&graph, &|| false).unwrap();
+    assert_eq!(initial.recomputed.len(), 4);
+    assert_eq!(cache.current(), Some(&graph.evaluate().unwrap()));
+    let unchanged = cache.update(&graph, &|| false).unwrap();
+    assert_eq!(unchanged.recomputed, Vec::<NodeId>::new());
+    assert_eq!(unchanged.reused.len(), 4);
+
+    // Positions are UI-only: changing them never invalidates geometry.
+    graph.move_node(circle, (120.0, 10.0)).unwrap();
+    let moved = cache.update(&graph, &|| false).unwrap();
+    assert!(moved.recomputed.is_empty());
+
+    graph.set_constant(radius, 0, Value::Number(8.0)).unwrap();
+    let edited = cache.update(&graph, &|| false).unwrap();
+    assert_eq!(edited.recomputed, vec![radius, circle, extrude]);
+    assert_eq!(edited.reused, vec![unrelated]);
+    assert_eq!(numbers(cache.current().unwrap(), unrelated), vec![42.0]);
+    assert_eq!(cache.current(), Some(&graph.evaluate().unwrap()));
+    assert!(matches!(
+        cache.current().unwrap().outputs.get(&(extrude, 0)).and_then(|tree| tree.branches.values().next()).and_then(|items| items.first()),
+        Some(Value::Solid(_))
+    ));
+
+    // The pre-existing version-1 JSON document remains editable and evaluable.
+    let json = graph.to_json().unwrap();
+    let loaded = Graph::from_json(&json).unwrap();
+    assert_eq!(loaded, graph);
+    assert_eq!(loaded.evaluate().unwrap(), graph.evaluate().unwrap());
+    cache.clear();
+    assert!(cache.current().is_none());
+    assert_eq!(cache.update(&loaded, &|| false).unwrap().recomputed.len(), 4);
+}
+
+#[test]
+fn typed_connections_are_diagnostic_and_rejected_without_side_effects() {
+    let mut graph = Graph::new();
+    let point = graph.add_node("Point", (0.0, 0.0)).unwrap();
+    let curve = graph.add_node("Circle", (0.0, 1.0)).unwrap();
+    let solid = graph.add_node("Extrude", (1.0, 1.0)).unwrap();
+    let before = graph.clone();
+
+    let error = graph.connect_typed_checked(point, 0, solid, 0).unwrap_err();
+    assert!(error.to_string().contains("expects Curve"), "{error}");
+    assert!(error.to_string().contains("node 0 output 0"), "{error}");
+    assert_eq!(graph, before);
+
+    graph.connect_typed_checked(curve, 0, solid, 0).unwrap();
+    assert!(graph.type_issues().unwrap().is_empty());
+    // Existing untyped connect remains backward-compatible, but introspection
+    // surfaces invalid wiring for editors and import diagnostics.
+    graph.connect(point, 0, solid, 0).unwrap();
+    let issues = graph.type_issues().unwrap();
+    assert_eq!(issues.len(), 1);
+    assert!(issues[0].message().contains("input 'curve'"));
+    assert!(!DataType::Vector.is_supported());
+    assert!(!DataType::Surface.is_supported());
+    assert!(DataType::Solid.is_supported());
+}
+
+#[test]
+fn graph_workspace_preserves_groups_state_and_model_link_intent() {
+    let mut graph = Graph::new();
+    let circle = graph.add_node("Circle", (0.0, 0.0)).unwrap();
+    let solid = graph.add_node("Extrude", (100.0, 0.0)).unwrap();
+    graph.connect_checked(circle, 0, solid, 0).unwrap();
+    let mut workspace = GraphWorkspace::new(graph);
+    workspace.groups.push(NodeGroup { id: 7, name: "Profiles".into(), members: vec![circle, solid], collapsed: false });
+    workspace.node_states.push(NodeViewState { node: circle, collapsed: true, selected: false });
+    workspace.model_links.push(ModelOutputLink { node: solid, output: 0, model_object_id: "arclet-object-001".into() });
+    let saved = workspace.to_json().unwrap();
+    let loaded = GraphWorkspace::from_json(&saved).unwrap();
+    assert_eq!(loaded, workspace);
+    assert_eq!(loaded.to_json().unwrap(), saved);
+    assert_eq!(loaded.graph.evaluate().unwrap(), workspace.graph.evaluate().unwrap());
+    let mut evaluator = IncrementalEvaluator::new();
+    evaluator.update(&workspace.graph, &|| false).unwrap();
+    let original = workspace.resolved_model_meshes(&evaluator).unwrap();
+    assert_eq!(original.len(), 1);
+    assert_eq!(original[0].model_object_id, "arclet-object-001");
+    assert_eq!(original[0].meshes.len(), 1);
+    let original_x = original[0].meshes[0][0][0].x;
+    workspace.graph.set_constant(circle, 0, Value::Number(25.0)).unwrap();
+    assert!(evaluator.current_for(&workspace.graph).is_none());
+    assert!(workspace.resolved_model_meshes(&evaluator).is_err(), "stale geometry must not be exposed");
+    evaluator.update(&workspace.graph, &|| false).unwrap();
+    let edited = workspace.resolved_model_meshes(&evaluator).unwrap();
+    assert!(edited[0].meshes[0][0][0].x > original_x);
+
+    workspace.model_links[0].node = circle;
+    assert!(workspace.to_json().is_err(), "a curve is not a mesh-solid output");
+    workspace.model_links[0].node = solid;
+    workspace.groups[0].members.push(NodeId(9999));
+    assert!(workspace.to_json().is_err(), "dangling group references must be rejected");
+}
+
+#[test]
+fn incremental_cancellation_and_obsolete_revisions_cannot_publish_partial_work() {
+    let mut graph = Graph::new();
+    let source = graph.add_node("Series", (0.0, 0.0)).unwrap();
+    graph.set_constant(source, 2, Value::Number(150.0)).unwrap();
+    let downstream = graph.add_node("Add", (10.0, 0.0)).unwrap();
+    graph.connect_checked(source, 0, downstream, 0).unwrap();
+
+    let mut cache = IncrementalEvaluator::new();
+    cache.update(&graph, &|| false).unwrap();
+    let before = cache.current().cloned();
+    graph.set_constant(source, 0, Value::Number(33.0)).unwrap();
+
+    let revision = std::cell::Cell::new(1_u64);
+    let checks = std::cell::Cell::new(0);
+    let outcome = cache.update_revision(&graph, 1, &|| revision.get(), &|| {
+        checks.set(checks.get() + 1);
+        if checks.get() == 20 {
+            revision.set(2);
+        }
+        false
+    });
+    assert_eq!(outcome, Err(GraphError::Cancelled));
+    assert_eq!(cache.current(), before.as_ref());
+    assert!(checks.get() >= 20);
+
+    assert_eq!(cache.update_revision(&graph, 1, &|| 2, &|| false), Err(GraphError::Cancelled));
+    assert_eq!(cache.current(), before.as_ref());
+    let fresh = cache.update_revision(&graph, 2, &|| revision.get(), &|| false).unwrap();
+    assert_eq!(fresh.recomputed, vec![source, downstream]);
+    assert_eq!(cache.current(), Some(&graph.evaluate().unwrap()));
+}
+
+#[test]
+fn incremental_stress_two_thousand_nodes_reuses_and_invalidates_only_dependents() {
+    let mut graph = Graph::new();
+    let source = graph.add_node("Number", (0.0, 0.0)).unwrap();
+    let mut nodes = vec![source];
+    for i in 1..MAX_NODES {
+        let node = graph.add_node("Add", (i as f32, 0.0)).unwrap();
+        graph.connect(nodes[i - 1], 0, node, 0).unwrap();
+        graph.set_constant(node, 1, Value::Number(1.0)).unwrap();
+        nodes.push(node);
+    }
+    let last = nodes[MAX_NODES - 1];
+    let mut cache = IncrementalEvaluator::new();
+    let full = cache.update(&graph, &|| false).unwrap();
+    assert_eq!(full.recomputed.len(), MAX_NODES);
+    assert_eq!(numbers(cache.current().unwrap(), last), vec![MAX_NODES as f64]);
+
+    let reused = cache.update(&graph, &|| false).unwrap();
+    assert!(reused.recomputed.is_empty());
+    assert_eq!(reused.reused.len(), MAX_NODES);
+
+    let mid = nodes[MAX_NODES / 2];
+    graph.set_constant(mid, 1, Value::Number(2.0)).unwrap();
+    let partial = cache.update(&graph, &|| false).unwrap();
+    assert_eq!(partial.recomputed.len(), MAX_NODES / 2);
+    assert_eq!(partial.recomputed.first(), Some(&mid));
+    assert!(!partial.recomputed.contains(&source));
+    assert_eq!(numbers(cache.current().unwrap(), last), vec![MAX_NODES as f64 + 1.0]);
+    assert_eq!(cache.current(), Some(&graph.evaluate().unwrap()));
+
+    let saved = graph.to_json().unwrap();
+    let restored = Graph::from_json(&saved).unwrap();
+    assert_eq!(restored.evaluate().unwrap(), graph.evaluate().unwrap());
+}
+
+#[test]
+fn incremental_cached_errors_recover_and_resource_budget_is_order_sensitive() {
+    let mut graph = Graph::new();
+    let source = graph.add_node("Series", (0.0, 0.0)).unwrap();
+    let independent = graph.add_node("Add", (10.0, 0.0)).unwrap();
+    let divide = graph.add_node("Divide", (20.0, 0.0)).unwrap();
+    let dependent = graph.add_node("Add", (30.0, 0.0)).unwrap();
+    graph.set_constant(source, 2, Value::Number(1.0)).unwrap();
+    graph.set_constant(divide, 1, Value::Number(0.0)).unwrap();
+    graph.connect_checked(divide, 0, dependent, 0).unwrap();
+
+    let mut cache = IncrementalEvaluator::new();
+    cache.update(&graph, &|| false).unwrap();
+    assert!(cache.current().unwrap().errors.contains_key(&divide));
+    assert!(cache.current().unwrap().errors.contains_key(&dependent));
+    assert_eq!(cache.update(&graph, &|| false).unwrap().recomputed.len(), 0);
+
+    graph.set_constant(divide, 1, Value::Number(2.0)).unwrap();
+    let recovered = cache.update(&graph, &|| false).unwrap();
+    assert!(recovered.recomputed.contains(&divide));
+    assert!(recovered.recomputed.contains(&dependent));
+    assert!(!recovered.recomputed.contains(&independent));
+    assert!(cache.current().unwrap().errors.is_empty());
+    assert_eq!(cache.current(), Some(&graph.evaluate().unwrap()));
+
+    // The global retained-output budget is order-dependent. Expanding a
+    // preceding independent node changes the budget seen by later nodes.
+    graph.set_constant(source, 2, Value::Number(3.0)).unwrap();
+    let expanded = cache.update(&graph, &|| false).unwrap();
+    assert!(expanded.recomputed.contains(&source));
+    assert!(expanded.recomputed.contains(&independent));
+    assert_eq!(cache.current(), Some(&graph.evaluate().unwrap()));
+}
