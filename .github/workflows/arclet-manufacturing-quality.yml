@@ -1,0 +1,40 @@
+name: Arclet manufacturing-quality regression
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'crates/engine/src/cmd/mesh.rs'
+      - 'crates/engine/src/cmd/mesh_manufacturing.rs'
+      - 'crates/io/src/threemf.rs'
+      - 'crates/slice/**'
+      - '.github/workflows/arclet-manufacturing-quality.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  manufacturing:
+    name: Mesh, STL/3MF and slicer regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Check changed Rust files are formatted
+        shell: bash
+        run: |
+          rustfmt --check --edition 2024 crates/engine/src/cmd/mesh.rs
+          rustfmt --check --edition 2024 crates/engine/src/cmd/mesh_manufacturing.rs
+      - name: Mesh manifold and STL/3MF regression
+        run: cargo test --locked -p solidcraft-engine --lib cmd::mesh::manufacturing_quality_tests -- --test-threads=1
+      - name: Print-preflight regression
+        run: cargo test --locked -p solidcraft-engine --lib cmd::mesh::manufacturing::tests -- --test-threads=1
+      - name: Existing 3MF import/export regressions
+        run: cargo test --locked -p solidcraft-io --lib threemf -- --test-threads=1
+      - name: Existing slicer geometry, infill and G-code regressions
+        run: cargo test --locked -p solidcraft-slice --lib -- --test-threads=1
