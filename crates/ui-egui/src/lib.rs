@@ -2622,7 +2622,9 @@ impl SolveApp {
             if self.four_viewports.enabled && !self.nodes.open && !crate::dialogs_sheet::flat_active(self) {
                 four_viewports::show(self, ui);
             } else {
-                if self.four_viewports.enabled { let mut four = std::mem::take(&mut self.four_viewports); four.leave(self); self.four_viewports = four; }
+                let mut four = std::mem::take(&mut self.four_viewports);
+                four.leave(self);
+                self.four_viewports = four;
                 viewport::show(self, ui);
             }
         }
