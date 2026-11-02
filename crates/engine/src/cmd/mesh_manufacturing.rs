@@ -209,7 +209,6 @@ fn overhang_screen(positions: &[Vec3], triangles: &[[u32; 3]], bounds: Aabb3, ov
 
 pub(super) fn check(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "mesh.manufacturing_check";
-    let weld = number(p, cmd, "weld_tolerance_mm", 0.0, 0.0, 1000.0)?;
     let nozzle = number(p, cmd, "nozzle_diameter_mm", 0.4, 0.01, 10.0)?;
     let angle = number(p, cmd, "overhang_deg", 45.0, 0.0, 89.0)?;
     let bed = bed_size(p, cmd)?;
@@ -217,9 +216,12 @@ pub(super) fn check(s: &mut Session, p: &Value) -> Result<Value> {
     let state = s.world_state();
     let source = state.body(&name).ok_or_else(|| bad(cmd, format!("no body `{name}`")))?;
     let size = source.body.size();
-    if !size.is_finite() || !(size > 0.0) {
+    if !size.is_finite() || size <= 0.0 {
         return Err(bad(cmd, "body has invalid overall size"));
     }
+    // The default matches the actual STL/3MF export weld tolerance. A
+    // B-rep's adjacent faces often have separate, coincident vertex indices.
+    let weld = number(p, cmd, "weld_tolerance_mm", (size * 1e-6).max(1e-7), 0.0, 1000.0)?;
     let chord = number(p, cmd, "chord_mm", (size * 5e-5).max(1e-4), 1e-6, 1000.0)?;
     let tess = if source.body.is_mesh() {
         None
@@ -230,42 +232,59 @@ pub(super) fn check(s: &mut Session, p: &Value) -> Result<Value> {
         Some(m) => (m.positions.as_slice(), m.triangles.as_slice()),
         None => source.body.triangle_mesh().ok_or_else(|| bad(cmd, "mesh body has no triangles"))?,
     };
+    if positions.len() > 6_000_000 || triangles.len() > 2_000_000 {
+        return Err(bad(cmd, "mesh exceeds preflight resource limit (6M vertices or 2M triangles)"));
+    }
     if triangles.is_empty() {
         return Err(bad(cmd, "body contains no mesh triangles"));
     }
-    let topology = super::analyze(positions, triangles, weld);
+    // Diagnose the original before welding. Otherwise a malformed facet that
+    // the exporter silently drops could appear as a successfully repaired mesh.
+    let source_topology = super::analyze(positions, triangles, 0.0);
+    let malformed_input = ["invalid_index_triangles", "nonfinite_vertices",
+        "degenerate_triangles", "duplicate_faces"]
+        .iter().any(|key| source_topology[*key].as_u64().unwrap_or(0) > 0);
+    let (print_positions, print_triangles) = if malformed_input {
+        (Vec::new(), Vec::new())
+    } else {
+        solidcraft_io::weld(positions, triangles, weld.max(1e-12))
+    };
+    let topology = if malformed_input {
+        json!({"closed": false, "error": "source has invalid or duplicate facets; refusing to discard them"})
+    } else {
+        super::analyze(&print_positions, &print_triangles, 0.0)
+    };
     let bounds: Aabb3 = positions.iter().copied().collect();
     if bounds.is_empty() || !bounds.min.is_finite() || !bounds.max.is_finite() {
         return Err(bad(cmd, "mesh vertices have invalid bounds"));
     }
     let dimensions = bounds.size();
-    let topology_ok = topology["closed"] == true;
+    let topology_ok = !malformed_input && topology["closed"] == true;
     let intersections = if topology_ok {
-        // A tiny nonzero length scale avoids claiming floating point exactness.
-        intersection_screen(positions, triangles, (bounds.diagonal() * 1e-10).max(1e-10))
+        intersection_screen(&print_positions, &print_triangles, (bounds.diagonal() * 1e-10).max(1e-10))
     } else {
         json!({"complete": false, "reason": "mesh topology is invalid or inward; repair before intersection screening"})
     };
     let wall = if topology_ok && intersections["potential_pairs"].as_u64() == Some(0) && intersections["complete"] == true {
-        wall_screen(positions, triangles, nozzle, size)
+        wall_screen(&print_positions, &print_triangles, nozzle, size)
     } else {
         json!({"complete": false, "reason": "valid nonintersecting closed mesh required for wall sampling",
             "minimum_sampled_mm": null})
     };
-    let orientation = overhang_screen(positions, triangles, bounds, angle);
+    let orientation = overhang_screen(&print_positions, &print_triangles, bounds, angle);
     let fit = bed.map(|dims| {
         json!({
-            "bed_mm": dims, "fits_current_xy_orientation": dimensions.x <= dims[0] && dimensions.y <= dims[1] && dimensions.z <= dims[2],
+            "bed_mm": dims, "fits_current_xy_orientation":
+                dimensions.x <= dims[0] && dimensions.y <= dims[1] && dimensions.z <= dims[2],
             "placement_method": "XY translation allowed; rotation not considered",
         })
     });
     let self_intersections = intersections["potential_pairs"].as_u64().unwrap_or(0);
     let checked_intersections = intersections["complete"] == true;
-    let blocked = !topology_ok || self_intersections > 0;
     let thin_warning = wall["below_nozzle_diameter"] == true;
     let possible_support = orientation["possible_support_area_mm2"].as_f64().unwrap_or(0.0) > 0.0;
     let fails_bed = fit.as_ref().is_some_and(|v| v["fits_current_xy_orientation"] == false);
-    let verdict = if blocked { "invalid_mesh" }
+    let verdict = if !topology_ok || self_intersections > 0 { "invalid_mesh" }
         else if !checked_intersections { "inspection_incomplete" }
         else if thin_warning || possible_support || fails_bed || orientation["has_flat_bed_contact"] == false { "requires_review" }
         else { "passed_limited_screening" };
@@ -277,7 +296,11 @@ pub(super) fn check(s: &mut Session, p: &Value) -> Result<Value> {
         "weld_tolerance_mm": weld,
         "bounds": {"min": bounds.min, "max": bounds.max},
         "size_mm": [dimensions.x, dimensions.y, dimensions.z],
+        "source_topology": source_topology,
         "topology": topology,
+        "candidate_mesh_method": "same_tolerance_weld_as_STL_3MF_export",
+        "candidate_mesh_vertices": print_positions.len(),
+        "candidate_mesh_triangles": print_triangles.len(),
         "potential_self_intersections": intersections,
         "sampled_wall_thickness": wall,
         "orientation_and_support": orientation,
