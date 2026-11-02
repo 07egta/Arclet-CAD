@@ -75,7 +75,7 @@ fn export_f32_precision(positions: &[Vec3], triangles: &[[u32; 3]]) -> Value {
     };
     json!({
         "method": "f64_to_f32_vertex_roundtrip",
-        "formats": ["STL_binary", "STL_ascii", "3MF_untagged"],
+        "formats": ["STL_binary", "3MF_untagged"],
         "max_position_error_mm": max_error,
         "dimension_delta_mm": dimension_error,
         "unrepresentable_vertices": overflow,
