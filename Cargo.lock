@@ -4340,6 +4340,8 @@ dependencies = [
  "solidcraft-geom",
  "solidcraft-io",
  "solidcraft-kernel",
+ "solidcraft-manifold-cpp",
+ "solidcraft-polyclip-cpp",
  "solidcraft-render",
  "solidcraft-sketch",
  "thiserror 2.0.21",

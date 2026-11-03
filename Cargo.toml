@@ -30,6 +30,9 @@ solidcraft-space-mouse = { path = "crates/space-mouse" }
 solidcraft-mcp = { path = "crates/mcp" }
 solidcraft-derive = { path = "crates/derive" }
 solidcraft-3dx-client = { path = "crates/threedx-client" }
+# optional native C++ bridges (docs/native-cpp-bridge.md); the engine takes them only behind features
+solidcraft-manifold-cpp = { path = "crates/manifold-cpp" }
+solidcraft-polyclip-cpp = { path = "crates/polyclip-cpp" }
 
 # foundation
 thiserror = "2"

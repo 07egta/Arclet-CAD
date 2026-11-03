@@ -1,6 +1,6 @@
 # Arclet native C++ FFI bridge (Mission 17)
 
-**Status: opt-in experimental bridge, not enabled in the Arclet app.**
+**Status: opt-in experimental bridge. Wired into the engine as commands (`sketch.offset_native`, `sketch.boolean_native`, `mesh.boolean`), desktop only, behind the engine features `clipper2` and `manifold`, both off by default. Unverified until CI: this wiring was written without a local build.** Without the feature (and in wasm) those commands return an ordinary error saying the backend is not built in. `mesh.boolean` returns a triangle mesh (not NURBS/B-rep) from the display meshes of two bodies and never replaces a body; the polygon commands take explicit [x,y] rings in mm and change nothing in the design. Build with e.g. `cargo build -p solidcraft-engine --features manifold`.
 The presence of an implementation or an unexecuted GitHub workflow does **not** prove it works. Check the PR's native-cpp-bridge Windows/macOS test logs for actual results.
 
 ## Architecture

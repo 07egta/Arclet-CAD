@@ -13,6 +13,11 @@ default = []
 # Optional authored texture/HDR bytes; the command registry and metadata remain available.
 bundled-render-library = []
 raytrace-cpu = ["solidcraft-render/raytrace-cpu"]
+# Native C++ bridges (desktop only, off by default; see docs/native-cpp-bridge.md). Needs
+# CLIPPER2_SRC / MANIFOLD_SRC at build time. Without them `sketch.*_native` and `mesh.boolean`
+# return an error saying the backend is not built in.
+clipper2 = ["dep:solidcraft-polyclip-cpp", "solidcraft-polyclip-cpp/clipper2"]
+manifold = ["dep:solidcraft-manifold-cpp", "solidcraft-manifold-cpp/manifold"]
 # Turns on the parameter-contract audit recorder (`SOLIDCRAFT_PARAM_AUDIT`, see
 # `src/schema/record.rs`), for checking a new contract against the whole test suite.
 param-audit = []
@@ -37,6 +42,8 @@ solidcraft-kernel = { workspace = true }
 solidcraft-doc = { workspace = true }
 solidcraft-io = { workspace = true }
 solidcraft-render = { workspace = true }
+solidcraft-manifold-cpp = { workspace = true, optional = true }
+solidcraft-polyclip-cpp = { workspace = true, optional = true }
 image = { workspace = true, features = ["jpeg"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
