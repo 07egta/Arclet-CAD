@@ -3,20 +3,31 @@
 
 use serde_json::{Value, json};
 use solidcraft_doc::Mat;
+use solidcraft_doc::point_cloud_analysis::{CloudSample, DEFAULT_ANALYSIS_POINTS, MAX_ANALYSIS_POINTS, align_translation};
 use solidcraft_doc::point_cloud::{ColorBy, Colors, MAX_COORD, MAX_POINTS, POINT_SIZE, PointCloud, Points, UNITS, unit_scale};
 
 use super::CommandSpec;
 use crate::params::{bad, bool_, str_};
+use crate::schema::point_cloud::{AnalyzeParams, AnalyzeResult};
+use crate::schema::{TypedContract, output_schema_for};
 use crate::{EngineError, Result, Session};
 
+const ANALYZE_CONTRACT: TypedContract<AnalyzeParams> = TypedContract::new();
+
 pub static COMMANDS: &[CommandSpec] = &[
+    CommandSpec::new("pointcloud.analyze", "Analyze Point Cloud", crate::checked!("pointcloud.analyze", analyze))
+        .icon("inspect")
+        .noundo()
+        .contract(&ANALYZE_CONTRACT)
+        .output(output_schema_for::<AnalyzeResult>)
+        .params("cloud: id|name; mode: plane|circle|sphere|cylinder|nearest|outliers|align|cad_distance; body?: CAD body for cad_distance; max_points?: 1..100000 (default 20000); tolerance_mm?: 1e-9..1e6 (default 0.1); point?: [world x,y,z] for nearest; target?: id|name of fixed cloud for align. Read-only bounded sample; results include residuals; align estimates translation only"),
     CommandSpec::new("pointcloud.insert", "Insert Point Cloud", insert)
         .at("SOLID", "INSERT")
         .icon("import")
         .params("path: .ply, .xyz or .pts file (its points join the design as a point cloud: drawn as points, never a body; a PLY's red, green and blue are its colours) → cloud, name, points, source_points, bounds, warnings; name?; units?: mm|cm|m|in|ft (the file's length unit, default mm); max_points?: most points kept (default 5000000, at most 20000000; a larger file is thinned evenly); center?: bool (move the cloud so the middle of its base sits at the origin); point_size?: pixels (0.5…16, default 2); color_by?: file|single|height (the file's colours, the default; one colour; or a ramp by height, blue low to red high); color?: [r, g, b] 0…1 (the single colour; given alone it sets color_by single, null sets color_by file); height_range?: [low, high] design Z in mm for the height ramp, or null to work it out from the points (all but the lowest and highest 2 %)"),
     CommandSpec::new("pointcloud.edit", "Edit Point Cloud", edit)
         .icon("edit")
-        .params("cloud: id or name; name?; visible?; point_size?: pixels (0.5…16); color_by?: file|single|height (the file's colours, the default; one colour; or a ramp by height, blue low to red high); color?: [r, g, b] 0…1 (the single colour; given alone it sets color_by single, null sets color_by file); height_range?: [low, high] design Z in mm for the height ramp, or null to work it out from the points (all but the lowest and highest 2 %); units?: mm|cm|m|in|ft (the file's length unit: the points are scaled from the unit they came in as); matrix?: [12 or 16 numbers] (where the cloud sits: a rigid row-major 3x4 or 4x4 matrix, as occurrence.move takes it); tolerance? → cloud"),
+        .params("cloud: id or name; name?; visible?; point_size?: pixels (0.5…16); color_by?: file|single|height (the file's colours, the default; one colour; or a ramp by height, blue low to red high); color?: [r, g, b] 0…1 (the single colour; given alone it sets color_by single, null sets color_by file); height_range?: [low, high] design Z in mm for the height ramp, or null to work it out from the points (all but the lowest and highest 2 %); units?: mm|cm|m|in|ft (reinterpret original file units); scale?: positive uniform geometry factor (relative to the cloud origin, not its world transform, cannot be combined with units); matrix?: [12 or 16 numbers] (where the cloud sits: a rigid row-major 3x4 or 4x4 matrix, as occurrence.move takes it); tolerance? → cloud"),
     CommandSpec::new("pointcloud.delete", "Delete Point Cloud", delete).icon("delete").params("cloud: id or name → deleted"),
     CommandSpec::new("pointcloud.list", "Point Clouds", list)
         .icon("list")
@@ -208,6 +219,15 @@ fn edit(s: &mut Session, p: &Value) -> Result<Value> {
     let size = point_size(p, cmd)?;
     let colors = (color_by(p, cmd)?, color(p, cmd)?, height_range(p, cmd)?);
     let units = units_of(p, cmd)?;
+    let scale = match p.get("scale") {
+        None | Some(Value::Null) => None,
+        Some(value) => Some(value.as_f64()
+            .filter(|scale| scale.is_finite() && (1e-6..=1e6).contains(scale))
+            .ok_or_else(|| bad(cmd, "`scale` must be a positive finite factor from 1e-6 to 1e6"))?),
+    };
+    if units.is_some() && scale.is_some() {
+        return Err(bad(cmd, "change `units` and geometry `scale` in separate edits"));
+    }
     let placement = match p.get("matrix") {
         None | Some(Value::Null) => None,
         Some(m) => Some(super::component::matrix::rigid(m, super::component::matrix::tolerance(p, cmd)?, cmd)?),
@@ -229,6 +249,13 @@ fn edit(s: &mut Session, p: &Value) -> Result<Value> {
         }
         c.units = unit.into();
     }
+    if let Some(factor) = scale
+        && factor != 1.0
+    {
+        // Uniform scaling changes the stored point offsets, not the cloud's placement,
+        // its double-precision origin, or the source file's declared measurement units.
+        c.points = Points::new(c.points.values().iter().map(|v| (f64::from(*v) * factor) as f32).collect());
+    }
     if let Some(m) = placement {
         c.transform = m;
     }
@@ -248,6 +275,73 @@ fn edit(s: &mut Session, p: &Value) -> Result<Value> {
     let slot = s.doc_mut().point_clouds.get_mut(i).ok_or_else(|| bad(cmd, "point cloud"))?;
     *slot = c;
     Ok(json!({"cloud": id}))
+}
+
+
+/// Read-only reverse-engineering diagnostics. Never builds a feature, changes a point
+/// cloud, or claims that an arbitrary scan has a unique NURBS reconstruction.
+fn analyze(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "pointcloud.analyze";
+    let index = find(s, p, cmd)?;
+    let mode = str_(p, "mode").ok_or_else(|| bad(cmd, "`mode` is required"))?;
+    let max = match p.get("max_points") {
+        None => DEFAULT_ANALYSIS_POINTS,
+        Some(v) => v.as_u64().filter(|n| (1..=MAX_ANALYSIS_POINTS as u64).contains(n)).map(|n| n as usize)
+            .ok_or_else(|| bad(cmd, "`max_points` must be an integer from 1 to 100000"))?,
+    };
+    let tolerance = match p.get("tolerance_mm") {
+        None => 0.1,
+        Some(value) => value.as_f64().filter(|v| v.is_finite() && (1e-9..=1e6).contains(v))
+            .ok_or_else(|| bad(cmd, "`tolerance_mm` must be 1e-9..1e6"))?,
+    };
+    let cloud = s.doc.point_clouds.get(index).ok_or_else(|| bad(cmd, "point cloud not found"))?;
+    let sample = CloudSample::new(cloud, max)?;
+    let result = match mode {
+        "plane" => json!(sample.fit_plane(tolerance)?),
+        "circle" => json!(sample.fit_circle(tolerance)?),
+        "sphere" => json!(sample.fit_sphere(tolerance)?),
+        "cylinder" => json!(sample.fit_cylinder(tolerance)?),
+        "outliers" => json!(sample.outliers()?),
+        "cad_distance" => {
+            let name = str_(p, "body").ok_or_else(|| bad(cmd, "`body` must name the CAD body to compare"))?;
+            let world = s.world_state();
+            let body = world.body(name).ok_or_else(|| bad(cmd, format!("no CAD body `{name}`")))?;
+            // Read-only distance to evaluated tessellation, not to analytic NURBS.
+            let mesh = body.mesh();
+            json!(sample.distance_to_mesh(&mesh, tolerance)?)
+        }
+        "nearest" => {
+            let coords = p.get("point").and_then(Value::as_array)
+                .filter(|a| a.len() == 3)
+                .ok_or_else(|| bad(cmd, "`point` must be a world [x,y,z] vector"))?;
+            let xyz: Vec<f64> = coords.iter().map(|v| v.as_f64().filter(|v| v.is_finite() && v.abs() <= 1e12))
+                .collect::<Option<_>>().ok_or_else(|| bad(cmd, "`point` must have finite coordinates within 1e12 mm"))?;
+            json!(sample.nearest_world(solidcraft_geom::Vec3::new(xyz[0], xyz[1], xyz[2]))?)
+        }
+        "align" => {
+            let name = match p.get("target") {
+                Some(Value::String(s)) => s.clone(),
+                Some(Value::Number(n)) => n.to_string(),
+                _ => return Err(bad(cmd, "`target` must identify the fixed point cloud")),
+            };
+            let target = s.doc.point_clouds.iter().find(|c| c.id.to_string() == name || c.name == name)
+                .ok_or_else(|| bad(cmd, format!("no target cloud `{name}`")))?;
+            if target.id == cloud.id {
+                return Err(bad(cmd, "the source and target clouds must differ"));
+            }
+            let fixed = CloudSample::new(target, max)?;
+            json!(align_translation(&fixed, &sample, tolerance)?)
+        }
+        _ => return Err(bad(cmd, "`mode` must be plane, circle, sphere, cylinder, nearest, outliers, align or cad_distance")),
+    };
+    Ok(json!({
+        "cloud": cloud.id,
+        "mode": mode,
+        "sampled": sample.offsets.len(),
+        "source_points": sample.source_count,
+        "stride": sample.stride,
+        "result": result,
+    }))
 }
 
 fn delete(s: &mut Session, p: &Value) -> Result<Value> {
@@ -385,6 +479,133 @@ mod tests {
         assert_eq!(r["name"], "line");
         let r = s.execute("pointcloud.insert", &json!({"path": path})).unwrap();
         assert_eq!(r["name"], "line (2)");
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+
+
+    #[test]
+    fn uniform_scale_preserves_far_origin_file_units_and_color() {
+        let d = dir("scale");
+        let path = ply(&d, "far.ply", &[[999999.0,0.0,0.0],[999999.125,1.0,0.0]], true);
+        let mut s = Session::default();
+        let id = s.execute("pointcloud.insert", &json!({"path":path,"units":"m"})).unwrap()["cloud"].as_u64().unwrap();
+        let original = s.doc.point_clouds[0].clone();
+        assert_eq!(original.origin.x, 999999000.0);
+        s.execute("pointcloud.edit", &json!({"cloud":id,"scale":2.0})).unwrap();
+        let c = &s.doc.point_clouds[0];
+        assert_eq!(c.origin, original.origin);
+        assert_eq!(c.points.get(1), Some([250.0, 2000.0, 0.0]));
+        assert_eq!(c.colors, original.colors);
+        assert_eq!(c.units, "m");
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(s.doc.point_clouds[0], original);
+        assert!(s.execute("pointcloud.edit", &json!({"cloud":id,"scale":2.0,"units":"cm"})).is_err());
+        assert!(s.execute("pointcloud.edit", &json!({"cloud":id,"scale":0.0})).is_err());
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn scan_analysis_is_read_only_and_reports_units_and_residuals() {
+        let d = dir("analysis");
+        let pts: Vec<[f32; 3]> = (0..12).flat_map(|x| (0..12).map(move |y| {
+            [x as f32, y as f32, 2.0 * x as f32 - 0.5 * y as f32 + 1.0]
+        })).collect();
+        let path = ply(&d, "plane.ply", &pts, true);
+        let mut s = Session::default();
+        let id = s.execute("pointcloud.insert", &json!({"path": path, "units": "cm"}))
+            .unwrap()["cloud"].as_u64().unwrap();
+        let before = s.doc.clone();
+        let revision = s.revision;
+        let fit = s.execute("pointcloud.analyze", &json!({"cloud":id,"mode":"plane","max_points":200,"tolerance_mm":0.01})).unwrap();
+        assert_eq!(fit["mode"], "plane");
+        assert_eq!(fit["sampled"], 144);
+        assert!(fit["result"]["quality"]["rms_mm"].as_f64().unwrap() < 1e-5, "{fit}");
+        assert!(fit["result"]["quality"]["inlier_fraction"].as_f64().unwrap() > 0.99);
+        let nearest = s.execute("pointcloud.analyze", &json!({"cloud":id,"mode":"nearest","point":[10.0,10.0,25.0]})).unwrap();
+        assert!(nearest["result"]["distance_mm"].as_f64().unwrap() < 1e-5, "{nearest}");
+        let outliers = s.execute("pointcloud.analyze", &json!({"cloud":id,"mode":"outliers","max_points":50})).unwrap();
+        assert_eq!(outliers["sampled"], 48);
+        assert_eq!(outliers["source_points"], 144);
+        assert_eq!(s.doc, before);
+        assert_eq!(s.revision, revision, "analysis must not change history or design");
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+
+    #[test]
+    fn scan_to_cad_body_distance_is_an_unsigned_mesh_based_deviation() {
+        let d = dir("cad-distance");
+        let points: Vec<[f32; 3]> = (1..9).flat_map(|x| (1..9).map(move |y| {
+            [x as f32, y as f32, 10.25]
+        })).collect();
+        let file = ply(&d, "above-top.ply", &points, false);
+        let mut s = Session::default();
+        s.execute("solid.box", &json!({"length":10,"width":10,"height":10,"body_name":"Target"})).unwrap();
+        let body = s.model.state().bodies.first().unwrap().name.clone();
+        let scan = s.execute("pointcloud.insert", &json!({"path":file})).unwrap()["cloud"].as_u64().unwrap();
+        let before = s.doc.clone();
+        let result = s.execute("pointcloud.analyze", &json!({"cloud":scan,"mode":"cad_distance","body":body,"tolerance_mm":0.3})).unwrap();
+        assert_eq!(result["result"]["method"], "unsigned_distance_to_reference_tessellation");
+        let rms = result["result"]["quality"]["rms_mm"].as_f64().unwrap();
+        assert!((rms - 0.25).abs() < 1e-5, "{result}");
+        assert_eq!(result["result"]["quality"]["inlier_fraction"], 1.0);
+        assert_eq!(s.doc, before);
+        assert!(s.execute("pointcloud.analyze", &json!({"cloud":scan,"mode":"cad_distance","body":"Missing"})).is_err());
+        assert_eq!(s.doc, before);
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn scan_alignment_returns_translation_but_never_applies_it() {
+        let d = dir("alignment");
+        let pts: Vec<[f32; 3]> = (0..8).flat_map(|x| (0..8).map(move |y| {
+            [x as f32, y as f32, (x * y) as f32 * 0.125]
+        })).collect();
+        let a = ply(&d, "fixed.ply", &pts, false);
+        let b = ply(&d, "moving.ply", &pts, false);
+        let mut s = Session::default();
+        let fixed = s.execute("pointcloud.insert", &json!({"path":a})).unwrap()["cloud"].as_u64().unwrap();
+        let moving = s.execute("pointcloud.insert", &json!({"path":b})).unwrap()["cloud"].as_u64().unwrap();
+        s.execute("pointcloud.edit", &json!({"cloud":moving,"matrix":[1,0,0,130,0,1,0,-70,0,0,1,25]})).unwrap();
+        let original = s.doc.clone();
+        let fit = s.execute("pointcloud.analyze", &json!({"cloud":moving,"target":fixed,"mode":"align","tolerance_mm":0.0001})).unwrap();
+        assert_eq!(fit["result"]["method"], "translation_only_trimmed_icp");
+        let delta = fit["result"]["translation_mm"].as_array().unwrap();
+        assert!((delta[0].as_f64().unwrap() + 130.0).abs() < 1e-5, "{fit}");
+        assert!((delta[1].as_f64().unwrap() - 70.0).abs() < 1e-5, "{fit}");
+        assert!((delta[2].as_f64().unwrap() + 25.0).abs() < 1e-5, "{fit}");
+        assert_eq!(s.doc, original);
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn hostile_analysis_parameters_and_degenerate_models_leave_document_intact() {
+        let d = dir("bad-analysis");
+        let path = ply(&d, "line.ply", &[[0.0,0.0,0.0],[1.0,0.0,0.0],[2.0,0.0,0.0],[3.0,0.0,0.0]],false);
+        let mut s = Session::default();
+        let id = s.execute("pointcloud.insert", &json!({"path":path})).unwrap()["cloud"].as_u64().unwrap();
+        let before = s.doc.clone();
+        for params in [
+            json!({"cloud":id,"mode":"plane"}),
+            json!({"cloud":id,"mode":"circle"}),
+            json!({"cloud":id,"mode":"cylinder"}),
+            json!({"cloud":id,"mode":"sphere"}),
+            json!({"cloud":id,"mode":"outliers"}),
+            json!({"cloud":id,"mode":"near"}),
+            json!({"cloud":id,"mode":"nearest"}),
+            json!({"cloud":id,"mode":"nearest","point":["NaN",0,0]}),
+            json!({"cloud":id,"mode":"align","target":id}),
+            json!({"cloud":id,"mode":"plane","max_points":0}),
+            json!({"cloud":id,"mode":"plane","max_points":1_000_000}),
+            json!({"cloud":id,"mode":"plane","tolerance_mm":-1}),
+        ] {
+            assert!(s.execute("pointcloud.analyze", &params).is_err(), "{params}");
+            assert_eq!(s.doc, before);
+        }
+        s.param_check = crate::schema::ParamCheck::Strict;
+        assert!(s.execute("pointcloud.analyze", &json!({"cloud":id,"mode":"plane","typo":4})).is_err());
+        assert_eq!(s.doc, before);
         let _ = std::fs::remove_dir_all(d);
     }
 
