@@ -1,0 +1,54 @@
+name: OCCT Studio experiment
+on:
+  push:
+    branches: ['work/occt-studio-*']
+    paths: ['experiments/occt-studio/**', '.github/workflows/occt-studio.yml']
+  pull_request:
+    paths: ['experiments/occt-studio/**', '.github/workflows/occt-studio.yml']
+permissions:
+  contents: read
+concurrency:
+  group: occt-studio-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: experiments/occt-studio
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: experiments/occt-studio
+      - name: Install OCCT development libraries
+        run: sudo apt-get update -qq && sudo apt-get install -y libocct-modeling-algorithms-dev libocct-data-exchange-dev libocct-visualization-dev libxkbcommon-dev libwayland-dev libx11-dev libxi-dev libxcursor-dev libxrandr-dev libgl1-mesa-dev xvfb xdotool imagemagick
+      - name: Compile and execute native geometry regressions
+        run: |
+          mkdir -p evidence
+          set -o pipefail
+          rustc --version | tee evidence/toolchain.txt
+          dpkg-query -W 'libocct*' >> evidence/toolchain.txt
+          cargo test --no-default-features -- --test-threads=1 2>&1 | tee evidence/rust-tests.log
+      - name: Build and exercise CLI
+        run: |
+          set -o pipefail
+          cargo build --release --no-default-features 2>&1 | tee evidence/build.log
+          ./target/release/arclet-occt-studio --demo evidence/showcase 2>&1 | tee evidence/demo.log
+          ./target/release/arclet-occt-studio --batch examples/bracket.commands 2>&1 | tee evidence/bracket.log
+      - name: Preserve source and verification evidence
+        if: always()
+        run: |
+          mkdir -p evidence
+          git rev-parse HEAD > evidence/source-commit.txt
+          git diff --stat > evidence/source-diff.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: occt-studio-linux-evidence
+          path: |
+            experiments/occt-studio/evidence
+            experiments/occt-studio/Cargo.lock
+          retention-days: 14
