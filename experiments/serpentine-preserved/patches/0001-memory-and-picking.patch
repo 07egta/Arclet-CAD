@@ -1,0 +1,210 @@
+diff --git a/serpentine3d/core/scene.py b/serpentine3d/core/scene.py
+index 9ef9800..c906f6a 100644
+--- a/serpentine3d/core/scene.py
++++ b/serpentine3d/core/scene.py
+@@ -8,6 +8,7 @@ from __future__ import annotations
+ import itertools
+ import threading
+ import uuid
++import weakref
+ from contextlib import contextmanager
+ from dataclasses import dataclass, field, replace
+ 
+@@ -42,20 +43,20 @@ def _rebuild_record(rec: dict, shapes: list):
+ 
+ 
+ _TESS_GUARD = threading.Lock()
+-_TESS_LOCKS: dict[int, tuple] = {}      # id(shape) -> (shape, Lock)
++# The registry owns neither shapes nor locks. A caller holds its lock from
++# lookup through release, including the interval before acquiring it. This
++# prevents eviction from creating a second lock for the same shape while
++# also letting the last deleted/undone native shape be reclaimed at once.
++_TESS_LOCKS: weakref.WeakValueDictionary = weakref.WeakValueDictionary()
+ 
+ 
+ def _tess_lock(shape) -> threading.Lock:
+     with _TESS_GUARD:
+-        ent = _TESS_LOCKS.get(id(shape))
+-        if ent is None or ent[0] is not shape:
+-            ent = (shape, threading.Lock())
+-            _TESS_LOCKS[id(shape)] = ent
+-        if len(_TESS_LOCKS) > 1024:     # bound the registry
+-            for k in list(_TESS_LOCKS)[:512]:
+-                if not _TESS_LOCKS[k][1].locked():
+-                    del _TESS_LOCKS[k]
+-        return ent[1]
++        lock = _TESS_LOCKS.get(id(shape))
++        if lock is None:
++            lock = threading.Lock()
++            _TESS_LOCKS[id(shape)] = lock
++        return lock
+ 
+ 
+ @dataclass
+@@ -119,6 +120,8 @@ class SceneObject:
+     @shape.setter
+     def shape(self, value):
+         self._shape = value
++        self._mesh = None
++        self._bounds = None
+ 
+     @property
+     def shape_ready(self) -> bool:
+@@ -423,7 +426,7 @@ class Scene:
+         """Swap an object's geometry (transform, boolean result, ...)."""
+         old = self.objects[obj_id]
+         new = replace(old, _shape=shape, kind=geometry.shape_kind(shape),
+-                      _mesh=None)
++                      _mesh=None, _bounds=None)
+         self.objects[obj_id] = new
+         self._regenerate_dependents(obj_id)
+         self.notify("objects")
+@@ -459,7 +462,7 @@ class Scene:
+                         continue                   # keep the stale child
+                     self.objects[rec["output"]] = replace(
+                         old, _shape=shape, kind=geometry.shape_kind(shape),
+-                        _mesh=None)
++                        _mesh=None, _bounds=None)
+                     queue.append(rec["output"])
+         finally:
+             self._regen_active = False
+diff --git a/serpentine3d/core/spatial.py b/serpentine3d/core/spatial.py
+index db35981..94d6744 100644
+--- a/serpentine3d/core/spatial.py
++++ b/serpentine3d/core/spatial.py
+@@ -28,6 +28,8 @@ import numpy as np
+ MIN_PRIMITIVES = 20_000
+ 
+ MAX_GRID = 64
++# Bound each temporary indexed vertex gather, irrespective of mesh size.
++INDEX_BLOCK = 65_536
+ 
+ 
+ def _grid_size(n: int) -> int:
+@@ -68,12 +70,17 @@ class ChunkIndex:
+         total = int(counts.sum())
+         if not total:
+             return np.zeros(0, np.int64)
++        if len(lo) == 1:
++            return self.order[lo[0]:hi[0]].copy()
++        if keep.dtype == np.bool_ and total == len(self.order):
++            return self.order.copy()
+         # walk the kept runs as one arange that jumps at each run boundary,
+         # rather than concatenating a list of slices per chunk
+         steps = np.ones(total, np.int64)
+         heads = np.concatenate([[0], np.cumsum(counts)[:-1]])
+         steps[heads] = np.concatenate([lo[:1], lo[1:] - hi[:-1] + 1])
+-        return self.order[np.cumsum(steps)]
++        np.cumsum(steps, out=steps)
++        return self.order[steps]
+ 
+ 
+ def build_index(corners: np.ndarray) -> ChunkIndex | None:
+@@ -100,21 +107,62 @@ def build_index(corners: np.ndarray) -> ChunkIndex | None:
+     for k in range(1, corners.shape[1]):
+         np.minimum(lo, corners[:, k], out=lo)
+         np.maximum(hi, corners[:, k], out=hi)
++    return _from_bounds(lo, hi)
++
++
++def build_triangle_index(vertices: np.ndarray,
++                         triangles: np.ndarray) -> ChunkIndex | None:
++    """Index triangles without materialising the entire (N, 3, 3) cube.
++
++    Below the threshold, do not read vertices at all. For a large scan the
++    two (N, 3) bound arrays are necessary; temporary corner gathers are not.
++    Keeping each gather to INDEX_BLOCK rows bounds its extra memory even
++    when the imported drawing contains millions of triangles.
++    """
++    n = len(triangles)
++    if n < MIN_PRIMITIVES:
++        return None
++    lo = np.empty((n, 3), dtype=vertices.dtype)
++    hi = np.empty_like(lo)
++    for start in range(0, n, INDEX_BLOCK):
++        stop = min(start + INDEX_BLOCK, n)
++        lower, upper = lo[start:stop], hi[start:stop]
++        lower[:] = vertices[triangles[start:stop, 0]]
++        upper[:] = lower
++        for corner in (1, 2):
++            points = vertices[triangles[start:stop, corner]]
++            np.minimum(lower, points, out=lower)
++            np.maximum(upper, points, out=upper)
++        del points
++    return _from_bounds(lo, hi)
++
++
++def _from_bounds(lo: np.ndarray, hi: np.ndarray) -> ChunkIndex:
++    """Group primitive bounds with only one coordinate scratch array.
++
++    Grid keys fit in int32 (MAX_GRID cubed is only 262144). Work axis by
++    axis instead of allocating (N, 3) doubles and (N, 3) integers. The
++    midpoint arithmetic and stable sort retain the original chunk order.
++    """
++    n = len(lo)
+     origin = lo.min(axis=0).astype(np.float64)
+     span = hi.max(axis=0).astype(np.float64) - origin
+-    # a sheet has an axis of no extent; give it one cell rather than a
+-    # division by zero
+     span[span < 1e-12] = 1.0
+-
+     grid = _grid_size(n)
+-    centre = (lo + hi) * 0.5
+-    cell = np.clip(((centre - origin) / span * grid).astype(np.int64),
+-                   0, grid - 1)
+-    key = (cell[:, 0] * grid + cell[:, 1]) * grid + cell[:, 2]
+-
++    key = np.zeros(n, np.int32)
++    for axis in range(3):
++        coord = ((lo[:, axis] + hi[:, axis]) * 0.5).astype(np.float64)
++        coord -= origin[axis]
++        coord /= span[axis]
++        coord *= grid
++        np.clip(coord, 0, grid - 1, out=coord)
++        key *= grid
++        key += coord.astype(np.int32)
++        del coord
+     order = np.argsort(key, kind="stable")
+     skey = key[order]
+     run_start = np.flatnonzero(np.concatenate([[True], skey[1:] != skey[:-1]]))
++    del key, skey
+     mins = np.minimum.reduceat(lo[order], run_start).astype(np.float64)
+     maxs = np.maximum.reduceat(hi[order], run_start).astype(np.float64)
+     starts = np.concatenate([run_start, [n]]).astype(np.int64)
+diff --git a/serpentine3d/core/tessellate.py b/serpentine3d/core/tessellate.py
+index fcb401d..80b5e79 100644
+--- a/serpentine3d/core/tessellate.py
++++ b/serpentine3d/core/tessellate.py
+@@ -13,7 +13,7 @@ from .occ import (
+     BRepMesh_IncrementalMesh, TopExp_Explorer, TopLoc_Location,
+     GCPnts_TangentialDeflection, TopAbs_Orientation,
+ )
+-from .spatial import build_index
++from .spatial import build_index, build_triangle_index
+ 
+ _UNINDEXED = object()
+ 
+@@ -136,6 +136,14 @@ class DisplayMesh:
+                 self._far = True
+                 given.update(held)
+                 self._bounds = self._tri_index = self._seg_index = None
++        # Setters can replace coordinates after a bounds/pick query. The
++        # origin need not change for the old answers to become stale.
++        if "local" in given:
++            self._tri_index = None
++        if "local_edges" in given:
++            self._seg_index = None
++        if any(name in given for name in ("local", "local_edges", "local_points")):
++            self._bounds = None
+         for name, pts in given.items():
+             setattr(self, name, self._offsets(pts))
+ 
+@@ -195,7 +203,7 @@ class DisplayMesh:
+         numbers and a mesh is millions, so the ray is the one that moves.
+         """
+         if self._tri_index is None:
+-            self._tri_index = (build_index(self.local[self.triangles])
++            self._tri_index = (build_triangle_index(self.local, self.triangles)
+                                or _UNINDEXED)
+         return None if self._tri_index is _UNINDEXED else self._tri_index
+ 

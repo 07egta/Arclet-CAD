@@ -9,9 +9,85 @@ concurrency:
   group: serpentine-preserved-${{ github.ref_name }}
   cancel-in-progress: true
 jobs:
-  source-snapshot:
+  native:
+    name: ${{ matrix.os }} / ${{ matrix.variant }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest]
+        variant: [baseline, patched]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PYTHONUTF8: '1'
+      LIBGL_ALWAYS_SOFTWARE: '1'
+      __GLX_VENDOR_LIBRARY_NAME: mesa
+      QT_QPA_FONTDIR: ${{ matrix.os == 'windows-latest' && 'C:/Windows/Fonts' || '' }}
+    steps:
+      - name: Preserve exact LF source bytes on both platforms
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: chisomobanzi/Serpentine3D
+          ref: 5a801e0db0ff6bf1d0738430fd9784db4ebfc9b0
+          path: upstream
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v5
+      - name: Install real desktop test dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y libgl1 libegl1 libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-shape0 libxcb-render-util0 libxcb-xinerama0 libxcb-cursor0 libfontconfig1 libdbus-1-3
+      - name: Install the pinned upstream dependency lock
+        working-directory: upstream
+        run: uv sync --extra dev --locked --python 3.12
+      - name: Check the upstream source and UI before changing anything
+        run: |
+          mkdir -p evidence
+          python experiments/serpentine-preserved/scripts/prepare.py upstream --check --report evidence/preflight.json
+          git -C upstream rev-parse HEAD > evidence/upstream-commit.txt
+          git rev-parse HEAD > evidence/experiment-commit.txt
+      - name: Apply only the reviewed backend changes
+        if: matrix.variant == 'patched'
+        run: python experiments/serpentine-preserved/scripts/prepare.py upstream --report evidence/ui-preservation.json
+      - name: New backend regressions
+        if: matrix.variant == 'patched'
+        working-directory: upstream
+        run: uv run pytest ../experiments/serpentine-preserved/tests -q --junitxml=../evidence/contracts.xml 2>&1 | tee ../evidence/contracts.log
+      - name: Measure the seeded backend workload
+        working-directory: upstream
+        run: uv run python ../experiments/serpentine-preserved/scripts/benchmark_backend.py --output ../evidence/benchmark.json 2>&1 | tee ../evidence/benchmark.log
+      - name: Complete upstream regression suite without suppressing failures
+        working-directory: upstream
+        run: uv run pytest tests/ -q -n 2 --ignore=tests/e2e_dod.py --junitxml=../evidence/upstream-tests.xml 2>&1 | tee ../evidence/upstream-tests.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: serpentine-${{ matrix.os }}-${{ matrix.variant }}-evidence
+          path: evidence
+          retention-days: 14
+  original-ui:
+    name: Original Qt UI / same-host comparison
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    env:
+      QT_QPA_PLATFORM: xcb
+      PYTHONUTF8: '1'
+      LIBGL_ALWAYS_SOFTWARE: '1'
+      __GLX_VENDOR_LIBRARY_NAME: mesa
     steps:
       - uses: actions/checkout@v4
         with:
@@ -22,34 +98,35 @@ jobs:
           ref: 5a801e0db0ff6bf1d0738430fd9784db4ebfc9b0
           path: upstream
           persist-credentials: false
-      - name: Capture source and provenance without fonts or git metadata
-        shell: python
-        run: |
-          import hashlib, json, pathlib, stat, subprocess, zipfile
-          root = pathlib.Path('upstream')
-          output = pathlib.Path('evidence')
-          output.mkdir()
-          actual = subprocess.check_output(['git', '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip()
-          assert actual == '5a801e0db0ff6bf1d0738430fd9784db4ebfc9b0', actual
-          blocked = {'.ttf', '.otf', '.ttc', '.woff', '.woff2', '.dfont', '.pfb', '.pfm'}
-          manifest = {}
-          with zipfile.ZipFile(output / 'upstream-source.zip', 'w', zipfile.ZIP_DEFLATED) as archive:
-              for path in sorted(root.rglob('*')):
-                  relative = path.relative_to(root)
-                  if '.git' in relative.parts or path.is_symlink() or not path.is_file():
-                      continue
-                  if path.suffix.casefold() in blocked:
-                      continue
-                  data = path.read_bytes()
-                  manifest[relative.as_posix()] = hashlib.sha256(data).hexdigest()
-                  info = zipfile.ZipInfo('Serpentine3D/' + relative.as_posix(), (1980, 1, 1, 0, 0, 0))
-                  info.compress_type = zipfile.ZIP_DEFLATED
-                  info.external_attr = (stat.S_IFREG | 0o644) << 16
-                  archive.writestr(info, data)
-          (output / 'upstream-provenance.json').write_text(json.dumps({'repository': 'chisomobanzi/Serpentine3D', 'commit': actual, 'files': manifest}, indent=2), encoding='utf-8')
-          print(json.dumps({'commit': actual, 'source_files': len(manifest), 'archive_bytes': (output / 'upstream-source.zip').stat().st_size}))
-      - uses: actions/upload-artifact@v4
+      - uses: actions/setup-python@v5
         with:
-          name: serpentine-pinned-source
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v5
+      - name: Install real Qt and software OpenGL dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y libgl1 libegl1 libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-shape0 libxcb-render-util0 libxcb-xinerama0 libxcb-cursor0 libfontconfig1 libdbus-1-3 xvfb xauth
+      - name: Install pinned dependencies
+        working-directory: upstream
+        run: uv sync --extra dev --locked --python 3.12
+      - name: Check pinned source
+        run: |
+          mkdir -p evidence
+          python experiments/serpentine-preserved/scripts/prepare.py upstream --check --report evidence/preflight.json
+      - name: Exercise and capture the real baseline desktop
+        working-directory: upstream
+        run: xvfb-run -a -s '-screen 0 1600x1000x24 +extension GLX' uv run python ../experiments/serpentine-preserved/scripts/ui_smoke.py --output ../evidence/gui-before 2>&1 | tee ../evidence/gui-before.log
+      - name: Apply backend patch with UI checksum guard
+        run: python experiments/serpentine-preserved/scripts/prepare.py upstream --report evidence/ui-preservation.json
+      - name: Exercise and capture the real patched desktop
+        working-directory: upstream
+        run: xvfb-run -a -s '-screen 0 1600x1000x24 +extension GLX' uv run python ../experiments/serpentine-preserved/scripts/ui_smoke.py --output ../evidence/gui-after 2>&1 | tee ../evidence/gui-after.log
+      - name: Compare same-host screenshots
+        working-directory: upstream
+        run: uv run python ../experiments/serpentine-preserved/scripts/compare_ui.py ../evidence/gui-before/original-ui-quad.png ../evidence/gui-after/original-ui-quad.png --output ../evidence/ui-pixel-comparison.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: serpentine-original-ui-evidence
           path: evidence
-          retention-days: 7
+          retention-days: 14
