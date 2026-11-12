@@ -1,13 +1,20 @@
 # An isolated source-build launcher. No administrator rights or global PATH edits.
 [CmdletBinding()]
 param(
-    [string]$SourceRoot = (Join-Path (Split-Path $PSScriptRoot -Parent) 'Serpentine3D'),
+    [string]$SourceRoot,
     [switch]$SetupOnly,
     [switch]$SelfTest,
     [switch]$PythonBackend
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+# Windows PowerShell 5.1 does not set PSScriptRoot while binding a default
+# parameter expression (unlike invoking the script directly with arguments).
+# Resolve the source folder in the script body after all parameters are bound.
+if ([string]::IsNullOrWhiteSpace($SourceRoot)) {
+    $launcherDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
+    $SourceRoot = Join-Path (Split-Path -Parent $launcherDirectory) 'Serpentine3D'
+}
 if (-not [Environment]::Is64BitOperatingSystem -or $env:PROCESSOR_ARCHITECTURE -eq 'ARM64') {
     throw 'This launcher supports x64 Windows. ARM64 is not certified.'
 }

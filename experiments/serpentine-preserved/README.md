@@ -3,7 +3,7 @@
 Pinned upstream: `chisomobanzi/Serpentine3D` at
 `5a801e0db0ff6bf1d0738430fd9784db4ebfc9b0` (MIT; see UPSTREAM-LICENSE).
 This is the real upstream Qt application, not the separate Arclet egui UI.
-Five backend files are patched; 64 UI/asset files remain checksum protected.
+Six backend files are patched; 64 UI/asset files remain checksum protected.
 
 ## Implemented
 
