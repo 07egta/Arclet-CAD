@@ -8,6 +8,18 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+# Use a .NET stream hash instead of Get-FileHash. The latter is not reliably
+# available in every Windows PowerShell 5.1 launch environment on clean PCs.
+function Get-SerpentineSha256([string]$Path) {
+    $stream = [IO.File]::OpenRead($Path)
+    $hasher = [Security.Cryptography.SHA256]::Create()
+    try {
+        return [BitConverter]::ToString($hasher.ComputeHash($stream)).Replace('-', '').ToLowerInvariant()
+    } finally {
+        $stream.Dispose()
+        $hasher.Dispose()
+    }
+}
 # Windows PowerShell 5.1 does not set PSScriptRoot while binding a default
 # parameter expression (unlike invoking the script directly with arguments).
 # Resolve the source folder in the script body after all parameters are bound.
@@ -41,7 +53,7 @@ try {
             Write-Host 'Downloading the pinned uv bootstrap. Initial setup also downloads Python and CAD dependencies.'
             [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
             Invoke-WebRequest -UseBasicParsing -TimeoutSec 180 -Uri "https://github.com/astral-sh/uv/releases/download/$version/uv-x86_64-pc-windows-msvc.zip" -OutFile $partial
-            if ((Get-FileHash -LiteralPath $partial -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expected) {
+            if ((Get-SerpentineSha256 -Path $partial) -ne $expected) {
                 throw 'Bootstrap archive checksum mismatch; nothing was executed.'
             }
             Move-Item -LiteralPath $partial -Destination $zip
@@ -49,7 +61,7 @@ try {
             if (Test-Path -LiteralPath $partial) { Remove-Item -LiteralPath $partial }
         }
     }
-    if ((Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expected) {
+    if ((Get-SerpentineSha256 -Path $zip) -ne $expected) {
         throw 'Cached bootstrap checksum mismatch. Remove only the cached uv ZIP and retry.'
     }
     Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -62,7 +74,7 @@ try {
     try { $exeHash = [BitConverter]::ToString($sha.ComputeHash($stream)).Replace('-', '').ToLowerInvariant() }
     finally { $stream.Dispose(); $sha.Dispose() }
     $needsCopy = -not (Test-Path -LiteralPath $uv)
-    if (-not $needsCopy) { $needsCopy = (Get-FileHash -LiteralPath $uv -Algorithm SHA256).Hash.ToLowerInvariant() -ne $exeHash }
+    if (-not $needsCopy) { $needsCopy = (Get-SerpentineSha256 -Path $uv) -ne $exeHash }
     if ($needsCopy) { [IO.Compression.ZipFileExtensions]::ExtractToFile($entries[0], $uv, $true) }
     $archive.Dispose(); $archive = $null
     # All installation/cache paths are local to this kit. Python is managed here.
