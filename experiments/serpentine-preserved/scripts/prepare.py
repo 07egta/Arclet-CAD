@@ -37,9 +37,17 @@ def ui_fingerprint(root: Path) -> tuple[str, int]:
 def prepare(root: Path, *, check_only: bool = False) -> dict:
     root = root.resolve(strict=True)
     spec = json.loads((BUNDLE / 'upstream.json').read_text(encoding='utf-8'))
-    patch = BUNDLE / 'patches' / '0001-memory-and-picking.patch'
-    if digest(patch) != spec['patch_sha256']:
-        raise ValueError('The patch differs from its reviewed checksum')
+    patches = []
+    for entry in spec['patches']:
+        name = entry['file']
+        if Path(name).name != name or not name.endswith('.patch'):
+            raise ValueError('Patch manifest contains an invalid filename')
+        patch = BUNDLE / 'patches' / name
+        if digest(patch) != entry['sha256']:
+            raise ValueError(f'The patch differs from its reviewed checksum: {name}')
+        patches.append(str(patch))
+    if not patches:
+        raise ValueError('No reviewed patches were supplied')
     ui, count = ui_fingerprint(root)
     if ui != spec['protected_ui_sha256'] or count != spec['protected_ui_files']:
         raise ValueError('UI/assets differ from the pinned upstream; no files changed')
@@ -54,10 +62,10 @@ def prepare(root: Path, *, check_only: bool = False) -> dict:
     if not before and not after:
         raise ValueError('Backend source is mixed or modified; no files changed')
     if before:
-        subprocess.run(['git', 'apply', '--check', '--whitespace=error', str(patch)],
+        subprocess.run(['git', 'apply', '--check', '--whitespace=error', *patches],
                        cwd=root, check=True)
         if not check_only:
-            subprocess.run(['git', 'apply', '--whitespace=error', str(patch)],
+            subprocess.run(['git', 'apply', '--whitespace=error', *patches],
                            cwd=root, check=True)
     expected = 'before' if check_only and before else 'after'
     for relative, hashes in spec['changed_files'].items():

@@ -1,0 +1,80 @@
+diff --git a/serpentine3d/core/history.py b/serpentine3d/core/history.py
+index 7aad094..7d748e2 100644
+--- a/serpentine3d/core/history.py
++++ b/serpentine3d/core/history.py
+@@ -14,6 +14,11 @@ class History:
+         self.scene = scene
+         self._undo: list[tuple[str, dict]] = []
+         self._redo: list[tuple[str, dict]] = []
++        # A checkpoint precedes an edit which may still be cancelled. Keep
++        # its suspended future and any capacity eviction until the next
++        # history action decides the branch. At most MAX_UNDO + 1 snapshots
++        # are retained, not an accumulating stack of cancelled commands.
++        self._pending_checkpoint = None
+         # the session journal listens here: a checkpoint is what separates
+         # an edit somebody made from geometry that merely changed
+         self.on_checkpoint = None
+@@ -21,17 +26,28 @@ class History:
+ 
+     def checkpoint(self, label: str = ""):
+         """Record state before a mutating operation."""
++        # Snapshot failure must not announce a journal entry or lose redo.
++        entry = (label, self.scene.snapshot())
+         if self.on_checkpoint is not None:
+             self.on_checkpoint(label)
+-        self._undo.append((label, self.scene.snapshot()))
+-        if len(self._undo) > MAX_UNDO:
+-            self._undo.pop(0)
+-        self._redo.clear()
++        if self._pending_checkpoint is not None:
++            self._redo.clear()           # the previous edit was not cancelled
++        self._undo.append(entry)
++        evicted = self._undo.pop(0) if len(self._undo) > MAX_UNDO else None
++        self._pending_checkpoint = (entry, evicted)
++        # Keep the suspended future in _redo so the unchanged script editor
++        # still migrates identities in every snapshot. It is not redoable
++        # while a new checkpoint is active; only discard restores that right.
+ 
+     def discard_checkpoint(self):
+         """Drop the most recent checkpoint (cancelled/no-op command)."""
+         if self._undo:
+-            self._undo.pop()
++            entry = self._undo.pop()
++            pending = self._pending_checkpoint
++            if pending is not None and pending[0] is entry:
++                if pending[1] is not None:
++                    self._undo.insert(0, pending[1])
++            self._pending_checkpoint = None
+             if self.on_discard is not None:
+                 self.on_discard()
+ 
+@@ -41,20 +57,25 @@ class History:
+ 
+     @property
+     def can_redo(self) -> bool:
+-        return bool(self._redo)
++        return self._pending_checkpoint is None and bool(self._redo)
+ 
+     def undo(self) -> str | None:
+         if not self._undo:
+             return None
++        current = self.scene.snapshot()  # do not pop a valid entry on failure
++        if self._pending_checkpoint is not None:
++            self._redo.clear()           # undo the new branch, not its old future
++        self._pending_checkpoint = None
+         label, snap = self._undo.pop()
+-        self._redo.append((label, self.scene.snapshot()))
++        self._redo.append((label, current))
+         self.scene.restore(snap)
+         return label or "operation"
+ 
+     def redo(self) -> str | None:
+-        if not self._redo:
++        if not self.can_redo:
+             return None
++        current = self.scene.snapshot()
+         label, snap = self._redo.pop()
+-        self._undo.append((label, self.scene.snapshot()))
++        self._undo.append((label, current))
+         self.scene.restore(snap)
+         return label or "operation"

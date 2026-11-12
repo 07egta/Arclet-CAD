@@ -1,7 +1,6 @@
 {
   "repository": "chisomobanzi/Serpentine3D",
   "commit": "5a801e0db0ff6bf1d0738430fd9784db4ebfc9b0",
-  "patch_sha256": "edcf9112d95aaadb079d39f2712f2a78a81064ec8bcc086e195399239b677300",
   "protected_ui_files": 64,
   "protected_ui_sha256": "0eda2f38c939bede552ddb07d1e7b8a29b23aeaaf51fc706e5ae06d3f2cf7da6",
   "changed_files": {
@@ -16,6 +15,28 @@
     "serpentine3d/core/tessellate.py": {
       "before": "0f3157a48350b006b1f1050b1e5645fbe4c674500790140cfa43c0314c4ff39c",
       "after": "1500cb972e17d990581eee61f28bfb71d68caa7ca6437168b2097a050e6ad12f"
+    },
+    "serpentine3d/fileio/native.py": {
+      "before": "92f45beefe5f6f264566016392441cb083a409094d40270ccc55842e4325378a",
+      "after": "b83264802f9d6337486a0440bcfe43c90be20363eddf3aa91ae185221119c51c"
+    },
+    "serpentine3d/core/history.py": {
+      "before": "44291d6ad5749a7d2dd79e9fa7c9ba92e5bc499c847d9b65773ea045ef0b1305",
+      "after": "9d885137dbf8c807aead458c00ec93fb833670ddb012d0fc0af22ca0f2903d98"
     }
-  }
+  },
+  "patches": [
+    {
+      "file": "0001-memory-and-picking.patch",
+      "sha256": "edcf9112d95aaadb079d39f2712f2a78a81064ec8bcc086e195399239b677300"
+    },
+    {
+      "file": "0002-atomic-native-save.patch",
+      "sha256": "f8c4b73815f2eef81dd565b6bfb5af39d306b33e411c480c5ce50c0c158c199d"
+    },
+    {
+      "file": "0003-cancelled-history.patch",
+      "sha256": "b7799ae7e60ed547bb76da1585dfec3e25016c45fd0e355cd854f02ad7493bdf"
+    }
+  ]
 }

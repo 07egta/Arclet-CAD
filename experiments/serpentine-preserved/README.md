@@ -1,24 +1,32 @@
-# Serpentine3D: original UI, backend performance experiment
+# Serpentine3D: original UI, measured backend improvements
 
 Pinned upstream: `chisomobanzi/Serpentine3D` at
 `5a801e0db0ff6bf1d0738430fd9784db4ebfc9b0` (MIT; see UPSTREAM-LICENSE).
-This is the actual upstream Qt application, not the separate Arclet egui UI.
-Only three backend files are patched. 64 UI/asset files are checksum protected.
+This is the real upstream Qt application, not the separate Arclet egui UI.
+Five backend files are patched; 64 UI/asset files remain checksum protected.
 
 ## Implemented
 
-- Release tessellation locks and their native shapes when no worker holds them;
-  do not evict a still-referenced lock before a waiting worker acquires it.
-- Build triangle-picking indexes without the full N-by-3-by-3 corner copy;
-  gather corners in bounded blocks and form spatial keys one axis at a time.
-- Avoid unnecessary selection-index scratch arrays when keeping all/one chunk;
-  reuse the cumulative-sum buffer for other masks.
-- Invalidate display bounds/picking caches when public coordinates change.
-- Drop old native bounds/meshes when replacing a shape, including dependents.
+- Weak tessellation lock registry releases unused native shapes and prevents
+  lock eviction races between looking up and acquiring a lock.
+- Blockwise triangle picking indexes avoid a complete N-by-3-by-3 corner copy;
+  spatial keys use one coordinate scratch array. Chunk gathering uses less
+  temporary storage while retaining exact ordering and conservative bounds.
+- Coordinate and shape replacements invalidate stale bounds/picking caches.
+- Native saves use private sibling temporary files, flush/fsync, closed-handle
+  atomic replacement, and cleanup on failure. Unrelated temporary files are not
+  overwritten. Concurrent writers never share a staging archive. Last writer
+  wins; this is not multi-user conflict resolution or a crash-durability claim.
+- Cancelled/no-op checkpoints preserve Redo and the oldest Undo at capacity.
+  Failed live snapshots no longer pop valid history entries. The unchanged
+  script editor can still migrate identities in suspended redo snapshots.
 
-No UI files, commands, modelling tolerances, or kernel algorithms are changed.
+No UI source, commands, modelling tolerances, file-format layout, or native
+geometry algorithms are changed. The main Arclet workspace remains unchanged.
 
 ## Reproduce
+
+From this experiment directory:
 
 ```sh
 git clone https://github.com/chisomobanzi/Serpentine3D.git upstream
@@ -27,29 +35,37 @@ python scripts/prepare.py upstream --check
 python scripts/prepare.py upstream --report evidence/ui-preservation.json
 cd upstream
 uv sync --extra dev --locked --python 3.12
+uv run pytest ../tests -q
 uv run pytest tests/ -q -n 2 --ignore=tests/e2e_dod.py
 uv run serp3d
 ```
 
-Run the commands from this experiment directory. The prepare script is
-idempotent and refuses mixed versions, modified UI, or a modified patch.
-Dependencies are installed only in the separate upstream environment.
+The prepare script is idempotent and refuses mixed versions, modified UI or
+modified patches. Dependencies stay in the separate upstream environment.
 
-## Evidence and limits
+## Evidence, with revision boundaries
 
-Local regression tests: 31 passed. Before the changes, 24 of the new contracts
-failed (including checks for the newly introduced indexed API); this is not a
-claim of 24 independent product bugs.
+Local verification after all three patches: 54 regression contracts passed,
+including real CommandProcessor cancel/redo, concurrent native saves, injected
+write/sync/replace failures, eight-thread mesh access, and exact index output.
+Cross-platform/full-suite evidence for this latest revision must be checked in
+its own Actions run; the following earlier results do not certify newer code.
 
-On one Linux/Python 3.13.5/NumPy 2.3.5 host, three runs of the same seeded
-300,000-triangle workload reduced traced peak index allocation from 39,957,184
-to 13,557,212 bytes. Median index construction time was 0.1181 to 0.0904 seconds.
-All index hashes and gather-result hashes matched. A 32-shape release test
-retained 32 native Python wrappers before and zero after. These microbenchmarks
-are not whole-app RAM/FPS claims, nor a comparison against Rhino.
+First patch, commit `4031a5cb`, Actions run `43242660872`:
+- Linux upstream suite: 5,341 passed, 26 skipped by upstream conditions.
+- New 31 backend contracts passed on Linux and Windows.
+- Real Linux Qt desktop: 14/14 checks passed before and after the patch.
+- Same-host 1440x900 screenshots: all pixels identical (zero changed pixels).
+- Windows full-suite results were still pending when this record was written.
 
-CI separately exercises baseline/patched upstream tests on Linux and Windows,
-plus real Qt/OpenGL desktop actions and same-host screenshots on Linux. Inspect
-the actual run results: defining a workflow is not evidence that it passed.
-No subagents were launched. This is not feature parity with Rhino, a security
-sandbox, or certification for the owner's Intel GPU. Keep backups of CAD work.
+Local Linux/Python 3.13.5/NumPy 2.3.5 microbenchmarks, same seeded geometry:
+- 300,000 triangles: traced peak index allocation 39,957,184 -> 13,557,212 bytes.
+- 3,000,000 triangles: 397,890,144 -> 133,890,172 bytes (66.35% lower).
+- Index arrays and selection-result hashes match before/after.
+- 32 released shape wrappers retained by the registry: 32 before, zero after.
+
+These are index-building allocations, not whole-app RAM/FPS claims. Timing was
+variable on the shared host and is not a hardware-independent speed guarantee.
+No Rhino benchmark was executed. No subagents were launched. Software OpenGL
+CI is not certification for the owner's Intel GPU. Native parsing is not a
+security sandbox. Keep backups; this remains an opt-in development experiment.

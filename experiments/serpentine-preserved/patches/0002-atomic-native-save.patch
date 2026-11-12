@@ -1,0 +1,64 @@
+diff --git a/serpentine3d/fileio/native.py b/serpentine3d/fileio/native.py
+index de6503f..efc36a5 100644
+--- a/serpentine3d/fileio/native.py
++++ b/serpentine3d/fileio/native.py
+@@ -51,18 +51,48 @@ def _write_container(doc: dict, path: str, thumbnail: bytes | None,
+         if session:
+             meta["session"] = {k: session[k] for k in
+                                ("id", "engine", "backbone") if k in session}
+-    tmp = path + ".tmp"
+-    with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
+-        z.writestr("meta.json", json.dumps(meta, indent=1))
+-        z.writestr("document.json", json.dumps(doc))
+-        if thumbnail:
+-            z.writestr("thumbnail.png", thumbnail)
+-        # Stored, not deflated: float32 coordinates barely compress and a
+-        # million-point scan would spend seconds finding that out.
+-        for name, data in (blobs or {}).items():
+-            z.writestr(name, data, compress_type=zipfile.ZIP_STORED)
+     import os
+-    os.replace(tmp, path)          # atomic: a crash never corrupts the file
++    import stat
++    import tempfile
++    path = os.fsdecode(os.fspath(path))
++    parent = os.path.dirname(os.path.abspath(path))
++    tmp = None
++    try:
++        # A fixed path + ".tmp" can overwrite somebody else's file, follow
++        # a stale symlink, or let concurrent saves truncate the same archive.
++        # A private sibling gives each writer its own inode, on the same
++        # filesystem so only a complete archive is ever renamed into place.
++        with tempfile.NamedTemporaryFile(mode="w+b", prefix=".serp-save-",
++                                         suffix=".tmp", dir=parent,
++                                         delete=False) as stream:
++            tmp = stream.name
++            if os.name == "posix":
++                try:
++                    previous = os.stat(path, follow_symlinks=False)
++                except FileNotFoundError:
++                    pass
++                else:
++                    if stat.S_ISREG(previous.st_mode):
++                        os.fchmod(stream.fileno(), stat.S_IMODE(previous.st_mode))
++            with zipfile.ZipFile(stream, "w", zipfile.ZIP_DEFLATED) as z:
++                z.writestr("meta.json", json.dumps(meta, indent=1))
++                z.writestr("document.json", json.dumps(doc))
++                if thumbnail:
++                    z.writestr("thumbnail.png", thumbnail)
++                # Keep scan blobs stored, as in the original file format.
++                for name, data in (blobs or {}).items():
++                    z.writestr(name, data, compress_type=zipfile.ZIP_STORED)
++            stream.flush()
++            os.fsync(stream.fileno())
++        # Closing first matters on Windows, where an open handle can prevent
++        # replacement. A failed write/sync/replace leaves the old file intact.
++        os.replace(tmp, path)
++    finally:
++        if tmp is not None:
++            try:
++                os.unlink(tmp)
++            except FileNotFoundError:
++                pass                    # successfully moved into place
+ 
+ 
+ def read_meta(path: str) -> dict | None:
