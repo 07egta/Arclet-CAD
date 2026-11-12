@@ -151,16 +151,26 @@ jobs:
           New-Item -ItemType Directory -Force -Path $folder | Out-Null
           & 7z.exe x $mesa "-o$folder" -y | Out-Null
           if ($LASTEXITCODE -ne 0) { throw 'Cannot extract the signed-off CI Mesa archive' }
-          $candidates = @(Get-ChildItem -LiteralPath $folder -Recurse -File -Filter opengl32.dll |
-            Where-Object { $_.FullName -match '[\\/]x64[\\/]' })
-          if ($candidates.Count -ne 1) {
-            $candidates | Select-Object -ExpandProperty FullName
-            throw 'Expected one x64 OpenGL runtime in the Mesa package'
+          # Select the PE32+ AMD64 runtime by binary header; Mesa release
+          # directory names are not stable across build configurations.
+          $candidates = @(Get-ChildItem -LiteralPath $folder -Recurse -File -Filter opengl32.dll)
+          $x64 = @($candidates | Where-Object {
+            $path = $_.FullName
+            if (!(Test-Path -LiteralPath (Join-Path $_.Directory.FullName 'libgallium_wgl.dll'))) {
+              return $false
+            }
+            $data = [IO.File]::ReadAllBytes($path)
+            if ($data.Length -lt 0x100) { return $false }
+            $peOffset = [BitConverter]::ToInt32($data, 0x3c)
+            if ($peOffset -lt 0x40 -or $peOffset -gt $data.Length - 6) { return $false }
+            return ([BitConverter]::ToUInt16($data, $peOffset + 4) -eq 0x8664)
+          })
+          if ($x64.Count -ne 1) {
+            Write-Host "OpenGL candidates: $($candidates.Count), x64 + gallium pairs: $($x64.Count)"
+            $candidates | Select-Object -ExpandProperty FullName | Write-Host
+            throw 'Expected exactly one 64-bit Mesa OpenGL + Gallium pair'
           }
-          $mesaBin = $candidates[0].Directory.FullName
-          if (!(Test-Path -LiteralPath (Join-Path $mesaBin 'libgallium_wgl.dll'))) {
-            throw 'Mesa llvmpipe megadriver is missing'
-          }
+          $mesaBin = $x64[0].Directory.FullName
           $pythonDir = Join-Path $env:GITHUB_WORKSPACE 'upstream/.venv/Scripts'
           if (!(Test-Path -LiteralPath (Join-Path $pythonDir 'python.exe'))) {
             throw 'Pinned Python virtualenv not found'
