@@ -20,6 +20,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: experiments/occt-studio
@@ -44,6 +46,29 @@ jobs:
           mkdir -p evidence
           git rev-parse HEAD > evidence/source-commit.txt
           git diff --stat > evidence/source-diff.txt
+          git archive HEAD experiments/occt-studio .github/workflows/occt-studio.yml -o evidence/verified-source.tar
+      - name: Prepare isolated offline verification kit
+        if: always()
+        run: |
+          cargo fetch --target x86_64-unknown-linux-gnu
+          mkdir -p /tmp/occt-verification-kit/{toolchain,cargo,include,lib,source}
+          toolchain="$(rustc --print sysroot)"
+          cp -a "$toolchain/bin" "$toolchain/lib" /tmp/occt-verification-kit/toolchain/
+          cp -a "$HOME/.cargo/registry" /tmp/occt-verification-kit/cargo/
+          cp -a /usr/include/opencascade /tmp/occt-verification-kit/include/
+          cp -a /usr/lib/x86_64-linux-gnu/libTK*.so* /tmp/occt-verification-kit/lib/
+          cp -a /usr/lib/x86_64-linux-gnu/libtbb*.so* /tmp/occt-verification-kit/lib/
+          cp -a /usr/lib/x86_64-linux-gnu/pkgconfig /tmp/occt-verification-kit/lib/
+          cp -a src native tests examples Cargo.toml Cargo.lock build.rs README.md /tmp/occt-verification-kit/source/
+          cp -a evidence /tmp/occt-verification-kit/source/
+          tar -czf /tmp/occt-verification-kit.tar.gz -C /tmp occt-verification-kit
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: occt-offline-verification-kit
+          path: /tmp/occt-verification-kit.tar.gz
+          retention-days: 2
+          compression-level: 0
       - uses: actions/upload-artifact@v4
         if: always()
         with:
