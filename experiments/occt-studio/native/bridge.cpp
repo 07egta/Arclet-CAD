@@ -130,7 +130,8 @@ Shape* ac_op(int op, const Shape* a, const Shape* b, const double* v, size_t n,
         case 7: {
             require(n>=7 && (n-1)%3==0 && n<=769,"Polyline needs 2..256 points");
             BRepBuilderAPI_MakePolygon p; for(size_t i=1;i<n;i+=3) p.Add(point(v+i));
-            if(v[0]!=0) p.Close(); require(p.IsDone(),"Polyline construction failed"); return checked(p.Wire());
+            if(v[0]!=0) { p.Close(); }
+            require(p.IsDone(),"Polyline construction failed"); return checked(p.Wire());
         }
         case 8: {
             require(n>=9 && (n-1)%4==0 && n<=1025,"Invalid NURBS controls");
@@ -233,6 +234,7 @@ Mesh* ac_mesh(const Shape* p,double deflection,char* err,size_t cap) noexcept {
         return result.release();});
 }
 MeshView ac_mesh_view(const Mesh* p) noexcept {
-    if(!p)return {};return {p->positions.data(),p->normals.data(),p->lines.data(),p->indices.data(),p->positions.size()/3,p->indices.size()/3,p->lines.size()/6};
+    if(!p) { return {}; }
+    return {p->positions.data(),p->normals.data(),p->lines.data(),p->indices.data(),p->positions.size()/3,p->indices.size()/3,p->lines.size()/6};
 }
 }
