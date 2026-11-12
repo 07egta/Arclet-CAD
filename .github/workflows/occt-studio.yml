@@ -7,6 +7,11 @@ on:
     paths: ['experiments/occt-studio/**', '.github/workflows/occt-studio.yml']
 permissions:
   contents: read
+env:
+  CARGO_ENCODED_RUSTFLAGS: ''
+  CARGO_ENCODED_RUSTDOCFLAGS: ''
+  RUSTFLAGS: ''
+  RUSTDOCFLAGS: ''
 concurrency:
   group: occt-studio-${{ github.event.pull_request.head.ref || github.ref_name }}
   cancel-in-progress: true
@@ -56,7 +61,7 @@ jobs:
         run: |
           mkdir -p evidence
           git rev-parse HEAD > evidence/source-commit.txt
-          git archive HEAD experiments/occt-studio .github/workflows/occt-studio.yml -o evidence/verified-source.tar
+          git -C "$GITHUB_WORKSPACE" archive HEAD experiments/occt-studio .github/workflows/occt-studio.yml -o "$PWD/evidence/verified-source.tar"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -80,7 +85,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - uses: ilammy/msvc-dev-cmd@v1
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -95,12 +99,23 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: experiments/occt-studio
-      - name: Configure pinned OCCT
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: Configure pinned OCCT and unambiguous native compiler
         run: |
           $prefix = '${{ steps.occt.outputs.environment-path }}'
           "OCCT_INCLUDE_DIR=$prefix\Library\include\opencascade" >> $env:GITHUB_ENV
           "OCCT_LIB_DIR=$prefix\Library\lib" >> $env:GITHUB_ENV
           "$prefix\Library\bin" >> $env:GITHUB_PATH
+          $vcbin = Join-Path $env:VCToolsInstallDir 'bin\Hostx64\x64'
+          $linker = Join-Path $vcbin 'link.exe'
+          $compiler = Join-Path $vcbin 'cl.exe'
+          if (!(Test-Path $linker) -or !(Test-Path $compiler)) { throw 'MSVC compiler or linker missing' }
+          "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=$linker" >> $env:GITHUB_ENV
+          "CC=$compiler" >> $env:GITHUB_ENV
+          "CXX=$compiler" >> $env:GITHUB_ENV
+          "$vcbin" >> $env:GITHUB_PATH
           New-Item -ItemType Directory -Force evidence | Out-Null
           rustc --version | Out-File evidence/toolchain.txt
           Get-ChildItem "$prefix\Library\lib\TK*.lib" | Out-File evidence/occt-libraries.txt
@@ -147,7 +162,6 @@ jobs:
           python -m pip install pefile
           python scripts/package_windows.py --prefix '${{ steps.occt.outputs.environment-path }}' --exe target/release/arclet-occt-studio.exe --output dist/Arclet-OCCT-Studio-Windows-x64
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          # Verify the package works without the Conda runtime on PATH.
           $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
           & .\dist\Arclet-OCCT-Studio-Windows-x64\arclet-occt-studio.exe --demo evidence/packaged-showcase
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
