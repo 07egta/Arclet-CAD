@@ -134,17 +134,64 @@ jobs:
             release/Serpentine3D-OriginalUI-Windows-x64.zip
             release/Serpentine3D-OriginalUI-Windows-x64.zip.sha256
           retention-days: 14
+      - name: Install checksum-pinned Mesa llvmpipe for Windows CI GUI tests only
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # The hosted Windows runner has OpenGL 1.1; the *upstream* Qt app
+          # requires 3.3. Do not alter or distribute any app/UI/kernel files.
+          # A pinned CI-only Mesa software GL library supplies that capability.
+          $mesa = Join-Path $env:RUNNER_TEMP 'mesa3d-26.2.6-msvc.7z'
+          $source = 'https://github.com/pal1000/mesa-dist-win/releases/download/26.2.6/mesa3d-26.2.6-release-msvc.7z'
+          $expected = 'b2e00615feaba45942343c265cc8c5f576142ca682c1ac6661922d4b72492877'
+          Invoke-WebRequest -UseBasicParsing -TimeoutSec 240 -Uri $source -OutFile $mesa
+          $actual = (Get-FileHash -LiteralPath $mesa -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw 'Mesa CI driver checksum mismatch' }
+          $folder = Join-Path $env:RUNNER_TEMP 'mesa-software-gl'
+          New-Item -ItemType Directory -Force -Path $folder | Out-Null
+          & 7z.exe x $mesa "-o$folder" -y | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot extract the signed-off CI Mesa archive' }
+          $candidates = @(Get-ChildItem -LiteralPath $folder -Recurse -File -Filter opengl32.dll |
+            Where-Object { $_.FullName -match '[\\/]x64[\\/]' })
+          if ($candidates.Count -ne 1) {
+            $candidates | Select-Object -ExpandProperty FullName
+            throw 'Expected one x64 OpenGL runtime in the Mesa package'
+          }
+          $mesaBin = $candidates[0].Directory.FullName
+          if (!(Test-Path -LiteralPath (Join-Path $mesaBin 'libgallium_wgl.dll'))) {
+            throw 'Mesa llvmpipe megadriver is missing'
+          }
+          $pythonDir = Join-Path $env:GITHUB_WORKSPACE 'upstream/.venv/Scripts'
+          if (!(Test-Path -LiteralPath (Join-Path $pythonDir 'python.exe'))) {
+            throw 'Pinned Python virtualenv not found'
+          }
+          foreach ($name in @('opengl32.dll', 'libgallium_wgl.dll')) {
+            Copy-Item -LiteralPath (Join-Path $mesaBin $name) -Destination (Join-Path $pythonDir $name) -Force
+          }
+          New-Item -ItemType File -Force -Path (Join-Path $pythonDir 'python.exe.local') | Out-Null
+          "GALLIUM_DRIVER=llvmpipe" >> $env:GITHUB_ENV
+          "MESA_LOADER_DRIVER_OVERRIDE=llvmpipe" >> $env:GITHUB_ENV
+          $mesaBin >> $env:GITHUB_PATH
+          Write-Host "Mesa x64 llvmpipe staged only for the CI Python process; archive SHA256 $actual"
+      - name: Install explicit pytest timeout in the pinned Windows test environment
+        if: runner.os == 'Windows'
+        run: uv pip install --python upstream/.venv/Scripts/python.exe pytest-timeout==2.4.0
       - name: Probe Windows native Qt layer dock before the full suite
         if: runner.os == 'Windows'
         working-directory: upstream
         env:
           QT_QPA_PLATFORM: windows
-        run: uv run --with pytest-timeout==2.4.0 pytest tests/test_the_layers_panel_fits_the_column_the_app_gives_it.py -q --timeout=120 --timeout-method=thread --junitxml=../evidence/windows-native-qt-probe.xml 2>&1 | tee ../evidence/windows-native-qt-probe.log
+        run: .venv/Scripts/python.exe -m pytest tests/test_the_layers_panel_fits_the_column_the_app_gives_it.py -q --timeout=120 --timeout-method=thread --junitxml=../evidence/windows-native-qt-probe.xml 2>&1 | tee ../evidence/windows-native-qt-probe.log
       - name: Complete upstream suite; crashes and timeouts remain failures
         working-directory: upstream
         env:
           QT_QPA_PLATFORM: ${{ runner.os == 'Windows' && 'windows' || 'offscreen' }}
-        run: uv run --with pytest-timeout==2.4.0 pytest tests/ -q -n 2 --max-worker-restart=2 --ignore=tests/e2e_dod.py --timeout=300 --timeout-method=thread --durations=20 --junitxml=../evidence/upstream-tests.xml 2>&1 | tee ../evidence/upstream-tests.log
+        run: |
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            .venv/Scripts/python.exe -m pytest tests/ -q -n 2 --max-worker-restart=2 --ignore=tests/e2e_dod.py --timeout=300 --timeout-method=thread --durations=20 --junitxml=../evidence/upstream-tests.xml 2>&1 | tee ../evidence/upstream-tests.log
+          else
+            uv run --with pytest-timeout==2.4.0 pytest tests/ -q -n 2 --max-worker-restart=2 --ignore=tests/e2e_dod.py --timeout=300 --timeout-method=thread --durations=20 --junitxml=../evidence/upstream-tests.xml 2>&1 | tee ../evidence/upstream-tests.log
+          fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:
