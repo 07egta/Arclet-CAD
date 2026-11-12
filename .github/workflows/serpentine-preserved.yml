@@ -106,17 +106,42 @@ jobs:
         if: runner.os == 'Linux'
         working-directory: upstream
         run: uv run python ../experiments/serpentine-preserved/scripts/benchmark_native_rss.py --baseline ../baseline --patched . --output ../evidence/native-rss.json 2>&1 | tee ../evidence/native-rss.log
-      - name: Test Windows source-kit bootstrap and runtime in a path with spaces
+      - name: Build and validate the original-UI Windows source kit
+        if: runner.os == 'Windows'
+        run: |
+          mkdir -p release
+          python experiments/serpentine-preserved/scripts/package_windows.py upstream --output release/Serpentine3D-OriginalUI-Windows-x64.zip > evidence/windows-kit-build.json
+          python experiments/serpentine-preserved/scripts/package_windows.py --verify release/Serpentine3D-OriginalUI-Windows-x64.zip > evidence/windows-kit-verify.json
+          python -c "import hashlib,pathlib; p=pathlib.Path('release/Serpentine3D-OriginalUI-Windows-x64.zip'); p.with_suffix('.zip.sha256').write_text(hashlib.sha256(p.read_bytes()).hexdigest() + '  ' + p.name + '\\n')"
+      - name: Boot the extracted kit from a path containing spaces
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $root = Join-Path $env:RUNNER_TEMP 'Serpentine development kit'
-          New-Item -ItemType Directory -Force "$root\Serpentine3D" | Out-Null
-          Get-ChildItem upstream -Force | Where-Object { $_.Name -notin @('.git', '.venv', '__pycache__', '.pytest_cache') } | Copy-Item -Destination "$root\Serpentine3D" -Recurse -Force
-          & ./experiments/serpentine-preserved/launchers/Start-Windows.ps1 -SourceRoot "$root\Serpentine3D" -SelfTest 2>&1 | Tee-Object evidence/windows-kit-selftest.log
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $root = Join-Path $env:RUNNER_TEMP 'Serpentine kit with spaces'
+          Expand-Archive -LiteralPath 'release/Serpentine3D-OriginalUI-Windows-x64.zip' -DestinationPath $root -Force
+          $kit = Join-Path $root 'Serpentine3D-OriginalUI'
+          & (Join-Path $kit 'launchers/Start-Windows.ps1') -SelfTest 2>&1 | Tee-Object evidence/windows-kit-selftest.log
+          if ($LASTEXITCODE -ne 0) { throw 'The extracted PowerShell launcher failed its self-test.' }
+          & (Join-Path $kit 'Start-Windows.cmd') -SelfTest 2>&1 | Tee-Object evidence/windows-cmd-selftest.log
+          if ($LASTEXITCODE -ne 0) { throw 'The extracted double-click CMD launcher failed its self-test.' }
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Windows'
+        with:
+          name: Serpentine3D-OriginalUI-Windows-x64-source-kit
+          path: |
+            release/Serpentine3D-OriginalUI-Windows-x64.zip
+            release/Serpentine3D-OriginalUI-Windows-x64.zip.sha256
+          retention-days: 14
+      - name: Probe Windows native Qt layer dock before the full suite
+        if: runner.os == 'Windows'
+        working-directory: upstream
+        env:
+          QT_QPA_PLATFORM: windows
+        run: uv run --with pytest-timeout==2.4.0 pytest tests/test_the_layers_panel_fits_the_column_the_app_gives_it.py -q --timeout=120 --timeout-method=thread --junitxml=../evidence/windows-native-qt-probe.xml 2>&1 | tee ../evidence/windows-native-qt-probe.log
       - name: Complete upstream suite; crashes and timeouts remain failures
         working-directory: upstream
+        env:
+          QT_QPA_PLATFORM: ${{ runner.os == 'Windows' && 'windows' || 'offscreen' }}
         run: uv run --with pytest-timeout==2.4.0 pytest tests/ -q -n 2 --max-worker-restart=2 --ignore=tests/e2e_dod.py --timeout=300 --timeout-method=thread --durations=20 --junitxml=../evidence/upstream-tests.xml 2>&1 | tee ../evidence/upstream-tests.log
       - uses: actions/upload-artifact@v4
         if: always()
