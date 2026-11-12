@@ -120,9 +120,9 @@ jobs:
           $root = Join-Path $env:RUNNER_TEMP 'Serpentine kit with spaces'
           Expand-Archive -LiteralPath 'release/Serpentine3D-OriginalUI-Windows-x64.zip' -DestinationPath $root -Force
           $kit = Join-Path $root 'Serpentine3D-OriginalUI'
-          & (Join-Path $kit 'launchers/Start-Windows.ps1') -SelfTest 2>&1 | Tee-Object evidence/windows-kit-selftest.log
+          & (Join-Path $kit 'launchers/Start-Windows.ps1') -SelfTest 2>&1 | Tee-Object -FilePath (Join-Path $env:GITHUB_WORKSPACE 'evidence/windows-kit-selftest.log')
           if ($LASTEXITCODE -ne 0) { throw 'The extracted PowerShell launcher failed its self-test.' }
-          & (Join-Path $kit 'Start-Windows.cmd') -SelfTest 2>&1 | Tee-Object evidence/windows-cmd-selftest.log
+          & (Join-Path $kit 'Start-Windows.cmd') -SelfTest 2>&1 | Tee-Object -FilePath (Join-Path $env:GITHUB_WORKSPACE 'evidence/windows-cmd-selftest.log')
           if ($LASTEXITCODE -ne 0) { throw 'The extracted double-click CMD launcher failed its self-test.' }
       - uses: actions/upload-artifact@v4
         if: runner.os == 'Windows'
