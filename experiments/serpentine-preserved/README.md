@@ -1,0 +1,94 @@
+# Serpentine3D: original UI, measured backend improvements
+
+Pinned upstream: `chisomobanzi/Serpentine3D` at
+`5a801e0db0ff6bf1d0738430fd9784db4ebfc9b0` (MIT; see UPSTREAM-LICENSE).
+This is the real upstream Qt application, not the separate Arclet egui UI.
+Six backend files are patched; 64 UI/asset files remain checksum protected.
+
+## Implemented
+
+- Weak tessellation lock registry releases unused native shapes and prevents
+  lock eviction races between looking up and acquiring a lock.
+- Blockwise triangle picking indexes avoid a complete N-by-3-by-3 corner copy;
+  spatial keys use one coordinate scratch array. Chunk gathering uses less
+  temporary storage while retaining exact ordering and conservative bounds.
+- Coordinate and shape replacements invalidate stale bounds/picking caches.
+- Native saves use private sibling temporary files, flush/fsync, closed-handle
+  atomic replacement, and cleanup on failure. Unrelated temporary files are not
+  overwritten. Concurrent writers never share a staging archive. Last writer
+  wins; this is not multi-user conflict resolution or a crash-durability claim.
+- Cancelled/no-op checkpoints preserve Redo and the oldest Undo at capacity.
+  Failed live snapshots no longer pop valid history entries. The unchanged
+  script editor can still migrate identities in suspended redo snapshots.
+
+No UI source, commands, modelling tolerances, file-format layout, or native
+geometry algorithms are changed. The main Arclet workspace remains unchanged.
+
+## Reproduce
+
+From this experiment directory:
+
+```sh
+git clone https://github.com/chisomobanzi/Serpentine3D.git upstream
+git -C upstream checkout --detach 5a801e0db0ff6bf1d0738430fd9784db4ebfc9b0
+python scripts/prepare.py upstream --check
+python scripts/prepare.py upstream --report evidence/ui-preservation.json
+cd upstream
+uv sync --extra dev --locked --python 3.12
+uv run pytest ../tests -q
+uv run pytest tests/ -q -n 2 --ignore=tests/e2e_dod.py
+uv run serp3d
+```
+
+The prepare script is idempotent and refuses mixed versions, modified UI or
+modified patches. Dependencies stay in the separate upstream environment.
+
+## Evidence, with revision boundaries
+
+Local verification after all three patches: 54 regression contracts passed,
+including real CommandProcessor cancel/redo, concurrent native saves, injected
+write/sync/replace failures, eight-thread mesh access, and exact index output.
+Cross-platform/full-suite evidence for this latest revision must be checked in
+its own Actions run; the following earlier results do not certify newer code.
+
+First patch, commit `4031a5cb`, Actions run `43242660872`:
+- Linux upstream suite: 5,341 passed, 26 skipped by upstream conditions.
+- New 31 backend contracts passed on Linux and Windows.
+- Real Linux Qt desktop: 14/14 checks passed before and after the patch.
+- Same-host 1440x900 screenshots: all pixels identical (zero changed pixels).
+- Windows full-suite results were still pending when this record was written.
+
+Local Linux/Python 3.13.5/NumPy 2.3.5 microbenchmarks, same seeded geometry:
+- 300,000 triangles: traced peak index allocation 39,957,184 -> 13,557,212 bytes.
+- 3,000,000 triangles: 397,890,144 -> 133,890,172 bytes (66.35% lower).
+- Index arrays and selection-result hashes match before/after.
+- 32 released shape wrappers retained by the registry: 32 before, zero after.
+
+These are index-building allocations, not whole-app RAM/FPS claims. Timing was
+variable on the shared host and is not a hardware-independent speed guarantee.
+No Rhino benchmark was executed. No subagents were launched. Software OpenGL
+CI is not certification for the owner's Intel GPU. Native parsing is not a
+security sandbox. Keep backups; this remains an opt-in development experiment.
+ 
+
+## Windows x64 source kit (original Serpentine3D UI)
+
+In the Windows CI job, `package_windows.py` assembles a compact ZIP with the
+real Qt Serpentine3D application, all UI assets, the verified Rust library and
+an isolated pinned-dependency first-run launcher. The package has **no**
+standalone proprietary-font files, credentials, Python wheels, or bundled
+OpenCASCADE binaries. First start requires network access to install locked
+dependencies into the extracted directory, not a global Python installation.
+
+Extract the archive, then double-click `Start-Windows.cmd` (or use
+`Start-Python-Backend.cmd` for the fallback). Run
+`Start-Windows.cmd -SelfTest` to diagnose installation issues. The CI script
+actually extracts and self-tests the distributed files in a folder with spaces.
+It additionally recomputes the digest of **all 64 original UI files inside
+the ZIP** and refuses modifications. This is a source-based development kit,
+not a standalone signed executable.
+
+The GitHub Actions artifact is attached to the corresponding verified run,
+with a matching SHA-256 text file; availability is limited by retention.
+Do not mistake a source archive generated by a failing run for a release. The
+main Arclet product and the independent egui experiment are not replaced.
