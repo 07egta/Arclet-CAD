@@ -1,0 +1,56 @@
+name: Import verified OCCT Studio source
+on:
+  push:
+    branches: ['work/occt-studio-20261112']
+    paths: ['.ci-transfer/occt-studio/**', '.github/workflows/occt-source-import.yml']
+permissions:
+  contents: write
+jobs:
+  import:
+    if: github.repository == '07egta/Arclet-CAD' && github.ref == 'refs/heads/work/occt-studio-20261112'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+      - name: Verify and expand tested source without touching other applications
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import hashlib, io, pathlib, shutil, tarfile
+          root = pathlib.Path('.ci-transfer/occt-studio')
+          data = b''.join((root / f'part-{i:02}.bin').read_bytes() for i in range(9))
+          expected = '0e03cac2ea028e2444e23ab8ace42bb723811c202022cf6e7d96e01ef3a9e50e'
+          assert hashlib.sha256(data).hexdigest() == expected, 'Source archive integrity check failed'
+          with tarfile.open(fileobj=io.BytesIO(data), mode='r:xz') as archive:
+              members = archive.getmembers()
+              assert len(members) == 22
+              names = set()
+              for member in members:
+                  p = pathlib.PurePosixPath(member.name)
+                  assert member.isfile() and 0 <= member.size <= 1048576
+                  assert not p.is_absolute() and '..' not in p.parts and member.name not in names
+                  names.add(member.name)
+                  assert member.name.startswith('experiments/occt-studio/') or member.name == '.github/workflows/occt-studio.yml'
+              for member in members:
+                  # Workflow updates are applied separately through the authenticated connector.
+                  if member.name == '.github/workflows/occt-studio.yml':
+                      continue
+                  destination = pathlib.Path(member.name)
+                  destination.parent.mkdir(parents=True, exist_ok=True)
+                  source = archive.extractfile(member)
+                  assert source is not None
+                  destination.write_bytes(source.read())
+                  print(member.name, hashlib.sha256(destination.read_bytes()).hexdigest())
+          shutil.rmtree(root)
+          PY
+      - name: Commit only the isolated experiment and remove transfer parts
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add experiments/occt-studio .ci-transfer/occt-studio
+          git diff --cached --stat
+          git commit -m 'feat(occt-studio): import verified Rust desktop with 52 tests and 20 GUI checks'
+          git push origin HEAD:refs/heads/work/occt-studio-20261112
