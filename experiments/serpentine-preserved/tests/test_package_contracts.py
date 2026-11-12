@@ -31,7 +31,16 @@ def make_archive(path, *, change_ui=False, change_dll=False, extra=None, omit=No
         "ui_source_unchanged": True,
         "rust_library_sha256": hashlib.sha256(dll).hexdigest(),
     }
-    items = [(name, source_path.read_bytes()) for name, source_path in pack.stream_files(UPSTREAM)]
+    # The actual patched checkout already contains the Rust bridge and DLL.
+    # Replace those with the deliberate test fixtures instead of writing two
+    # ZIP entries with identical names; both pristine and patched trees work.
+    fixtures = {
+        "Serpentine3D/serpentine3d/core/native_spatial.py",
+        "Serpentine3D/serpentine3d/_native/serpentine_pick_index.dll",
+    }
+    items = [(name, source_path.read_bytes())
+             for name, source_path in pack.stream_files(UPSTREAM)
+             if name not in fixtures]
     items += [
         ("Serpentine3D/serpentine3d/core/native_spatial.py", b"bridge"),
         ("Serpentine3D/serpentine3d/_native/serpentine_pick_index.dll", source),
