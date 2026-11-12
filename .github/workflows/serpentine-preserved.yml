@@ -1,0 +1,55 @@
+name: Serpentine preserved UI experiment
+on:
+  push:
+    branches: ['work/serpentine-ui-perf-*']
+    paths: ['experiments/serpentine-preserved/**', '.github/workflows/serpentine-preserved.yml']
+permissions:
+  contents: read
+concurrency:
+  group: serpentine-preserved-${{ github.ref_name }}
+  cancel-in-progress: true
+jobs:
+  source-snapshot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: chisomobanzi/Serpentine3D
+          ref: 5a801e0db0ff6bf1d0738430fd9784db4ebfc9b0
+          path: upstream
+          persist-credentials: false
+      - name: Capture source and provenance without fonts or git metadata
+        shell: python
+        run: |
+          import hashlib, json, pathlib, stat, subprocess, zipfile
+          root = pathlib.Path('upstream')
+          output = pathlib.Path('evidence')
+          output.mkdir()
+          actual = subprocess.check_output(['git', '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip()
+          assert actual == '5a801e0db0ff6bf1d0738430fd9784db4ebfc9b0', actual
+          blocked = {'.ttf', '.otf', '.ttc', '.woff', '.woff2', '.dfont', '.pfb', '.pfm'}
+          manifest = {}
+          with zipfile.ZipFile(output / 'upstream-source.zip', 'w', zipfile.ZIP_DEFLATED) as archive:
+              for path in sorted(root.rglob('*')):
+                  relative = path.relative_to(root)
+                  if '.git' in relative.parts or path.is_symlink() or not path.is_file():
+                      continue
+                  if path.suffix.casefold() in blocked:
+                      continue
+                  data = path.read_bytes()
+                  manifest[relative.as_posix()] = hashlib.sha256(data).hexdigest()
+                  info = zipfile.ZipInfo('Serpentine3D/' + relative.as_posix(), (1980, 1, 1, 0, 0, 0))
+                  info.compress_type = zipfile.ZIP_DEFLATED
+                  info.external_attr = (stat.S_IFREG | 0o644) << 16
+                  archive.writestr(info, data)
+          (output / 'upstream-provenance.json').write_text(json.dumps({'repository': 'chisomobanzi/Serpentine3D', 'commit': actual, 'files': manifest}, indent=2), encoding='utf-8')
+          print(json.dumps({'commit': actual, 'source_files': len(manifest), 'archive_bytes': (output / 'upstream-source.zip').stat().st_size}))
+      - uses: actions/upload-artifact@v4
+        with:
+          name: serpentine-pinned-source
+          path: evidence
+          retention-days: 7
