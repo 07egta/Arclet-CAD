@@ -120,7 +120,7 @@ def test_permanently_locked_windows_target_has_bounded_retry_and_cleanup(tmp_pat
             native._write_container(document('new'), str(target), None)
     assert replace.call_count == 8
     assert target.read_bytes() == b'original and complete'
-    assert [p.name for p in tmp_path.iterdir()] == ['model.serp'
+    assert [p.name for p in tmp_path.iterdir()] == ['model.serp']
 
 
 def test_sync_failure_does_not_replace_a_good_model(tmp_path):
