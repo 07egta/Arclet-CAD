@@ -1,8 +1,7 @@
 diff --git a/serpentine3d/fileio/native.py b/serpentine3d/fileio/native.py
-index de6503f..efc36a5 100644
 --- a/serpentine3d/fileio/native.py
 +++ b/serpentine3d/fileio/native.py
-@@ -51,18 +51,48 @@ def _write_container(doc: dict, path: str, thumbnail: bytes | None,
+@@ -51,18 +51,59 @@
          if session:
              meta["session"] = {k: session[k] for k in
                                 ("id", "engine", "backbone") if k in session}
@@ -20,6 +19,7 @@ index de6503f..efc36a5 100644
 -    os.replace(tmp, path)          # atomic: a crash never corrupts the file
 +    import stat
 +    import tempfile
++    import time
 +    path = os.fsdecode(os.fspath(path))
 +    parent = os.path.dirname(os.path.abspath(path))
 +    tmp = None
@@ -52,7 +52,17 @@ index de6503f..efc36a5 100644
 +            os.fsync(stream.fileno())
 +        # Closing first matters on Windows, where an open handle can prevent
 +        # replacement. A failed write/sync/replace leaves the old file intact.
-+        os.replace(tmp, path)
++        # Windows can also report transient sharing/access failures when two
++        # complete saves replace the same target at once. Retry only those
++        # failures for a bounded time; never discard the previous good model.
++        for attempt in range(8):
++            try:
++                os.replace(tmp, path)
++                break
++            except PermissionError:
++                if os.name != "nt" or attempt == 7:
++                    raise
++                time.sleep(min(0.008 * (2 ** attempt), 0.15))
 +    finally:
 +        if tmp is not None:
 +            try:

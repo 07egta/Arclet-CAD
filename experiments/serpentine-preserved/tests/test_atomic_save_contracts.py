@@ -58,9 +58,18 @@ def test_concurrent_writers_each_commit_one_complete_archive(tmp_path):
     barrier = threading.Barrier(2)
     original = os.replace
     errors, sources = [], []
+    seen = set()
+    gate = threading.Lock()
     def synchronized_replace(src, dst):
-        sources.append(src)
-        barrier.wait(timeout=10)
+        # Retry calls must not re-enter the two-writer barrier. On Windows
+        # simultaneous os.replace can briefly fail with a sharing violation.
+        with gate:
+            first_attempt = src not in seen
+            if first_attempt:
+                seen.add(src)
+                sources.append(src)
+        if first_attempt:
+            barrier.wait(timeout=10)
         original(src, dst)
     def save(label):
         try:
@@ -80,6 +89,38 @@ def test_concurrent_writers_each_commit_one_complete_archive(tmp_path):
         assert archive.testzip() is None
         assert json.loads(archive.read('document.json')) in (document('A'), document('B'))
     assert [p.name for p in tmp_path.iterdir()] == ['model.serp']
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='Windows transient file sharing semantics')
+def test_transient_windows_replacement_failure_retries_without_losing_data(tmp_path):
+    target = tmp_path / 'model.serp'
+    native._write_container(document('old'), str(target), None)
+    actual_replace = os.replace
+    calls = []
+    def temporarily_busy(src, dst):
+        calls.append((src, dst))
+        if len(calls) <= 2:
+            raise PermissionError('Access is denied during sharing')
+        return actual_replace(src, dst)
+    with mock.patch.object(os, 'replace', temporarily_busy):
+        native._write_container(document('new'), str(target), None)
+    assert len(calls) == 3
+    with zipfile.ZipFile(target) as archive:
+        assert archive.testzip() is None
+        assert json.loads(archive.read('document.json')) == document('new')
+    assert [p.name for p in tmp_path.iterdir()] == ['model.serp']
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='Windows transient file sharing semantics')
+def test_permanently_locked_windows_target_has_bounded_retry_and_cleanup(tmp_path):
+    target = tmp_path / 'model.serp'
+    target.write_bytes(b'original and complete')
+    with mock.patch.object(os, 'replace', side_effect=PermissionError('Locked')) as replace:
+        with pytest.raises(PermissionError, match='Locked'):
+            native._write_container(document('new'), str(target), None)
+    assert replace.call_count == 8
+    assert target.read_bytes() == b'original and complete'
+    assert [p.name for p in tmp_path.iterdir()] == ['model.serp'
 
 
 def test_sync_failure_does_not_replace_a_good_model(tmp_path):

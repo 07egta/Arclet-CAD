@@ -18,7 +18,7 @@
     },
     "serpentine3d/fileio/native.py": {
       "before": "92f45beefe5f6f264566016392441cb083a409094d40270ccc55842e4325378a",
-      "after": "b83264802f9d6337486a0440bcfe43c90be20363eddf3aa91ae185221119c51c"
+      "after": "8e692e8f2eda2a45053022fa9eacccc7a3b857671b292faf74154cac6e6970cc"
     },
     "serpentine3d/core/history.py": {
       "before": "44291d6ad5749a7d2dd79e9fa7c9ba92e5bc499c847d9b65773ea045ef0b1305",
@@ -36,7 +36,7 @@
     },
     {
       "file": "0002-atomic-native-save.patch",
-      "sha256": "f8c4b73815f2eef81dd565b6bfb5af39d306b33e411c480c5ce50c0c158c199d"
+      "sha256": "1de39e7bad6f51dfa7c2216ba5de9f85efaa0a41a344b968dc80a02f09269006"
     },
     {
       "file": "0003-cancelled-history.patch",
