@@ -8,15 +8,18 @@ permissions:
 concurrency:
   group: serpentine-preserved-${{ github.ref_name }}-${{ github.sha }}
   cancel-in-progress: true
+env:
+  RUSTFLAGS: ''
+  CARGO_ENCODED_RUSTFLAGS: ''
 jobs:
   native:
-    name: ${{ matrix.os }} / patched
+    name: ${{ matrix.os }} / native accelerator
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-24.04, windows-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: 35
     defaults:
       run:
         shell: bash
@@ -26,6 +29,8 @@ jobs:
       LIBGL_ALWAYS_SOFTWARE: '1'
       __GLX_VENDOR_LIBRARY_NAME: mesa
       QT_QPA_FONTDIR: ${{ matrix.os == 'windows-latest' && 'C:/Windows/Fonts' || '' }}
+      SERP3D_PICK_BACKEND: rust
+      SERP3D_REQUIRE_NATIVE_TESTS: '1'
     steps:
       - name: Preserve exact LF source bytes
         run: git config --global core.autocrlf false
@@ -42,38 +47,85 @@ jobs:
         with:
           python-version: '3.12'
       - uses: astral-sh/setup-uv@v5
+      - uses: dtolnay/rust-toolchain@1.99.1
+        with:
+          components: rustfmt, clippy
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+        with:
+          arch: x64
+      - name: Select the MSVC linker, not an unrelated link.exe
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $linker = Join-Path $env:VCToolsInstallDir 'bin\Hostx64\x64\link.exe'
+          if (!(Test-Path $linker)) { throw 'MSVC linker not found' }
+          "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=$linker" >> $env:GITHUB_ENV
       - name: Install desktop test dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y libgl1 libegl1 libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-shape0 libxcb-render-util0 libxcb-xinerama0 libxcb-cursor0 libfontconfig1 libdbus-1-3
+      - name: Retain a pristine comparison checkout
+        run: |
+          mkdir -p evidence baseline
+          git -C upstream archive HEAD | tar -x -C baseline
       - name: Install pinned dependencies
         working-directory: upstream
         run: uv sync --extra dev --locked --python 3.12
       - name: Check and apply reviewed backend patches
         run: |
-          mkdir -p evidence
           python experiments/serpentine-preserved/scripts/prepare.py upstream --check --report evidence/preflight.json
           python experiments/serpentine-preserved/scripts/prepare.py upstream --report evidence/ui-preservation.json
           git -C upstream rev-parse HEAD > evidence/upstream-commit.txt
           git rev-parse HEAD > evidence/experiment-commit.txt
-      - name: Backend regression contracts
+      - name: Format, lint, test and build the dependency-free accelerator
+        run: python experiments/serpentine-preserved/scripts/build_native.py upstream --check 2>&1 | tee evidence/native-build.log
+      - name: All native and backend regression contracts
         working-directory: upstream
         run: uv run pytest ../experiments/serpentine-preserved/tests -q --junitxml=../evidence/contracts.xml 2>&1 | tee ../evidence/contracts.log
-      - name: Seeded backend microbenchmark
+      - name: Verify the independent Python fallback
+        env:
+          SERP3D_PICK_BACKEND: python
         working-directory: upstream
-        run: uv run python ../experiments/serpentine-preserved/scripts/benchmark_backend.py --output ../evidence/benchmark.json 2>&1 | tee ../evidence/benchmark.log
-      - name: Complete upstream suite with explicit per-test failure timeout
+        run: uv run pytest ../experiments/serpentine-preserved/tests/test_performance_contracts.py ../experiments/serpentine-preserved/tests/test_history_contracts.py ../experiments/serpentine-preserved/tests/test_atomic_save_contracts.py -q --junitxml=../evidence/fallback.xml 2>&1 | tee ../evidence/fallback.log
+      - name: Keep the verified accelerator with its source and notices
+        run: |
+          mkdir -p native-artifact
+          cp upstream/serpentine3d/_native/* native-artifact/
+          cp experiments/serpentine-preserved/native-pick-index/LICENSE native-artifact/
+          cp experiments/serpentine-preserved/native-pick-index/RUST-LICENSE-MIT native-artifact/
+          cp experiments/serpentine-preserved/native-pick-index/src/lib.rs native-artifact/
+          cp experiments/serpentine-preserved/native-pick-index/Cargo.* native-artifact/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: serpentine-pick-index-${{ runner.os }}
+          path: native-artifact
+          retention-days: 14
+      - name: Measure three-million-triangle native RSS and exact output
+        if: runner.os == 'Linux'
         working-directory: upstream
-        run: uv run --with pytest-timeout==2.4.0 pytest tests/ -q -n 2 --ignore=tests/e2e_dod.py --timeout=300 --timeout-method=thread --durations=30 --junitxml=../evidence/upstream-tests.xml 2>&1 | tee ../evidence/upstream-tests.log
+        run: uv run python ../experiments/serpentine-preserved/scripts/benchmark_native_rss.py --baseline ../baseline --patched . --output ../evidence/native-rss.json 2>&1 | tee ../evidence/native-rss.log
+      - name: Test Windows source-kit bootstrap and runtime in a path with spaces
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'Serpentine development kit'
+          New-Item -ItemType Directory -Force "$root\Serpentine3D" | Out-Null
+          Get-ChildItem upstream -Force | Where-Object { $_.Name -notin @('.git', '.venv', '__pycache__', '.pytest_cache') } | Copy-Item -Destination "$root\Serpentine3D" -Recurse -Force
+          & ./experiments/serpentine-preserved/launchers/Start-Windows.ps1 -SourceRoot "$root\Serpentine3D" -SelfTest 2>&1 | Tee-Object evidence/windows-kit-selftest.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Complete upstream suite; crashes and timeouts remain failures
+        working-directory: upstream
+        run: uv run --with pytest-timeout==2.4.0 pytest tests/ -q -n 2 --max-worker-restart=2 --ignore=tests/e2e_dod.py --timeout=300 --timeout-method=thread --durations=20 --junitxml=../evidence/upstream-tests.xml 2>&1 | tee ../evidence/upstream-tests.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: serpentine-${{ matrix.os }}-patched-evidence
+          name: serpentine-${{ matrix.os }}-native-evidence
           path: evidence
           retention-days: 14
   original-ui:
-    name: Original Qt UI / same-host comparison
+    name: Original Qt UI / native backend comparison
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     defaults:
@@ -98,6 +150,7 @@ jobs:
         with:
           python-version: '3.12'
       - uses: astral-sh/setup-uv@v5
+      - uses: dtolnay/rust-toolchain@1.99.1
       - name: Install real Qt and software OpenGL dependencies
         run: |
           sudo apt-get update -qq
@@ -112,9 +165,13 @@ jobs:
       - name: Exercise and capture baseline desktop
         working-directory: upstream
         run: xvfb-run -a -s '-screen 0 1600x1000x24 +extension GLX' uv run python ../experiments/serpentine-preserved/scripts/ui_smoke.py --output ../evidence/gui-before 2>&1 | tee ../evidence/gui-before.log
-      - name: Apply backend patches with UI guard
-        run: python experiments/serpentine-preserved/scripts/prepare.py upstream --report evidence/ui-preservation.json
+      - name: Apply patches and install native accelerator without touching UI
+        run: |
+          python experiments/serpentine-preserved/scripts/prepare.py upstream --report evidence/ui-preservation.json
+          python experiments/serpentine-preserved/scripts/build_native.py upstream
       - name: Exercise and capture patched desktop
+        env:
+          SERP3D_PICK_BACKEND: rust
         working-directory: upstream
         run: xvfb-run -a -s '-screen 0 1600x1000x24 +extension GLX' uv run python ../experiments/serpentine-preserved/scripts/ui_smoke.py --output ../evidence/gui-after 2>&1 | tee ../evidence/gui-after.log
       - name: Compare same-host screenshots

@@ -56,7 +56,7 @@ def prepare(root: Path, *, check_only: bool = False) -> dict:
         path = root / relative
         if path.is_symlink() or any(p.is_symlink() for p in path.parents if p != root):
             raise ValueError(f'Symlink in patch destination: {relative}')
-        state[relative] = digest(path)
+        state[relative] = digest(path) if path.is_file() else None
     before = all(state[p] == h['before'] for p, h in spec['changed_files'].items())
     after = all(state[p] == h['after'] for p, h in spec['changed_files'].items())
     if not before and not after:
@@ -69,7 +69,9 @@ def prepare(root: Path, *, check_only: bool = False) -> dict:
                            cwd=root, check=True)
     expected = 'before' if check_only and before else 'after'
     for relative, hashes in spec['changed_files'].items():
-        if digest(root / relative) != hashes[expected]:
+        path = root / relative
+        actual = digest(path) if path.is_file() else None
+        if actual != hashes[expected]:
             raise RuntimeError(f'Post-application checksum mismatch: {relative}')
     if ui_fingerprint(root) != (ui, count):
         raise RuntimeError('UI preservation invariant failed')

@@ -69,7 +69,7 @@ index 9ef9800..c906f6a 100644
          finally:
              self._regen_active = False
 diff --git a/serpentine3d/core/spatial.py b/serpentine3d/core/spatial.py
-index db35981..94d6744 100644
+index db35981..b0d583d 100644
 --- a/serpentine3d/core/spatial.py
 +++ b/serpentine3d/core/spatial.py
 @@ -28,6 +28,8 @@ import numpy as np
@@ -100,7 +100,7 @@ index db35981..94d6744 100644
  
  
  def build_index(corners: np.ndarray) -> ChunkIndex | None:
-@@ -100,21 +107,62 @@ def build_index(corners: np.ndarray) -> ChunkIndex | None:
+@@ -100,21 +107,68 @@ def build_index(corners: np.ndarray) -> ChunkIndex | None:
      for k in range(1, corners.shape[1]):
          np.minimum(lo, corners[:, k], out=lo)
          np.maximum(hi, corners[:, k], out=hi)
@@ -119,6 +119,12 @@ index db35981..94d6744 100644
 +    n = len(triangles)
 +    if n < MIN_PRIMITIVES:
 +        return None
++    # The optional library is loaded only for a large mesh, not at startup.
++    from .native_spatial import native_triangle_index
++    native = native_triangle_index(vertices, triangles, _grid_size(n))
++    if native is not None:
++        order, starts, mins, maxs = native
++        return ChunkIndex(order, starts, mins, maxs)
 +    lo = np.empty((n, 3), dtype=vertices.dtype)
 +    hi = np.empty_like(lo)
 +    for start in range(0, n, INDEX_BLOCK):

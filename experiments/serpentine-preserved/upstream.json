@@ -10,7 +10,7 @@
     },
     "serpentine3d/core/spatial.py": {
       "before": "63f12b0e86d0def6a73ce5e63ca0f495ab67b5f64cf3018a9fd32e92d4d7e030",
-      "after": "5c65ed826c1f64ef71acde544bf0a58f513fd511f38eb371ab8ed85846f3a9b0"
+      "after": "61957d8a6d5e9b0868d980da00caa64ad20d8cafb7eed92b038b5f029413e15f"
     },
     "serpentine3d/core/tessellate.py": {
       "before": "0f3157a48350b006b1f1050b1e5645fbe4c674500790140cfa43c0314c4ff39c",
@@ -23,12 +23,16 @@
     "serpentine3d/core/history.py": {
       "before": "44291d6ad5749a7d2dd79e9fa7c9ba92e5bc499c847d9b65773ea045ef0b1305",
       "after": "9d885137dbf8c807aead458c00ec93fb833670ddb012d0fc0af22ca0f2903d98"
+    },
+    "serpentine3d/core/native_spatial.py": {
+      "before": null,
+      "after": "86ff1ae5207cf0ad0a696bd06649b00303d64fd529b076546cfb012a29f22971"
     }
   },
   "patches": [
     {
       "file": "0001-memory-and-picking.patch",
-      "sha256": "edcf9112d95aaadb079d39f2712f2a78a81064ec8bcc086e195399239b677300"
+      "sha256": "913e1636af39f648e8fe5f7c4d37ef8bfe0edb79e687dd126781878987bc5fff"
     },
     {
       "file": "0002-atomic-native-save.patch",
@@ -37,6 +41,10 @@
     {
       "file": "0003-cancelled-history.patch",
       "sha256": "b7799ae7e60ed547bb76da1585dfec3e25016c45fd0e355cd854f02ad7493bdf"
+    },
+    {
+      "file": "0004-native-index-bridge.patch",
+      "sha256": "d12d13491a42fdd6b40b83e464158cfd4e1f2b9a531a2723947f3856400e5cf6"
     }
   ]
 }

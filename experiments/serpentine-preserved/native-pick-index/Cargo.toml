@@ -1,0 +1,16 @@
+[package]
+name = "serpentine-pick-index"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[workspace]
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
