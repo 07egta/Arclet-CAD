@@ -1,0 +1,22 @@
+name: OCCT packaging regressions
+on:
+  push:
+    branches: ['work/occt-studio-*']
+    paths: ['experiments/occt-studio/scripts/**', '.github/workflows/occt-package-checks.yml']
+permissions:
+  contents: read
+jobs:
+  archive:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate deterministic ZIP and distribution boundaries
+        run: python -m unittest discover -s experiments/occt-studio/scripts -p test_archive_utils.py -v

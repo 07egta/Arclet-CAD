@@ -1,0 +1,6 @@
+/target/
+/evidence/
+/dist/
+*.arcocct
+*.step
+*.stl
