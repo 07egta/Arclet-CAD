@@ -23,6 +23,18 @@ use solidcraft_ui_egui::{SolveApp, icons, prefs};
 const OPEN_WIDTH: f32 = 300.0;
 const COLLAPSED_WIDTH: f32 = 28.0;
 
+/// Reserve the model as the primary work surface. At narrow logical sizes the
+/// inspector becomes slimmer; the user's open/closed choice is never rewritten.
+fn panel_width(available: f32, open: bool) -> f32 {
+    if !open {
+        return COLLAPSED_WIDTH;
+    }
+    if !available.is_finite() {
+        return OPEN_WIDTH;
+    }
+    OPEN_WIDTH.min((available * 0.32).max(180.0))
+}
+
 /// Visual styles in the order `view.visual_style` numbers them (its `index`).
 const STYLES: [(&str, &str); 4] = [
     ("shaded_with_edges", "arclet.panel.style_edges"),
@@ -92,7 +104,7 @@ pub fn show(ui: &mut Ui, cad: &mut SolveApp, state: &mut PanelState) {
         return;
     }
     let tokens = Tokens::get();
-    let width = if state.open { OPEN_WIDTH } else { COLLAPSED_WIDTH };
+    let width = panel_width(ui.available_width(), state.open);
     Container::new(ui.ctx(), Surface::Panel)
         .edge("arclet_panels", Edge::Right)
         .exact_size(width)
@@ -571,6 +583,16 @@ fn count(value: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inspector_scales_with_workspace_without_changing_open_state() {
+        assert_eq!(panel_width(1440.0, true), OPEN_WIDTH);
+        assert_eq!(panel_width(960.0, true), OPEN_WIDTH);
+        assert!(panel_width(720.0, true) < OPEN_WIDTH);
+        assert_eq!(panel_width(960.0, false), COLLAPSED_WIDTH);
+        assert_eq!(panel_width(f32::NAN, true), OPEN_WIDTH);
+    }
+
 
     fn group(id: u64, items: &[&str]) -> GroupRow {
         GroupRow { id, name: format!("G{id}"), component: 0, items: items.iter().map(|s| s.to_string()).collect() }
