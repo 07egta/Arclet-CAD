@@ -564,6 +564,9 @@ impl ArcletApp {
             .edge("arclet_command", Edge::Bottom)
             .frame(Container::new(ui.ctx(), Surface::ApplicationBar).edge_frame(tokens.panel).inner_margin(egui::Margin::symmetric(16, 8)))
             .show(ui, |ui| {
+                if self.cad.session.active_sketch.is_none() {
+                    self.pattern_menu(ui);
+                }
                 if let Some(error) = &self.command_error {
                     ui.label(RichText::new(error).color(tokens.error));
                 }
@@ -583,6 +586,59 @@ impl ArcletApp {
                     cmdline::Action::Finish => solidcraft_ui_egui::tools::confirm_current(&mut self.cad),
                 }
             });
+    }
+
+    fn pattern_menu(&mut self, ui: &mut Ui) {
+        let menu = ui_kit::Menu::button(ui, tr("arclet.pattern_menu"), |ui| {
+            for (handle, label, id, axes) in [
+                ("arclet:pattern:grid", "arclet.pattern_rect", "solid.pattern.rectangular", &["X", "Y"][..]),
+                ("arclet:pattern:circular", "arclet.pattern_circular", "solid.pattern.circular", &["Z"][..]),
+            ] {
+                let response = ui_kit::button(ui, tr(label), ui_kit::Button::Normal);
+                solidcraft_ui_egui::scenario::publish_handle(handle, response.rect.center());
+                if response.clicked() {
+                    self.start_pattern(id, axes);
+                    ui.close();
+                }
+            }
+        });
+        solidcraft_ui_egui::scenario::publish_handle("arclet:pattern", menu.response.rect.center());
+    }
+
+    fn start_pattern(&mut self, id: &str, axes: &[&str]) {
+        use solidcraft_engine::Sel;
+        use solidcraft_ui_egui::dialogs::Kind;
+
+        self.start(id);
+        let Some(dialog) = self.cad.dialog.as_mut().filter(|d| d.editing.is_none()) else { return };
+        let kind_matches = matches!(
+            (id, &dialog.kind),
+            ("solid.pattern.rectangular", Kind::PatternRect { .. }) | ("solid.pattern.circular", Kind::PatternCirc { .. })
+        );
+        if !kind_matches || dialog.inputs.len() != axes.len() + 1 {
+            return;
+        }
+        let directions = &mut dialog.inputs[1..];
+        for (slot, &preferred) in axes.iter().enumerate() {
+            if !directions[slot].items.is_empty() {
+                continue;
+            }
+            let existing = directions.iter().find_map(|input| input.items.first());
+            let name = match existing {
+                None => Some(preferred),
+                Some(Sel::Axis { name }) if name == preferred => axes.iter().copied().find(|axis| *axis != preferred),
+                Some(Sel::Axis { name }) if matches!(name.as_str(), "X" | "Y" | "Z") => Some(preferred),
+                _ => None,
+            };
+            if let Some(name) = name {
+                directions[slot].items.push(Sel::Axis { name: name.into() });
+            }
+        }
+        if let Kind::PatternRect { count2, .. } = &mut dialog.kind
+            && directions.iter().all(|input| !input.items.is_empty())
+        {
+            *count2 = "2".into();
+        }
     }
 
     fn help(&mut self, ctx: &egui::Context) {
@@ -952,6 +1008,69 @@ mod tests {
                 }]);
             }
         }
+    }
+
+    #[test]
+    fn model_pattern_menu_opens_a_ready_grid_and_circular_dialog() {
+        use solidcraft_engine::Sel;
+
+        let mut frames = AppFrames::new();
+        frames.app.cad.run("solid.box", json!({"length": 10, "width": 12, "height": 8, "body_name": "Seed"})).unwrap();
+        let select = || vec![Sel::Body { name: "Seed".into() }];
+        let snapshot = frames.app.cad.session.doc.to_json();
+        let mut grid = None;
+        for (suffix, command, axes) in [("grid", "solid.pattern.rectangular", &["X", "Y"][..]), ("circular", "solid.pattern.circular", &["Z"][..])] {
+            frames.app.cad.session.selection = select();
+            frames.idle(2);
+            frames.click_handle("arclet:pattern");
+            frames.idle(1);
+            frames.click_handle(&format!("arclet:pattern:{suffix}"));
+            let dialog = frames.app.cad.dialog.as_ref().expect("pattern opens the shared editor");
+            assert_eq!(dialog.inputs[0].items, select());
+            for (slot, name) in axes.iter().enumerate() {
+                assert_eq!(dialog.inputs[slot + 1].items, [Sel::Axis { name: (*name).into() }]);
+            }
+            let mut commands = solidcraft_ui_egui::dialogs::apply_commands(&frames.app.cad, dialog).unwrap();
+            assert_eq!(commands[0].0, command);
+            if suffix == "grid" {
+                grid = commands.pop();
+            }
+            assert_eq!(frames.app.cad.session.doc.to_json(), snapshot, "opening and preview leave history untouched");
+            solidcraft_ui_egui::dialogs::cancel(&mut frames.app.cad);
+        }
+
+        let (command, parameters) = grid.expect("the grid has ready-to-apply parameters");
+        frames.app.cad.run(&command, parameters).unwrap();
+        assert_eq!(frames.app.cad.session.world_state().bodies.len(), 6);
+        let id = frames.app.cad.session.doc.features.last().unwrap().id;
+        let bytes = solidcraft_engine::io::write_design_container(&frames.app.cad.session.doc).unwrap();
+        frames.app.cad.run("edit.undo", json!({})).unwrap();
+        assert_eq!(frames.app.cad.session.world_state().bodies.len(), 1);
+
+        let reopened = solidcraft_engine::io::read_design(&bytes).unwrap();
+        frames.app.cad.session = solidcraft_engine::Session::new(reopened);
+        assert_eq!(frames.app.cad.session.world_state().bodies.len(), 6);
+        frames.app.cad.edit_feature(id);
+        let dialog = frames.app.cad.dialog.as_ref().expect("the reopened grid remains editable");
+        assert!(matches!(&dialog.kind, solidcraft_ui_egui::dialogs::Kind::PatternRect { count2, .. } if count2 == "2"));
+    }
+
+    #[test]
+    fn model_grid_pattern_keeps_the_picked_axis_and_supplies_the_other_direction() {
+        use solidcraft_engine::Sel;
+
+        let mut frames = AppFrames::new();
+        frames.app.cad.run("solid.box", json!({"length": 10, "width": 12, "height": 8, "body_name": "Seed"})).unwrap();
+        frames.app.cad.session.selection = vec![Sel::Body { name: "Seed".into() }, Sel::Axis { name: "Y".into() }];
+        frames.idle(2);
+        frames.click_handle("arclet:pattern");
+        frames.idle(1);
+        frames.click_handle("arclet:pattern:grid");
+
+        let dialog = frames.app.cad.dialog.as_ref().expect("the grid editor opens");
+        assert_eq!(dialog.inputs[1].items, [Sel::Axis { name: "Y".into() }]);
+        assert_eq!(dialog.inputs[2].items, [Sel::Axis { name: "X".into() }]);
+        assert!(matches!(&dialog.kind, solidcraft_ui_egui::dialogs::Kind::PatternRect { count2, .. } if count2 == "2"));
     }
 
     #[test]
