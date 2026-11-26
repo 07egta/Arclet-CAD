@@ -285,6 +285,7 @@ pub(crate) fn owns_pointer(app: &SolveApp, proj: &Proj, p: Pos2) -> bool {
         || (app.dialog.is_none()
             && app.tool.is_none()
             && crate::browser::occurrence_triad_model(app).is_some_and(|t| crate::gizmo::contains_pointer(proj, &t, p)))
+        || crate::scale_gizmo::contains_pointer(app, proj, p)
         || crate::place_gizmo::contains_pointer(app, p)
 }
 
@@ -357,6 +358,17 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui, painter: &egui::Painter, proj
             let off = if triad.is_some() { vec2(crate::gizmo::LEN_PX as f32 + 16.0, -12.0) } else { vec2(16.0, -30.0) };
             let box_at = rotation.map_or(bs + off, |(end, _)| end + vec2(16.0, -12.0));
             value_box_with(ui, label, value, box_at, focus || dragging, true, place);
+        }
+        app.dialog = Some(d);
+        return;
+    }
+    if matches!(d.kind, Kind::Scale { .. }) {
+        let dragging = crate::scale_gizmo::show(app, &mut d, ui, painter, proj);
+        if let Some(base) = d.extra.get("origin").and_then(|v| serde_json::from_value::<[f64; 3]>(v.clone()).ok()).map(|a| Vec3::new(a[0], a[1], a[2]))
+            && let Some(p) = proj.to_screen(base)
+            && let Some((label, _, value)) = d.primary()
+        {
+            value_box_with(ui, label, value, p + vec2(132.0, -12.0), dragging, true, box_place(app, proj));
         }
         app.dialog = Some(d);
         return;

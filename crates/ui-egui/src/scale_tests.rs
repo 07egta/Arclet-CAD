@@ -573,3 +573,30 @@ fn zoomed_view_frame_cost() {
         "ZOOMED whole_ms={whole:.2} whole_triangles={whole_tris} zoomed_ms={zoomed:.2} zoomed_triangles={zoomed_tris} zoomed_orbit_ms={orbit:.2}"
     );
 }
+
+#[test]
+fn nonuniform_scale_dialog_passes_factors_and_pivot_to_real_command() {
+    use crate::dialogs::{self, Kind};
+    use solidcraft_engine::geom::Vec3;
+    let mut h = Harness::new();
+    h.app.run("solid.box", json!({"length":10,"width":20,"height":30})).unwrap();
+    let name = h.app.session.model.state().bodies[0].name.clone();
+    h.app.run("select.set", json!({"items":[{"type":"body","name":name}]})).unwrap();
+    h.app.start("solid.scale");
+    let mut d = h.app.dialog.clone().expect("scale dialog");
+    assert!(matches!(d.kind, Kind::Scale { .. }));
+    d.extra.insert("factors".into(), json!([2.0, 3.0, 1.0]));
+    d.extra.insert("origin".into(), json!([5.0,10.0,15.0]));
+    let c = dialogs::apply_commands(&h.app, &d).unwrap();
+    assert_eq!(c[0].0, "solid.scale");
+    assert_eq!(c[0].1["factors"], json!([2.0,3.0,1.0]));
+    assert_eq!(c[0].1["origin"], json!([5.0,10.0,15.0]));
+    let undo = h.app.session.undo.len();
+    h.app.run(&c[0].0, c[0].1.clone()).unwrap();
+    assert_eq!(h.app.session.undo.len(), undo + 1);
+    let b = h.app.session.model.state().body(&name).unwrap().mesh().bounds();
+    assert!((b.size() - Vec3::new(20.0,60.0,30.0)).len() < 1e-5, "{b:?}");
+    h.app.run("edit.undo", json!({})).unwrap();
+    let original = h.app.session.model.state().body(&name).unwrap().mesh().bounds();
+    assert!((original.size() - Vec3::new(10.0,20.0,30.0)).len() < 1e-5);
+}
