@@ -1,0 +1,38 @@
+name: Arclet parametric graph
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'crates/graph/**'
+      - 'docs/arclet-parametric-graph.md'
+      - '.github/workflows/arclet-parametric-graph.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: arclet-graph-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  graph:
+    name: Graph crate regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      # Upstream graph files predate rustfmt normalization; report but do not
+      # fail a targeted feature PR for unrelated legacy formatting.
+      - name: Report graph formatting differences
+        run: cargo fmt --package solidcraft-graph -- --check
+        continue-on-error: true
+      - name: Graph unit and 2,000-node stress tests
+        run: cargo test --profile ci --locked -p solidcraft-graph
+      - name: Check graph lints
+        run: cargo clippy --profile ci --locked -p solidcraft-graph --all-targets -- -D warnings
