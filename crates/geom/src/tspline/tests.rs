@@ -348,3 +348,76 @@ fn hostile_tspline_input_is_refused() {
     let b = a.refine(&[Cut::S { s: 2.5, t0: 1.0, t1: 5.0 }]).unwrap();
     assert_eq!(a, b);
 }
+
+#[test]
+fn organic_product_control_edits_are_atomic_weight_preserving_and_reversible() {
+    for shape in ["chair-seat", "ergonomic-handle", "bottle-panel", "lamp-shade", "wave-panel"] {
+        let knots = (0..7).map(|k| k as f64).collect::<Vec<_>>();
+        let mesh = TMesh::tensor(knots.clone(), knots).unwrap();
+        let mut points = Vec::new();
+        for &(_, j) in mesh.vertices() {
+            // Use vertex coordinates from the actual topological T-grid, not
+            // assumed row-major lookup. Different profiles represent products.
+            let i = points.len() % 7;
+            let x = i as f64 - 3.0;
+            let y = j as f64 - 3.0;
+            let z = match shape {
+                "chair-seat" => 0.07 * (x * x + y * y),
+                "ergonomic-handle" => 0.4 * (x * 0.5).sin() * (y * 0.5).cos(),
+                "bottle-panel" => 0.6 * (x * 0.5).cos(),
+                "lamp-shade" => (x * x + y * y).sqrt() * 0.1,
+                _ => (x * 0.9).sin() * (y * 0.9).sin(),
+            };
+            points.push(Vec3::new(x * 10.0, y * 10.0, z * 10.0));
+        }
+        let weights = (0..points.len()).map(|i| 0.8 + 0.1 * (i % 4) as f64).collect::<Vec<_>>();
+        let original = TSpline::new(mesh, [3, 3], &points, &weights).unwrap();
+        let selected = [16, 17, 23, 24];
+        let delta = Vec3::new(0.5, -0.25, 3.0);
+        let edited = original.translated_controls(&selected, delta).unwrap();
+        assert_eq!(edited.mesh(), original.mesh());
+        assert_eq!(edited.weights(), weights);
+        for &i in &selected {
+            assert!(edited.points()[i].dist(original.points()[i] + delta) < 1e-12);
+        }
+        let changed = grid_params(original.domain(), 12).into_iter()
+            .map(|(u, v)| edited.eval(u, v).unwrap().dist(original.eval(u, v).unwrap()))
+            .fold(0.0_f64, f64::max);
+        assert!(changed > 1e-5, "{shape}: edited controls must change the evaluated surface");
+        let restored = edited.translated_controls(&selected, -delta).unwrap();
+        let error = grid_params(original.domain(), 18).into_iter()
+            .map(|(u, v)| restored.eval(u, v).unwrap().dist(original.eval(u, v).unwrap()))
+            .fold(0.0_f64, f64::max);
+        assert!(error < 1e-11, "{shape}: reversal error {error}");
+        assert!(original.translated_controls(&[16, 16], delta).is_err());
+        assert!(original.translated_controls(&[usize::MAX], delta).is_err());
+        assert!(original.translated_controls(&[16], Vec3::new(f64::NAN, 0.0, 0.0)).is_err());
+        assert!(original.positioned_control(16, Vec3::new(f64::INFINITY, 0.0, 0.0)).is_err());
+        assert_eq!(original.points(), points, "failed edits never mutate the source");
+    }
+}
+
+#[test]
+fn organic_local_refinement_preserves_original_geometry_and_reopens_homogeneous_points() {
+    let (_, original) = tensor_spline(19);
+    let (refined, worst) = original.verified_refine(
+        &[Cut::S { s: 0.33, t0: 0.3, t1: 0.6 }],
+        33,
+        1e-9,
+    ).unwrap();
+    assert!(worst < 1e-9, "sampled refinement drift {worst}");
+    assert!(refined.mesh().vertices().len() >= original.mesh().vertices().len());
+    let reopened = TSpline::from_homogeneous(refined.mesh().clone(), refined.degree(), refined.homogeneous().to_vec()).unwrap();
+    assert_eq!(refined, reopened, "editable homogeneous controls reconstruct faithfully");
+    assert!(original.verified_refine(&[], 1, 1e-6).is_err());
+    assert!(original.verified_refine(&[], 65, f64::NAN).is_err());
+}
+
+#[test]
+fn organic_degenerate_control_nets_do_not_invent_valid_normals() {
+    let mesh = TMesh::tensor((0..6).map(|x| x as f64).collect(), (0..6).map(|x| x as f64).collect()).unwrap();
+    let n = mesh.vertices().len();
+    let flat = TSpline::new(mesh, [3, 3], &vec![Vec3::ZERO; n], &vec![1.0; n]).unwrap();
+    assert_eq!(flat.normal(2.4, 2.4).unwrap(), None);
+    assert!(flat.translated_controls(&[2], Vec3::new(f64::MAX, 0.0, 0.0)).is_err());
+}

@@ -135,6 +135,69 @@ impl TSpline {
         self.blends.get(k).map(|b| (b.sv.as_slice(), b.tv.as_slice()))
     }
 
+    /// Atomically move a bounded set of controls in Cartesian millimetres while
+    /// retaining exact rational weights and the existing T-mesh knot topology.
+    /// Duplicate indices are rejected so one control cannot be moved twice.
+    pub fn translated_controls(&self, indices: &[usize], delta_mm: Vec3) -> SplineResult<Self> {
+        if indices.is_empty() || indices.len() > self.ctrl.len() {
+            return invalid("select between one and the number of available control points");
+        }
+        if !delta_mm.is_finite() || [delta_mm.x, delta_mm.y, delta_mm.z].iter().any(|x| x.abs() > 1.0e9) {
+            return invalid("control displacement must be finite and within 1e9 millimetres");
+        }
+        let mut ordered = indices.to_vec();
+        ordered.sort_unstable();
+        if ordered.iter().any(|&k| k >= self.ctrl.len()) || ordered.windows(2).any(|pair| pair[0] == pair[1]) {
+            return invalid("control selection has a missing or duplicate vertex");
+        }
+        let mut points = self.ctrl.clone();
+        for k in ordered {
+            let old = points[k].project().ok_or_else(|| SplineError::Invalid("invalid control weight".into()))?;
+            let next = old + delta_mm;
+            if !next.is_finite() || [next.x, next.y, next.z].iter().any(|x| x.abs() > 1.0e12) {
+                return invalid("control coordinates exceed the editable range");
+            }
+            points[k] = HPoint::weighted(next, points[k].w);
+        }
+        TSpline::from_homogeneous(self.mesh.clone(), self.degree, points)
+    }
+
+    /// Replace one Cartesian control position without altering its rational
+    /// weight, the ordering of T-vertices, or the knot structure.
+    pub fn positioned_control(&self, index: usize, position_mm: Vec3) -> SplineResult<Self> {
+        if index >= self.ctrl.len() || !position_mm.is_finite()
+            || [position_mm.x, position_mm.y, position_mm.z].iter().any(|x| x.abs() > 1.0e12)
+        {
+            return invalid("control index or Cartesian position is outside the editable range");
+        }
+        let mut points = self.ctrl.clone();
+        points[index] = HPoint::weighted(position_mm, points[index].w);
+        TSpline::from_homogeneous(self.mesh.clone(), self.degree, points)
+    }
+
+    /// Refine and independently check geometric preservation on a rectangular
+    /// sample lattice. This is a numerical check, not a formal surface proof.
+    /// A refused edit leaves the caller's original spline unchanged.
+    pub fn verified_refine(&self, cuts: &[Cut], samples_per_axis: usize, tolerance_mm: f64) -> SplineResult<(Self, f64)> {
+        if !(2..=65).contains(&samples_per_axis) || !tolerance_mm.is_finite() || !(0.0..=1.0).contains(&tolerance_mm) {
+            return invalid("refinement verification requires 2..65 samples and finite tolerance 0..1 mm");
+        }
+        let refined = self.refine(cuts)?;
+        let domain = self.domain();
+        let mut worst: f64 = 0.0;
+        for j in 0..samples_per_axis {
+            for i in 0..samples_per_axis {
+                let u = domain[0][0] + (domain[0][1] - domain[0][0]) * i as f64 / (samples_per_axis - 1) as f64;
+                let v = domain[1][0] + (domain[1][1] - domain[1][0]) * j as f64 / (samples_per_axis - 1) as f64;
+                worst = worst.max(self.eval(u, v)?.dist(refined.eval(u, v)?));
+            }
+        }
+        if worst > tolerance_mm {
+            return invalid(format!("refinement exceeded sampled positional tolerance: {worst} mm > {tolerance_mm} mm"));
+        }
+        Ok((refined, worst))
+    }
+
     /// The parameter domain `[[s₀, s₁], [t₀, t₁]]`.
     pub fn domain(&self) -> [[f64; 2]; 2] {
         let g = &self.mesh.grid;

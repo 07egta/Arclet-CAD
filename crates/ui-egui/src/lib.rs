@@ -119,6 +119,7 @@ pub mod messages;
 pub(crate) mod motion;
 pub mod node_editor;
 pub mod node_workspace;
+pub mod organic_workbench;
 pub mod occurrence_drag;
 #[cfg(test)]
 mod pattern_arrow_tests;
@@ -2455,6 +2456,7 @@ impl SolveApp {
         self.poll_delete_check(ui.ctx());
         if !self.embedded {
             toolbar::app_bar(self, ui);
+            organic_workbench::show(ui);
         }
         issue_report::CadInput::block(self, ui, report_input);
         file_load::show(self, ui.ctx());
