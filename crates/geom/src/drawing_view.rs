@@ -13,6 +13,9 @@
 //!   `position_mm`, everything scaled by the scale. Its [`ViewFrame::paper_map`] moves the view's
 //!   curves ([`Seg2::similar`]) and their accuracy ([`CurveAccuracy::scaled`]) onto paper.
 
+pub mod dimensions;
+pub mod technical;
+
 use std::fmt;
 use std::str::FromStr;
 
