@@ -589,10 +589,10 @@ impl ArcletApp {
     }
 
     fn pattern_menu(&mut self, ui: &mut Ui) {
-        let menu = ui_kit::Menu::button(ui, tr("arclet.pattern_menu"), |ui| {
+        let menu = ui_kit::Menu::button(ui, tr("Pattern"), |ui| {
             for (handle, label, id, axes) in [
-                ("arclet:pattern:grid", "arclet.pattern_rect", "solid.pattern.rectangular", &["X", "Y"][..]),
-                ("arclet:pattern:circular", "arclet.pattern_circular", "solid.pattern.circular", &["Z"][..]),
+                ("arclet:pattern:grid", "ui.rectangular_pattern", "solid.pattern.rectangular", &["X", "Y"][..]),
+                ("arclet:pattern:circular", "ui.circular_pattern", "solid.pattern.circular", &["Z"][..]),
             ] {
                 let response = ui_kit::button(ui, tr(label), ui_kit::Button::Normal);
                 solidcraft_ui_egui::scenario::publish_handle(handle, response.rect.center());
