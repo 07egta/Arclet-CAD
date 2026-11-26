@@ -1,0 +1,81 @@
+name: Arclet desktop release readiness (candidate only)
+on:
+  pull_request:
+    paths:
+      - 'apps/arclet/**'
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'qa/release/**'
+      - '.github/workflows/arclet-release-readiness.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  packaging-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate candidate verifier with original fixtures
+        run: python3 -m unittest discover -s qa/release -p 'test_candidate.py' -v
+
+  desktop:
+    name: Arclet candidate / ${{ matrix.name }}
+    needs: packaging-tests
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - name: macos-arm64
+            os: macos-15
+            target: aarch64-apple-darwin
+          - name: macos-intel
+            os: macos-15
+            target: x86_64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: arclet-${{ matrix.target }}
+      - name: Build Arclet (not Melt3D)
+        run: cargo build --locked --release -p arclet --target ${{ matrix.target }}
+      - name: Arclet native unit and egui frame tests
+        if: matrix.name == 'windows-x64' || matrix.name == 'macos-arm64'
+        run: cargo test --locked --profile ci -p arclet --target ${{ matrix.target }}
+      - name: Arclet-only clippy
+        if: matrix.name == 'windows-x64' || matrix.name == 'macos-arm64'
+        run: cargo clippy --locked -p arclet --all-targets --target ${{ matrix.target }} -- -D warnings
+      - name: Package and verify PE candidate
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python qa/release/candidate.py package --binary "target/${{ matrix.target }}/release/arclet.exe" --out release-candidates --platform ${{ matrix.name }} --source-sha "$env:GITHUB_SHA"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Package and verify macOS candidate
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          binary="target/${{ matrix.target }}/release/arclet"
+          # Cross-built Intel code is NOT claimed to have been run on an Intel Mac.
+          python3 qa/release/candidate.py package --binary "$binary" --out release-candidates --platform "${{ matrix.name }}" --source-sha "$GITHUB_SHA" --adhoc-sign
+      - name: Candidate ZIPs and SHA256 (no release publication)
+        uses: actions/upload-artifact@v4
+        with:
+          name: arclet-candidate-${{ matrix.name }}
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            release-candidates/*.zip
+            release-candidates/*.sha256
