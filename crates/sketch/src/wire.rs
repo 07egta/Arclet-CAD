@@ -398,6 +398,55 @@ impl Sketch {
         Ok(n)
     }
 
+    /// Insert a fit point inside a drawn smooth 3D spline. Preserve both endpoints and
+    /// the wire id used by downstream pipe/sweep features. No mutation takes place unless
+    /// both the new spline and the sketch's total wire budget are valid.
+    pub fn insert_drawn_fit_point(&mut self, wire: &str, before: usize, at: Vec3) -> Result<usize> {
+        let index = self.wire_index(wire).ok_or_else(|| SketchError::Unknown(wire.into()))?;
+        let original = self.wires.get(index).ok_or_else(|| SketchError::Unknown(wire.into()))?;
+        if original.link.is_some() || original.arc.is_some() || original.fit.len() < 3 {
+            return Err(SketchError::Invalid("fit-point insertion needs an editable 3D spline (not an arc, line or link)".into()));
+        }
+        if before == 0 || before >= original.fit.len() || original.fit.len() >= MAX_FIT_POINTS {
+            return Err(SketchError::Invalid("insert before an interior fit point (spline fit-point limit: 500)".into()));
+        }
+        let mut fit = original.fit.clone();
+        fit.insert(before, at);
+        self.replace_drawn_fit(index, fit)
+    }
+
+    /// Remove an interior fit point without detaching references to the curve itself.
+    /// If three fit points become two the resulting curve is intentionally a straight line.
+    pub fn remove_drawn_fit_point(&mut self, wire: &str, index: usize) -> Result<usize> {
+        let w = self.wire_index(wire).ok_or_else(|| SketchError::Unknown(wire.into()))?;
+        let original = self.wires.get(w).ok_or_else(|| SketchError::Unknown(wire.into()))?;
+        if original.link.is_some() || original.arc.is_some() || original.fit.len() < 3 {
+            return Err(SketchError::Invalid("fit-point removal needs an editable 3D spline (not an arc, line or link)".into()));
+        }
+        if index == 0 || index >= original.fit.len() - 1 {
+            return Err(SketchError::Invalid("only an interior spline fit point may be removed".into()));
+        }
+        let mut fit = original.fit.clone();
+        fit.remove(index);
+        self.replace_drawn_fit(w, fit)
+    }
+
+    /// Commit a replacement only after re-sampling, coordinate and budget validation.
+    fn replace_drawn_fit(&mut self, index: usize, fit: Vec<Vec3>) -> Result<usize> {
+        let pts = drawn_polyline(&fit)?;
+        let count = self.wires.iter().enumerate().filter(|(i, _)| *i != index).fold(pts.len().saturating_add(fit.len()), |sum, (_, w)| {
+            sum.saturating_add(w.pts.len()).saturating_add(w.fit.len())
+        });
+        if count > 1_000_000 {
+            return Err(SketchError::Invalid("3D curves exceed the stored geometry budget".into()));
+        }
+        let len = fit.len();
+        let wire = self.wires.get_mut(index).ok_or_else(|| SketchError::Invalid("3D curve disappeared".into()))?;
+        wire.fit = fit;
+        wire.pts = pts;
+        Ok(len)
+    }
+
     /// Remove wires by id.
     pub fn remove_wires(&mut self, ids: &[String]) {
         self.wires.retain(|w| !ids.contains(&w.id));
@@ -408,6 +457,46 @@ impl Sketch {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn editable_3d_spline_fit_points_preserve_identity_and_reject_bad_edits_atomically() {
+        let mut sketch = Sketch::new();
+        let wire = sketch
+            .add_drawn_wire_in(
+                &[Vec3::ZERO, Vec3::new(5.0, 0.0, 10.0), Vec3::new(10.0, 3.0, 20.0), Vec3::new(15.0, 5.0, 30.0)],
+                WireSpace::Component,
+            )
+            .unwrap();
+        let original = sketch.clone();
+        assert_eq!(sketch.insert_drawn_fit_point(&wire, 2, Vec3::new(8.0, 1.0, 15.0)).unwrap(), 5);
+        let edited = sketch.wires.iter().find(|w| w.id == wire).unwrap();
+        assert_eq!(edited.fit.len(), 5);
+        assert_eq!(edited.fit[2], Vec3::new(8.0, 1.0, 15.0));
+        assert_eq!(edited.pts.first(), Some(&Vec3::ZERO));
+        assert_eq!(edited.pts.last(), Some(&Vec3::new(15.0, 5.0, 30.0)));
+        sketch.validate_wires().unwrap();
+        let before_bad = sketch.clone();
+        for (index, at) in [
+            (0, Vec3::new(1.0, 2.0, 3.0)),
+            (1, Vec3::ZERO),
+            (2, Vec3::new(1e100, 0.0, 0.0)),
+            (5, Vec3::new(1.0, 2.0, 3.0)),
+        ] {
+            assert!(sketch.insert_drawn_fit_point(&wire, index, at).is_err());
+            assert_eq!(sketch, before_bad);
+        }
+        for index in [0, 4, usize::MAX] {
+            assert!(sketch.remove_drawn_fit_point(&wire, index).is_err());
+            assert_eq!(sketch, before_bad);
+        }
+        assert_eq!(sketch.remove_drawn_fit_point(&wire, 2).unwrap(), 4);
+        assert_eq!(sketch, original);
+        let line = sketch.add_drawn_wire_in(&[Vec3::ZERO, Vec3::Z], WireSpace::Component).unwrap();
+        let unchanged = sketch.clone();
+        assert!(sketch.insert_drawn_fit_point(&line, 1, Vec3::new(0.0, 1.0, 0.0)).is_err());
+        assert!(sketch.remove_drawn_fit_point(&line, 1).is_err());
+        assert_eq!(sketch, unchanged);
+    }
 
     #[test]
     fn wire_space_defaults_and_preserves_detached_provenance() {

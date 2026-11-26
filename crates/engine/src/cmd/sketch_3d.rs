@@ -4,7 +4,7 @@
 //! point, and usable as sweep and pipe paths.
 
 use serde_json::{Value, json};
-use solidcraft_geom::Vec3;
+use solidcraft_geom::{Plane, Vec3};
 use solidcraft_sketch::WireSpace;
 
 use super::sketch::edit;
@@ -15,28 +15,38 @@ use crate::{Result, Session};
 
 pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("sketch.line3d", "3D Line", line3d).icon("line").enabled(in_sketch).params(concat!(
-        "points: [[x,y,z]…] world points (2 or more): one 3D line per segment, joined end to end (needs 3D Sketch on)",
+        "points: [[x,y,z]…] (2 or more); closed?: bool (3 or more points, joins last to first); frame?: world (default) | sketch (local xyz in the stored sketch plane, with z along its normal): one straight 3D wire per segment, joined end to end (needs 3D Sketch on)",
+        created_doc!()
+    )),
+    CommandSpec::new("sketch.polyline3d", "3D Polyline", polyline3d).icon("line").enabled(in_sketch).params(concat!(
+        "points: [[x,y,z]…] (2 or more); closed?: bool; frame?: world (default) | sketch: a chain of straight 3D segments with stable independent curve ids; see sketch.line3d (needs 3D Sketch on)",
         created_doc!()
     )),
     CommandSpec::new("sketch.spline3d", "3D Spline", spline3d)
         .icon("spline")
         .enabled(in_sketch)
-        .params(concat!("points: [[x,y,z]…] world fit points (2 or more): a smooth 3D curve through them (needs 3D Sketch on)", created_doc!())),
+        .params(concat!("points: [[x,y,z]…] fit points (2 or more); closed?: bool (3 or more distinct points, smooth periodic curve); frame?: world (default) | sketch: a smooth 3D curve through them (needs 3D Sketch on)", created_doc!())),
     CommandSpec::new("sketch.arc3d", "3D Arc", arc3d)
         .icon("arc3")
         .enabled(in_sketch_3d)
         .params(concat!(
-            "start, through, end: [x,y,z] world points: an exact circular arc through them, from start through through to end (needs 3D Sketch on). Stored exactly (centre, radius, angles), so path consumers can treat it as a true arc",
+            "start, through, end: [x,y,z] points; frame?: world (default) | sketch (local XYZ). Exact circular arc through the points (needs 3D Sketch on), stored analytically for path consumers",
             created_doc!()
         )),
     CommandSpec::new("sketch.point3d", "3D Point", point3d)
         .icon("point")
         .enabled(in_sketch)
-        .params(concat!("point: [x,y,z] world point (needs 3D Sketch on)", created_doc!())),
+        .params(concat!("point: [x,y,z]; frame?: world (default) | sketch (local XYZ); needs 3D Sketch on", created_doc!())),
     CommandSpec::new("sketch.move3d", "Move 3D Point", move3d)
         .icon("sketch_move")
         .enabled(in_sketch)
-        .params("wire: drawn 3D curve or point id, index?: fit point (default 0), to: [x,y,z] | by: [dx,dy,dz]; points joined to it move too"),
+        .params("wire: drawn 3D curve or point id, index?: fit point (default 0), to: [x,y,z] | by: [dx,dy,dz]; frame?: world (default) | sketch (local XYZ); points joined to it move too"),
+    CommandSpec::new("sketch.insert_fit3d", "Insert 3D Spline Fit Point", insert_fit3d)
+        .icon("spline").enabled(in_sketch)
+        .params("wire: drawn 3D spline id (3 or more fit points, not an arc or link); index: interior insertion index (before this point); at: [x,y,z]; frame?: world (default) | sketch (local XYZ); preserves wire id for downstream features"),
+    CommandSpec::new("sketch.remove_fit3d", "Remove 3D Spline Fit Point", remove_fit3d)
+        .icon("spline").enabled(in_sketch)
+        .params("wire: drawn 3D spline id (3 or more fit points, not an arc or link); index: interior fit-point index to remove; preserves wire id and curve endpoints"),
 ];
 
 fn points(cmd: &str, p: &Value, min: usize) -> Result<Vec<Vec3>> {
@@ -45,6 +55,46 @@ fn points(cmd: &str, p: &Value, min: usize) -> Result<Vec<Vec3>> {
         return Err(bad(cmd, format!("`points` needs {min} to {} points", solidcraft_sketch::MAX_FIT_POINTS)));
     }
     a.iter().map(|v| vec3(v).ok_or_else(|| bad(cmd, "a point must be [x, y, z]"))).collect()
+}
+
+/// User-supplied XYZ is normally world-space. With frame:"sketch", XYZ is measured
+/// along the selected sketch plane's local orthonormal x/y/normal basis. The evaluated plane
+/// already includes the active occurrence's placement; the same conversion works for a sketch
+/// owned by a rotated component and for a saved construction plane.
+fn input_frame(s: &Session, p: &Value, cmd: &str) -> Result<Option<Plane>> {
+    match p.get("frame") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(v)) if v == "world" => Ok(None),
+        Some(Value::String(v)) if v == "sketch" => {
+            let id = sketch_store::target(s, p, cmd)?;
+            s.world_state().sketch(id).map(|sk| Some(sk.plane)).ok_or_else(|| bad(cmd, "the sketch plane could not be evaluated"))
+        }
+        _ => Err(bad(cmd, "`frame` must be \"world\" or \"sketch\"")),
+    }
+}
+
+fn framed_vector(frame: Option<Plane>, delta: Vec3) -> Vec3 {
+    frame.map_or(delta, |pl| pl.x * delta.x + pl.y * delta.y + pl.normal() * delta.z)
+}
+
+fn framed_point(frame: Option<Plane>, point: Vec3) -> Vec3 {
+    frame.map_or(point, |pl| pl.origin + framed_vector(Some(pl), point))
+}
+
+fn closed_flag(p: &Value, cmd: &str) -> Result<bool> {
+    match p.get("closed") {
+        None | Some(Value::Null) => Ok(false),
+        Some(Value::Bool(value)) => Ok(*value),
+        _ => Err(bad(cmd, "`closed` must be true or false")),
+    }
+}
+
+fn fit_index(p: &Value, cmd: &str) -> Result<usize> {
+    p.get("index")
+        .and_then(Value::as_u64)
+        .and_then(|n| usize::try_from(n).ok())
+        .filter(|i| *i < solidcraft_sketch::MAX_FIT_POINTS)
+        .ok_or_else(|| bad(cmd, "`index` must be a fit point index below 500"))
 }
 
 fn needs_3d(sk: &solidcraft_sketch::Sketch, cmd: &str) -> Result<()> {
@@ -99,12 +149,31 @@ fn inverse_owner_frame(s: &Session, p: &Value, cmd: &str) -> Result<solidcraft_d
 }
 
 fn line3d(s: &mut Session, p: &Value) -> Result<Value> {
-    let cmd = "sketch.line3d";
+    draw_segments3d(s, p, "sketch.line3d")
+}
+
+fn polyline3d(s: &mut Session, p: &Value) -> Result<Value> {
+    draw_segments3d(s, p, "sketch.polyline3d")
+}
+
+fn draw_segments3d(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
     let inverse = inverse_owner_frame(s, p, cmd)?;
-    let pts: Vec<Vec3> = points(cmd, p, 2)?.into_iter().map(|at| solidcraft_doc::apply_point(&inverse, at)).collect();
+    let frame = input_frame(s, p, cmd)?;
+    let closed = closed_flag(p, cmd)?;
+    let world = points(cmd, p, if closed { 3 } else { 2 })?;
+    if closed && world.first().zip(world.last()).is_some_and(|(a, b)| a.dist(*b) < 1e-9) {
+        return Err(bad(cmd, "closed polylines must not repeat their first point; use closed: true"));
+    }
+    let pts: Vec<Vec3> = world.into_iter().map(|at| solidcraft_doc::apply_point(&inverse, framed_point(frame, at))).collect();
     let (ids, info) = edit(s, p, cmd, false, |sk, _| {
         needs_3d(sk, cmd)?;
-        pts.windows(2).map(|w| sk.add_drawn_wire_in(w, WireSpace::Component).map_err(Into::into)).collect::<Result<Vec<String>>>()
+        let mut ids = pts.windows(2).map(|w| sk.add_drawn_wire_in(w, WireSpace::Component).map_err(Into::into)).collect::<Result<Vec<String>>>()?;
+        if closed {
+            let first = pts.first().copied().ok_or_else(|| bad(cmd, "missing first point"))?;
+            let last = pts.last().copied().ok_or_else(|| bad(cmd, "missing last point"))?;
+            ids.push(sk.add_drawn_wire_in(&[last, first], WireSpace::Component)?);
+        }
+        Ok(ids)
     })?;
     Ok(json!({"curves": ids, "sketch": info}))
 }
@@ -112,7 +181,17 @@ fn line3d(s: &mut Session, p: &Value) -> Result<Value> {
 fn spline3d(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "sketch.spline3d";
     let inverse = inverse_owner_frame(s, p, cmd)?;
-    let pts: Vec<Vec3> = points(cmd, p, 2)?.into_iter().map(|at| solidcraft_doc::apply_point(&inverse, at)).collect();
+    let frame = input_frame(s, p, cmd)?;
+    let closed = closed_flag(p, cmd)?;
+    let mut pts = points(cmd, p, if closed { 3 } else { 2 })?;
+    if closed {
+        if pts.first().zip(pts.last()).is_some_and(|(a, b)| a.dist(*b) < 1e-9) {
+            return Err(bad(cmd, "closed splines must not repeat their first fit point; use closed: true"));
+        }
+        let start = pts.first().copied().ok_or_else(|| bad(cmd, "missing first fit point"))?;
+        pts.push(start);
+    }
+    let pts: Vec<Vec3> = pts.into_iter().map(|at| solidcraft_doc::apply_point(&inverse, framed_point(frame, at))).collect();
     let (id, info) = edit(s, p, cmd, false, |sk, _| {
         needs_3d(sk, cmd)?;
         Ok(sk.add_drawn_wire_in(&pts, WireSpace::Component)?)
@@ -123,12 +202,13 @@ fn spline3d(s: &mut Session, p: &Value) -> Result<Value> {
 fn arc3d(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "sketch.arc3d";
     let inverse = inverse_owner_frame(s, p, cmd)?;
+    let frame = input_frame(s, p, cmd)?;
     let pts: Vec<Vec3> = ["start", "through", "end"]
         .iter()
         .map(|k| req_vec3(cmd, p, k))
         .collect::<Result<Vec<Vec3>>>()?
         .into_iter()
-        .map(|at| solidcraft_doc::apply_point(&inverse, at))
+        .map(|at| solidcraft_doc::apply_point(&inverse, framed_point(frame, at)))
         .collect();
     let (id, info) = edit(s, p, cmd, false, |sk, _| {
         needs_3d(sk, cmd)?;
@@ -140,7 +220,8 @@ fn arc3d(s: &mut Session, p: &Value) -> Result<Value> {
 fn point3d(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "sketch.point3d";
     let inverse = inverse_owner_frame(s, p, cmd)?;
-    let at = solidcraft_doc::apply_point(&inverse, req_vec3(cmd, p, "point")?);
+    let frame = input_frame(s, p, cmd)?;
+    let at = solidcraft_doc::apply_point(&inverse, framed_point(frame, req_vec3(cmd, p, "point")?));
     let (id, info) = edit(s, p, cmd, false, |sk, _| {
         needs_3d(sk, cmd)?;
         Ok(sk.add_drawn_wire_in(&[at], WireSpace::Component)?)
@@ -163,6 +244,7 @@ fn move3d(s: &mut Session, p: &Value) -> Result<Value> {
     let to = parse("to")?;
     let by = parse("by")?;
     let inverse = inverse_owner_frame(s, p, cmd)?;
+    let frame = input_frame(s, p, cmd)?;
     let (n, info) = edit(s, p, cmd, false, |sk, _| {
         let drawn = sk
             .wire_index(&wire)
@@ -173,17 +255,40 @@ fn move3d(s: &mut Session, p: &Value) -> Result<Value> {
         let to = match (to, by) {
             (Some(t), _) => {
                 if drawn.space == WireSpace::Component {
-                    solidcraft_doc::apply_point(&inverse, t)
+                    solidcraft_doc::apply_point(&inverse, framed_point(frame, t))
                 } else {
-                    t
+                    framed_point(frame, t)
                 }
             }
-            (None, Some(d)) => from + if drawn.space == WireSpace::Component { solidcraft_doc::apply_vector(&inverse, d) } else { d },
+            (None, Some(d)) => from + if drawn.space == WireSpace::Component { solidcraft_doc::apply_vector(&inverse, framed_vector(frame, d)) } else { framed_vector(frame, d) },
             _ => return Err(bad(cmd, "give `to` or `by`")),
         };
         Ok(sk.move_drawn_point(&wire, index, to)?)
     })?;
     Ok(json!({"moved": n, "sketch": info}))
+}
+
+fn insert_fit3d(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "sketch.insert_fit3d";
+    let wire = p.get("wire").and_then(Value::as_str).ok_or_else(|| bad(cmd, "`wire` must be a 3D spline id"))?.to_owned();
+    let index = fit_index(p, cmd)?;
+    let frame = input_frame(s, p, cmd)?;
+    let world = framed_point(frame, req_vec3(cmd, p, "at")?);
+    let inverse = inverse_owner_frame(s, p, cmd)?;
+    let (count, info) = edit(s, p, cmd, false, |sk, _| {
+        let space = sk.wire_index(&wire).and_then(|i| sk.wires.get(i)).map(|w| w.space).ok_or_else(|| bad(cmd, "unknown wire"))?;
+        let at = if space == WireSpace::Component { solidcraft_doc::apply_point(&inverse, world) } else { world };
+        Ok(sk.insert_drawn_fit_point(&wire, index, at)?)
+    })?;
+    Ok(json!({"wire":wire,"fit_points":count,"sketch":info}))
+}
+
+fn remove_fit3d(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "sketch.remove_fit3d";
+    let wire = p.get("wire").and_then(Value::as_str).ok_or_else(|| bad(cmd, "`wire` must be a 3D spline id"))?.to_owned();
+    let index = fit_index(p, cmd)?;
+    let (count, info) = edit(s, p, cmd, false, |sk, _| Ok(sk.remove_drawn_fit_point(&wire, index)?))?;
+    Ok(json!({"wire":wire,"fit_points":count,"sketch":info}))
 }
 
 #[cfg(test)]

@@ -114,6 +114,28 @@ fn planes() {
 }
 
 #[test]
+fn spatial_workplane_axes_remain_orthonormal_and_recover_large_world_coordinates() {
+    let origin = Vec3::new(8.0e7, -6.0e7, 3.0e7);
+    let plane = Plane::new(origin, Vec3::new(10.0, 10.0, 0.0), Vec3::new(0.0, 5.0, 9.0)).unwrap();
+    assert!((plane.x.len() - 1.0).abs() < 1e-12);
+    assert!((plane.y.len() - 1.0).abs() < 1e-12);
+    assert!((plane.normal().len() - 1.0).abs() < 1e-12);
+    assert!(plane.x.dot(plane.y).abs() < 1e-12);
+    assert!(plane.x.dot(plane.normal()).abs() < 1e-12);
+    let local = Vec2::new(7.25, -11.5);
+    let world = plane.to_world(local);
+    assert!((plane.to_local(world) - local).len() < 1e-7);
+    let elevated = world + plane.normal() * 3.75;
+    assert!((plane.height(elevated) - 3.75).abs() < 1e-7);
+    let flipped = plane.flipped(false);
+    assert!((flipped.normal() + plane.normal()).len() < 1e-12);
+    let from_normal = Plane::from_normal(origin, Vec3::new(1.0, 2.0, 3.0)).unwrap();
+    assert!((from_normal.normal() - Vec3::new(1.0, 2.0, 3.0).normalized().unwrap()).len() < 1e-12);
+    assert!(Plane::new(origin, Vec3::X, Vec3::new(1.0, 0.0, 0.0)).is_none());
+    assert!(Plane::new(Vec3::new(f64::INFINITY, 0.0, 0.0), Vec3::X, Vec3::Y).is_none());
+}
+
+#[test]
 fn vec_ops_and_serde() {
     let a = Vec3::new(1.0, 2.0, 3.0);
     assert_eq!(a.cross(Vec3::X), Vec3::new(0.0, 3.0, -2.0));

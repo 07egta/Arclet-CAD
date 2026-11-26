@@ -311,9 +311,26 @@ pub(crate) fn point(ctx: &Ctx, g: &GeoRef) -> Result<Vec3> {
         },
         GeoRef::SketchPoint { sketch, point } => {
             let ss = ctx.st.sketch(*sketch).ok_or_else(|| DocError::Unknown(format!("sketch {sketch}")))?;
-            let q =
-                ss.sketch.point_index(point).and_then(|i| ss.sketch.point(i)).ok_or_else(|| DocError::Unknown(format!("sketch point `{point}`")))?;
-            sketch_world(ctx, *sketch, q)
+            // Ordinary 2D sketch points remain resolved in their sketch plane.
+            if let Some(q) = ss.sketch.point_index(point).and_then(|i| ss.sketch.point(i)) {
+                return sketch_world(ctx, *sketch, q);
+            }
+            // Drawn 3D points and spline fit points are independent of the sketch plane.
+            // ModelState already places these wires in the evaluated component/world frame.
+            // Accept q1 for a standalone point, w1.start/end/through and w1.N (zero-based
+            // fit index, just as sketch.move3d uses). The wire id survives edit/reopen.
+            let (id, selector) = point.rsplit_once('.').map_or((point.as_str(), None), |(id, selector)| (id, Some(selector)));
+            let wire = ss.sketch.wires.iter().find(|w| w.id == id).ok_or_else(|| DocError::Unknown(format!("sketch point `{point}`")))?;
+            let points = if wire.fit.is_empty() { &wire.pts } else { &wire.fit };
+            let index = match selector {
+                None if points.len() == 1 => Some(0),
+                Some("start") => Some(0),
+                Some("end") => points.len().checked_sub(1),
+                Some("through") if wire.arc.is_some() => Some(1),
+                Some(n) => n.parse::<usize>().ok(),
+                None => None,
+            };
+            index.and_then(|i| points.get(i).copied()).ok_or_else(|| DocError::Unknown(format!("sketch point `{point}`")))
         }
         // A round edge or face: its centre.
         GeoRef::Edge { .. } | GeoRef::Face { .. } | GeoRef::SketchCurve { .. } => centre(ctx, g),
