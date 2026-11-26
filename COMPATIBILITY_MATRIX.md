@@ -8,6 +8,7 @@
 | Native `.sc` design format | Curve and embedded node mesh cold round-trips verified in original binary |
 | Node JSON format | Version-1 original format retained; normal/invalid/resource-limit GUI tests pass |
 | 2,000-node evaluation | Simple Number chain verified; no claim for 2,000 complex surfaces |
+| Mission 14 parametric history validation | Draft source patch on `feat/arclet-parametric-history`: reports explicit missing/forward/suppressed/cyclic feature dependencies and guards result reuse; regression tests added but not compiled or run in this authoring environment. Not a verified release feature. |
 | Unsaved graph Close protection | Defect reproduced; patch + 11 state/UI tests added, uncompiled |
 | Normal-exit graph preferences recovery | Edited value 31 restored as unsaved in original binary; crash/power-loss not tested |
 | STL export | Node mesh 192 triangles exactly preserved across native save/reload; torus meshes finite and closed by edge incidence |
@@ -26,6 +27,15 @@
 | Bambu A1 / A1 mini G-code / AMS | Not tested; do not print unverified generic output |
 
 File compatibility, API compatibility and native plugin execution compatibility are not interchangeable.
+
+### Mission 14: parametric-history scope (unverified source patch)
+
+The `Document::feature_dependency_graph()` API is a read-only audit of **explicit** references in the Rust feature walk, sketch projection links and certified sketch face origin. It reports source IDs, downstream IDs, missing sketch and feature references, incorrect sketch targets, unsafe forward sketch references, suppressed sources, and direct or indirect active cycles. `Model::evaluate()` checks blocking diagnoses before returning unchanged or cached results for the affected feature, retaining an error on the feature rather than treating old success geometry as current. The existing per-feature fingerprints, state digest, bounded cache and `stale` preview mechanism remain the evaluator's implementation of incremental reuse.
+
+**Not covered by the explicit graph:** arbitrary body name/face/edge picks, unverified fallback geometry, exact topological identity for every Boolean split, a proof of all indirect dependencies, optimal global minimal recomputation, asynchronous revision-pinning beyond the existing context/fingerprint checks, or a complete Rhino-compatible feature history. Geometry-based references continue to be resolved and warned about by the existing `name_lookup`, `lineage`, `face_anchor` and evaluators.
+
+The Mission 14 patch does not change the serialized document format or `FeatureId` representation. New tests cover repeated parameter edits, missing-source cache invalidation, reorder/suppression, cycles, mirror dependencies and long chains, but execution and UI validation were not performed when the draft patch was authored. This is **not** a successful-test or production-readiness claim.
+
 
 ## Rhino-class feature coverage
 
