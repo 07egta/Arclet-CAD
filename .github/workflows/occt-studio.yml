@@ -1,0 +1,182 @@
+name: OCCT Studio experiment
+on:
+  push:
+    branches: ['work/occt-studio-*']
+    paths: ['experiments/occt-studio/**', '.github/workflows/occt-studio.yml']
+  pull_request:
+    paths: ['experiments/occt-studio/**', '.github/workflows/occt-studio.yml']
+permissions:
+  contents: read
+env:
+  CARGO_ENCODED_RUSTFLAGS: ''
+  CARGO_ENCODED_RUSTDOCFLAGS: ''
+  RUSTFLAGS: ''
+  RUSTDOCFLAGS: ''
+concurrency:
+  group: occt-studio-${{ github.event.pull_request.head.ref || github.ref_name }}
+  cancel-in-progress: true
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: experiments/occt-studio
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: experiments/occt-studio
+      - name: Install OCCT and desktop test dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y libocct-modeling-algorithms-dev libocct-data-exchange-dev libocct-visualization-dev libxkbcommon-dev libwayland-dev libx11-dev libxi-dev libxcursor-dev libxrandr-dev libgl1-mesa-dev libxtst6 xvfb python3-pil
+      - name: Format, lint, compile and execute all Rust regressions
+        run: |
+          mkdir -p evidence
+          set -o pipefail
+          rustc --version | tee evidence/toolchain.txt
+          dpkg-query -W 'libocct*' >> evidence/toolchain.txt
+          cargo fmt --all -- --check
+          cargo clippy --locked --features desktop --all-targets -- -D warnings 2>&1 | tee evidence/clippy.log
+          cargo test --locked --features desktop -- --test-threads=1 2>&1 | tee evidence/rust-tests.log
+          cargo build --locked --features desktop
+      - name: Drive the actual native desktop
+        run: |
+          set -o pipefail
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/arclet-runtime"
+          mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"
+          xvfb-run -a -s '-screen 0 1600x1000x24 +extension GLX' /usr/bin/python3 scripts/ui_smoke.py --binary target/debug/arclet-occt-studio --output evidence/gui 2>&1 | tee evidence/gui-tests.log
+      - name: Build and exercise release CLI
+        run: |
+          set -o pipefail
+          cargo build --locked --release --features desktop 2>&1 | tee evidence/build.log
+          ./target/release/arclet-occt-studio --demo evidence/showcase 2>&1 | tee evidence/demo.log
+          ./target/release/arclet-occt-studio --batch examples/bracket.commands 2>&1 | tee evidence/bracket.log
+      - name: Preserve source and evidence
+        if: always()
+        run: |
+          mkdir -p evidence
+          git rev-parse HEAD > evidence/source-commit.txt
+          git -C "$GITHUB_WORKSPACE" archive HEAD experiments/occt-studio .github/workflows/occt-studio.yml -o "$PWD/evidence/verified-source.tar"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: occt-studio-linux-evidence
+          path: |
+            experiments/occt-studio/evidence
+            experiments/occt-studio/Cargo.lock
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        with:
+          name: occt-studio-linux-executable
+          path: experiments/occt-studio/target/release/arclet-occt-studio
+          retention-days: 14
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: experiments/occt-studio
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: mamba-org/setup-micromamba@v3
+        id: occt
+        with:
+          environment-name: occt
+          create-args: occt=7.8.1=novtk_hdfbec02_103
+          init-shell: none
+          generate-run-shell: false
+          cache-downloads: true
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: experiments/occt-studio
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: Configure pinned OCCT and unambiguous native compiler
+        run: |
+          $prefix = '${{ steps.occt.outputs.environment-path }}'
+          "OCCT_INCLUDE_DIR=$prefix\Library\include\opencascade" >> $env:GITHUB_ENV
+          "OCCT_LIB_DIR=$prefix\Library\lib" >> $env:GITHUB_ENV
+          "$prefix\Library\bin" >> $env:GITHUB_PATH
+          $vcbin = Join-Path $env:VCToolsInstallDir 'bin\Hostx64\x64'
+          $linker = Join-Path $vcbin 'link.exe'
+          $compiler = Join-Path $vcbin 'cl.exe'
+          if (!(Test-Path $linker) -or !(Test-Path $compiler)) { throw 'MSVC compiler or linker missing' }
+          "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=$linker" >> $env:GITHUB_ENV
+          "CC=$compiler" >> $env:GITHUB_ENV
+          "CXX=$compiler" >> $env:GITHUB_ENV
+          "$vcbin" >> $env:GITHUB_PATH
+          New-Item -ItemType Directory -Force evidence | Out-Null
+          rustc --version | Out-File evidence/toolchain.txt
+          Get-ChildItem "$prefix\Library\lib\TK*.lib" | Out-File evidence/occt-libraries.txt
+      - name: Compile and run Windows native regressions
+        run: |
+          cargo test --locked --features desktop -- --test-threads=1 2>&1 | Tee-Object evidence/rust-tests.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo build --locked --release --features desktop 2>&1 | Tee-Object evidence/build.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          .\target\release\arclet-occt-studio.exe --version | Tee-Object evidence/version.txt
+          .\target\release\arclet-occt-studio.exe --demo evidence/showcase 2>&1 | Tee-Object evidence/demo.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          .\target\release\arclet-occt-studio.exe --batch examples/bracket.commands 2>&1 | Tee-Object evidence/bracket.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Attempt native Windows window launch and record the result
+        run: |
+          $env:ARCLET_GUI_STATE = "$PWD\evidence\windows-ui-state.json"
+          $p = Start-Process .\target\release\arclet-occt-studio.exe -ArgumentList '--desktop','--demo' -PassThru -RedirectStandardOutput evidence/windows-ui-out.log -RedirectStandardError evidence/windows-ui-err.log
+          $ready = $false
+          for ($i=0; $i -lt 30; $i++) {
+            Start-Sleep -Seconds 1
+            if (Test-Path $env:ARCLET_GUI_STATE) {
+              try { $s = Get-Content $env:ARCLET_GUI_STATE -Raw | ConvertFrom-Json; if ($s.ready) { $ready = $true; break } } catch {}
+            }
+            if ($p.HasExited) { break }
+          }
+          @{ready=$ready; process_exited=$p.HasExited; note='Launch observation only, not interactive Windows workflow certification.'} | ConvertTo-Json | Out-File evidence/windows-ui-result.json
+          if ($ready) {
+            try {
+              Add-Type -AssemblyName System.Windows.Forms
+              Add-Type -AssemblyName System.Drawing
+              $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+              $bitmap = New-Object System.Drawing.Bitmap($bounds.Width, $bounds.Height)
+              $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+              $graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+              $bitmap.Save("$PWD\evidence\windows-desktop.png")
+              $graphics.Dispose(); $bitmap.Dispose()
+            } catch { $_ | Out-File evidence/windows-screenshot-error.txt }
+          }
+          if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
+          Remove-Item Env:ARCLET_GUI_STATE
+      - name: Package verified executable with runtime dependencies and notices
+        run: |
+          python -m pip install pefile
+          python scripts/package_windows.py --prefix '${{ steps.occt.outputs.environment-path }}' --exe target/release/arclet-occt-studio.exe --output dist/Arclet-OCCT-Studio-Windows-x64
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
+          & .\dist\Arclet-OCCT-Studio-Windows-x64\arclet-occt-studio.exe --demo evidence/packaged-showcase
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: occt-studio-windows-x64
+          path: experiments/occt-studio/dist/Arclet-OCCT-Studio-Windows-x64.zip
+          retention-days: 14
+      - name: Preserve Windows evidence
+        if: always()
+        run: |
+          git rev-parse HEAD | Out-File evidence/source-commit.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: occt-studio-windows-evidence
+          path: experiments/occt-studio/evidence
+          retention-days: 14

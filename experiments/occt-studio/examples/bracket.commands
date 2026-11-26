@@ -1,0 +1,11 @@
+# Exact geometry in millimeters. BooleanDifference replaces #1 and consumes #2.
+Box 0,0,0 60 40 8
+FilletEdge 1 2
+Cylinder 18,20,-1 5 10
+BooleanDifference 1 2
+Cylinder 42,20,-1 5 10
+BooleanDifference 1 3
+Rename 1 "Two-hole mounting plate"
+ExportStep "bracket.step"
+ExportStl "bracket.stl"
+Save "bracket.arcocct"
