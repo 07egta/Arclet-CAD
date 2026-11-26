@@ -37,12 +37,17 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("plastic.assign_rule", "Assign Plastic Rule", assign_rule).at("PLASTIC", "SETUP").icon("plastic_assign").params(
         "bodies: [names]; rule: name (empty: no rule) — plastic features on these bodies take its draft and clearance as defaults",
     ),
-    CommandSpec::new("plastic.rules", "List Plastic Rules", list_rules).icon("plastic_rule").noundo().params("→ rules with their expressions and values, the active rule and the rules assigned to bodies"),
+    CommandSpec::new("plastic.rules", "List Plastic Rules", list_rules).icon("plastic_rule").noundo().params("→ rules with expressions, evaluated values and advisory nominal-limit warnings; active and assigned rules"),
+    CommandSpec::new("plastic.audit", "Plastic Design Audit", audit).at("PLASTIC", "INSPECT").icon("plastic_rule").noundo().params(
+        "bodies?: [body names] (default all); compares rules and feature inputs with nominal limits, not measured B-rep wall thickness or molding certification",
+    ),
 ];
 
 fn rule_json(s: &Session, r: &PlasticRule) -> Value {
     let (vals, _) = s.doc.param_values();
-    let values = s.doc.plastic_values(&vals, r).map(|v| {
+    let evaluated = s.doc.plastic_values(&vals, r);
+    let warnings = evaluated.as_ref().map(|v| v.warnings()).unwrap_or_default();
+    let values = evaluated.map(|v| {
         json!({"thickness": v.thickness, "nominal_radius": v.nominal_radius, "clearance": v.clearance, "knife_edge": v.knife_edge,
             "reveal_height": v.reveal_height, "thickness_variation": v.thickness_variation, "draft_deg": v.draft.to_degrees(),
             "max_thickness": v.max_thickness, "min_thickness": v.min_thickness, "min_draft_deg": v.min_draft.to_degrees()})
@@ -52,6 +57,7 @@ fn rule_json(s: &Session, r: &PlasticRule) -> Value {
         "name": r.name, "material": r.material, "library": library,
         "expressions": r.fields().iter().map(|(k, e, _)| (k.to_string(), json!(e))).collect::<serde_json::Map<_, _>>(),
         "values": values.unwrap_or_else(|e| json!({"error": e.to_string()})),
+        "warnings": warnings,
     })
 }
 
@@ -147,6 +153,109 @@ fn assign_rule(s: &mut Session, p: &Value) -> Result<Value> {
 fn list_rules(s: &mut Session, _p: &Value) -> Result<Value> {
     let rules: Vec<Value> = s.doc.plastic_rules().iter().map(|r| rule_json(s, r)).collect();
     Ok(json!({"rules": rules, "active": s.doc.plastic.active, "assigned": s.doc.plastic.assigned}))
+}
+
+/// A bounded, non-destructive *nominal* design audit. It intentionally does not
+/// infer wall thickness from volume or a bounding box: those are not thickness
+/// measurements. A future B-rep sampler can add geometric checks separately.
+fn audit(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "plastic.audit";
+    let targets = string_list(cmd, p, "bodies")?;
+    if targets.len() > 10_000 {
+        return Err(bad(cmd, "too many bodies"));
+    }
+    let state = s.model.state();
+    if let Some(name) = targets.iter().find(|name| state.body(name).is_none()) {
+        return Err(bad(cmd, format!("no body `{name}`")));
+    }
+    let (params, _) = s.doc.param_values();
+    let mut body_rules = Vec::new();
+    for body in &state.bodies {
+        if !targets.is_empty() && !targets.contains(&body.name) {
+            continue;
+        }
+        if let Some(rule) = s.doc.plastic_rule_for(&body.name) {
+            let values = s.doc.plastic_values(&params, &rule).map_err(|e| bad(cmd, e.to_string()))?;
+            body_rules.push(json!({
+                "body": body.name,
+                "rule": rule.name,
+                "nominal_thickness_mm": values.thickness,
+                "min_thickness_mm": values.min_thickness,
+                "max_thickness_mm": values.max_thickness,
+                "draft_deg": values.draft.to_degrees(),
+                "warnings": values.warnings(),
+            }));
+        }
+    }
+
+    let mut feature_checks = Vec::new();
+    for feature in &s.doc.features {
+        if feature.suppressed {
+            continue;
+        }
+        // If an explicit filter was given, only named associations are safe
+        // to report. Automatic body selection cannot be inferred from the
+        // feature's raw input once other features have rebuilt the model.
+        let (name, body, nominal) = match &feature.kind {
+            FeatureKind::Boss { diameter, height, hole_diameter: Some(hole), draft, body, .. } => {
+                let diameter = s.doc.eval(diameter, Kind::Length).map_err(|e| bad(cmd, e.to_string()))?;
+                let hole = s.doc.eval(hole, Kind::Length).map_err(|e| bad(cmd, e.to_string()))?;
+                let height = s.doc.eval(height, Kind::Length).map_err(|e| bad(cmd, e.to_string()))?;
+                let rule = body.as_deref().and_then(|body| s.doc.plastic_rule_for(body))
+                    .or_else(|| s.doc.plastic.active.as_deref().and_then(|name| s.doc.plastic_rule(name)));
+                let draft = match draft {
+                    Some(angle) => s.doc.eval(angle, Kind::Angle).map_err(|e| bad(cmd, e.to_string()))?,
+                    None => match rule {
+                        Some(rule) => s.doc.plastic_values(&params, &rule).map_err(|e| bad(cmd, e.to_string()))?.draft,
+                        None => 0.0,
+                    },
+                };
+                let end_radius = diameter * 0.5 - height * draft.tan();
+                ("boss_radial_wall", body.as_deref(), Some(diameter.min(2.0 * end_radius) * 0.5 - hole * 0.5))
+            }
+            FeatureKind::SnapFit { thickness, body, .. } => {
+                let t = s.doc.eval(thickness, Kind::Length).map_err(|e| bad(cmd, e.to_string()))?;
+                ("snap_beam_thickness", body.as_deref(), Some(t))
+            }
+            FeatureKind::Rest { thickness: Some(thickness), body, .. } => {
+                let t = s.doc.eval(thickness, Kind::Length).map_err(|e| bad(cmd, e.to_string()))?;
+                ("rest_nominal_wall", body.as_deref(), Some(t))
+            }
+            _ => continue,
+        };
+        if !targets.is_empty() && body.is_none_or(|name| !targets.iter().any(|target| target == name)) {
+            continue;
+        }
+        let Some(nominal) = nominal else { continue };
+        let rule = body.and_then(|name| s.doc.plastic_rule_for(name))
+            .or_else(|| s.doc.plastic.active.as_deref().and_then(|name| s.doc.plastic_rule(name)));
+        let mut warnings = Vec::new();
+        if let Some(rule) = &rule {
+            let limits = s.doc.plastic_values(&params, rule).map_err(|e| bad(cmd, e.to_string()))?;
+            if nominal < limits.min_thickness {
+                warnings.push(json!({"code":"below_rule_min", "minimum_mm":limits.min_thickness}));
+            }
+            if nominal > limits.max_thickness {
+                warnings.push(json!({"code":"above_rule_max", "maximum_mm":limits.max_thickness}));
+            }
+        }
+        feature_checks.push(json!({
+            "feature": feature.name,
+            "feature_id": feature.id,
+            "kind": name,
+            "body": body,
+            "nominal_mm": nominal,
+            "rule": rule.map(|rule| rule.name),
+            "warnings": warnings,
+        }));
+    }
+    Ok(json!({
+        "scope":"advisory_nominal_dimensions_only",
+        "geometry_thickness_sampled": false,
+        "molding_feasibility_certified": false,
+        "body_rules": body_rules,
+        "feature_checks": feature_checks
+    }))
 }
 
 fn rest(s: &mut Session, p: &Value) -> Result<Value> {
@@ -295,6 +404,149 @@ mod tests {
     }
 
     #[test]
+    fn plastic_audit_tracks_parametric_boss_wall_and_roundtrip() {
+        let mut s = Session::default();
+        run(&mut s, "parameters.change", json!({"name":"boss_od", "expression":"10 mm"}));
+        run(&mut s, "solid.box", json!({"length":60, "width":60, "height":3, "body_name":"Plate"}));
+        run(&mut s, "plastic.manage_rules", json!({
+            "name":"Thick Boss Rule",
+            "thickness":"4 mm",
+            "min_thickness":"3.5 mm",
+            "max_thickness":"5 mm",
+            "draft":"0 deg",
+            "active":true
+        }));
+        run(&mut s, "plastic.boss", json!({
+            "position":[30,30,3], "diameter":"boss_od",
+            "height":12, "hole_diameter":4, "body":"Plate"
+        }));
+        let first = run(&mut s, "plastic.audit", json!({"bodies":["Plate"]}));
+        assert_eq!(first["geometry_thickness_sampled"], false);
+        assert_eq!(first["molding_feasibility_certified"], false);
+        assert_eq!(first["body_rules"][0]["nominal_thickness_mm"], 4.0);
+        assert_eq!(first["feature_checks"][0]["nominal_mm"], 3.0);
+        assert_eq!(first["feature_checks"][0]["warnings"][0]["code"], "below_rule_min");
+
+        run(&mut s, "parameters.change", json!({"name":"boss_od", "expression":"12 mm"}));
+        let second = run(&mut s, "plastic.audit", json!({"bodies":["Plate"]}));
+        assert_eq!(second["feature_checks"][0]["nominal_mm"], 4.0);
+        assert_eq!(second["feature_checks"][0]["warnings"].as_array().map(Vec::len), Some(0));
+        let expected = 10800.0 + PI * (36.0 - 4.0) * 12.0;
+        assert!(rel(volume(&mut s), expected) < 1e-3);
+        let mut cold = Session::new(solidcraft_doc::Document::from_json(&s.doc.to_json()).unwrap());
+        let loaded = run(&mut cold, "plastic.audit", json!({"bodies":["Plate"]}));
+        assert_eq!(loaded["feature_checks"][0]["nominal_mm"], 4.0);
+        assert!(rel(volume(&mut cold), expected) < 1e-3);
+        assert!(cold.model.results.iter().all(|result| result.error.is_none()));
+    }
+
+    #[test]
+    fn boss_position_and_root_fillet_remain_editable_after_reload() {
+        let mut s = Session::default();
+        run(&mut s, "parameters.change", json!({"name":"root_radius", "expression":"1 mm"}));
+        run(&mut s, "solid.box", json!({"length":60, "width":60, "height":3, "body_name":"Plate"}));
+        run(&mut s, "plastic.boss", json!({
+            "name":"Fastener boss", "body":"Plate",
+            "position":[30,30,3], "diameter":10, "height":12,
+            "draft":"1 deg", "fillet":"root_radius",
+        }));
+        let before = run(&mut s, "inspect.measure", json!({}));
+        let before_volume = before["total"]["volume_mm3"].as_f64().unwrap();
+        let before_com = before["bodies"][0]["center_of_mass"][0].as_f64().unwrap();
+
+        run(&mut s, "timeline.edit", json!({
+            "feature":"Fastener boss",
+            "set":{"position":[40,30,3]}
+        }));
+        let moved = run(&mut s, "inspect.measure", json!({}));
+        let moved_volume = moved["total"]["volume_mm3"].as_f64().unwrap();
+        let moved_com = moved["bodies"][0]["center_of_mass"][0].as_f64().unwrap();
+        assert!(rel(before_volume, moved_volume) < 1e-6, "move unexpectedly changed volume");
+        assert!(moved_com > before_com + 0.1, "boss was not relocated");
+
+        run(&mut s, "parameters.change", json!({"name":"root_radius", "expression":"2 mm"}));
+        assert!(s.model.results.iter().all(|result| result.error.is_none()));
+        let after = volume(&mut s);
+        assert!((after - moved_volume).abs() > 0.01, "root fillet radius did not rebuild the geometry");
+        let mut reopened = Session::new(solidcraft_doc::Document::from_json(&s.doc.to_json()).unwrap());
+        assert!(reopened.model.results.iter().all(|result| result.error.is_none()));
+        assert!(rel(volume(&mut reopened), after) < 1e-6, "cold reload lost the fillet edit");
+    }
+
+    #[test]
+    fn invalid_plastic_rule_edits_and_unknown_bodies_preserve_document() {
+        let mut s = Session::default();
+        run(&mut s, "solid.box", json!({"length":20, "width":20, "height":2, "body_name":"Panel"}));
+        let saved = s.doc.to_json();
+        assert!(s.execute("plastic.manage_rules", &json!({
+            "name":"Impossible",
+            "min_thickness":"5 mm",
+            "max_thickness":"2 mm",
+        })).is_err());
+        assert_eq!(s.doc.to_json(), saved);
+        assert!(s.execute("plastic.audit", &json!({"bodies":["Nonexistent"]})).is_err());
+        assert_eq!(s.doc.to_json(), saved);
+        assert_eq!(run(&mut s, "inspect.measure", json!({}))["body_count"], 1);
+    }
+
+    #[test]
+    fn plastic_preflight_rejects_bad_boss_and_rest_without_mutation() {
+        let (mut s, baseline) = plate();
+        let boss = json!({"position":[30,30,3], "diameter":10, "height":12, "hole_diameter":4});
+        for (key, value) in [
+            ("fillet", json!(-1)),
+            ("draft", json!("60 deg")),
+            ("hole_depth", json!(-1)),
+            ("ribs", json!(2.5)),
+            ("rib_offset", json!(-1)),
+        ] {
+            let mut p = boss.clone();
+            p[key] = value;
+            if key == "rib_offset" {
+                p["ribs"] = json!(4);
+            }
+            assert!(s.execute("plastic.boss", &p).is_err(), "expected rejection of {key}");
+            assert!(rel(volume(&mut s), baseline) < 1e-10, "{key} changed volume");
+        }
+        assert!(s.execute("plastic.boss", &json!({
+            "position":[30,30,3], "diameter":10, "height":12,
+            "hole_diameter":11, "draft":"-5 deg",
+        })).is_err(), "a widening boss still needs to fit the hole at its base");
+        assert!(s.execute("plastic.boss", &json!({
+            "position":[30,30,3], "diameter":10, "height":12,
+            "hole_depth":6,
+        })).is_err(), "hole_depth without a hole diameter is ambiguous");
+        assert!(rel(volume(&mut s), baseline) < 1e-10);
+
+        // Positive taper shrinks the outside and expands the hole: a too
+        // long hollow rest runs out of material at the top.
+        assert!(s.execute("plastic.rest", &json!({
+            "position":[30,30,3], "width":10, "length":20,
+            "height":16, "thickness":1, "draft":"2 deg",
+        })).is_err(), "taper must not consume the hollow rest wall");
+        assert!(rel(volume(&mut s), baseline) < 1e-10);
+
+        // A shorter tapered rest leaves its wall open and produces real volume.
+        run(&mut s, "plastic.rest", json!({
+            "position":[30,30,3], "width":10, "length":20,
+            "height":6, "thickness":1, "draft":"2 deg",
+        }));
+        let after = volume(&mut s);
+        assert!(after > baseline && after < baseline + 336.0, "{after} {baseline}");
+        let saved = s.doc.to_json();
+        assert!(s.execute("plastic.rest", &json!({
+            "position":[10,10,3], "width":4, "height":20,
+            "thickness":0.5, "draft":"-5 deg",
+        })).is_err(), "negative taper must not close the inner opening");
+        assert!(s.execute("plastic.rest", &json!({
+            "position":[10,10,3], "width":4, "height":15,
+            "thickness":1.7, "draft":"2 deg",
+        })).is_err(), "positive taper must not consume the wall");
+        assert_eq!(s.doc.to_json(), saved);
+        assert!(rel(volume(&mut s), after) < 1e-10);
+    }
+
+    #[test]
     fn boss_with_hole_fillet_and_ribs() {
         let mut s = Session::default();
         run(&mut s, "solid.box", json!({"length": 60, "width": 60, "height": 3, "body_name": "Plate"}));
@@ -302,6 +554,17 @@ mod tests {
         let want = 10800.0 + PI * 25.0 * 12.0 - PI * 4.0 * 12.0;
         assert!(rel(volume(&mut s), want) < 1e-3, "{} {want}", volume(&mut s));
         assert_eq!(run(&mut s, "inspect.measure", json!({}))["body_count"], 1);
+        // Deep pilot holes legitimately extend through the boss into its parent
+        // plate: preserve this established construction instead of rejecting
+        // every hole depth greater than the post height.
+        let mut deep = Session::default();
+        run(&mut deep, "solid.box", json!({"length":60, "width":60, "height":3, "body_name":"Plate"}));
+        run(&mut deep, "plastic.boss", json!({
+            "position":[30,30,3], "diameter":10, "height":12,
+            "hole_diameter":4, "hole_depth":13
+        }));
+        let expected = 10800.0 + PI * 25.0 * 12.0 - PI * 4.0 * 13.0;
+        assert!(rel(volume(&mut deep), expected) < 1e-3, "{} {expected}", volume(&mut deep));
         // Ribs add t·l·h each.
         let mut t = Session::default();
         run(&mut t, "solid.box", json!({"length": 60, "width": 60, "height": 3}));
@@ -425,6 +688,10 @@ mod tests {
         assert!(rel(volume(&mut s) - v0, want) < 1e-6, "{}", volume(&mut s) - v0);
         let m = run(&mut s, "inspect.measure", json!({}));
         assert!((m["bodies"][0]["bbox"]["max"][0].as_f64().unwrap_or(0.0) - 40.0).abs() < 1e-9);
+        let nominal = run(&mut s, "plastic.audit", json!({}));
+        assert!(nominal["feature_checks"].as_array().is_some_and(|checks| checks.iter().any(|entry| {
+            entry["kind"] == "snap_beam_thickness" && entry["nominal_mm"] == 1.5
+        })));
         assert!(s.execute("plastic.snap_fit", &json!({"position": [5, 5, 4], "direction": [0, 0, 1], "hook": [0, 0, 1], "length": 15, "thickness": 1.5, "width": 6, "catch_depth": 1, "catch_length": 3})).is_err());
     }
 
@@ -556,6 +823,10 @@ mod tests {
         let (mut h, v0) = plate();
         run(&mut h, "plastic.rest", json!({"position": [30, 30, 3], "width": 10, "length": 20, "height": 4, "thickness": 1}));
         assert!(rel(volume(&mut h) - v0, 224.0) < 1e-6, "{}", volume(&mut h) - v0);
+        let nominal = run(&mut h, "plastic.audit", json!({}));
+        assert!(nominal["feature_checks"].as_array().is_some_and(|checks| checks.iter().any(|entry| {
+            entry["kind"] == "rest_nominal_wall" && entry["nominal_mm"] == 1.0
+        })));
         // Drafted 2°: the section shrinks by 2·s·tan 2° each way at height s.
         let (mut d, v0) = plate();
         run(&mut d, "plastic.rest", json!({"position": [30, 30, 3], "width": 10, "length": 20, "height": 4, "draft": "2 deg"}));

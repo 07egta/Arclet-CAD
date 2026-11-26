@@ -126,6 +126,13 @@ impl PlasticSettings {
     }
 }
 
+/// An advisory issue in nominal design rules, not a measurement of manufactured walls.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct PlasticWarning {
+    pub code: &'static str,
+    pub message: String,
+}
+
 /// A rule's values (mm, radians).
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct PlasticValues {
@@ -139,6 +146,42 @@ pub struct PlasticValues {
     pub max_thickness: f64,
     pub min_thickness: f64,
     pub min_draft: f64,
+}
+
+impl PlasticValues {
+    /// Compare declared rule values with the rule's own nominal limits.
+    /// This does not sample a B-rep or certify injection molding feasibility.
+    pub fn warnings(&self) -> Vec<PlasticWarning> {
+        let mut warnings = Vec::new();
+        if self.thickness < self.min_thickness {
+            warnings.push(PlasticWarning {
+                code: "nominal_below_min",
+                message: format!(
+                    "nominal wall {:.3} mm is below the rule minimum {:.3} mm",
+                    self.thickness, self.min_thickness
+                ),
+            });
+        }
+        if self.thickness > self.max_thickness {
+            warnings.push(PlasticWarning {
+                code: "nominal_above_max",
+                message: format!(
+                    "nominal wall {:.3} mm exceeds the rule maximum {:.3} mm",
+                    self.thickness, self.max_thickness
+                ),
+            });
+        }
+        if self.draft < self.min_draft {
+            warnings.push(PlasticWarning {
+                code: "draft_below_min",
+                message: format!(
+                    "nominal draft {:.3} deg is below the rule minimum {:.3} deg",
+                    self.draft.to_degrees(), self.min_draft.to_degrees()
+                ),
+            });
+        }
+        warnings
+    }
 }
 
 impl Document {
@@ -167,14 +210,16 @@ impl Document {
             return Err(DocError::Invalid("the plastic thickness must be positive".into()));
         }
         let with_t = |e: &str, k: Kind| -> Result<f64> {
-            let f = |n: &str| if n == "Thickness" && !vals.contains_key("Thickness") { Ok(Value::length(t)) } else { look(n) };
+            // The capitalized Thickness symbol always means this rule's evaluated
+            // wall, even if the design has an unrelated user parameter named Thickness.
+            let f = |n: &str| if n == "Thickness" { Ok(Value::length(t)) } else { look(n) };
             let v = expr::eval_with(e, &f)?.to_kind(k)?;
             if !v.is_finite() || v < 0.0 {
                 return Err(DocError::Invalid(format!("plastic rule `{}`: `{e}` must not be negative", r.name)));
             }
             Ok(v)
         };
-        Ok(PlasticValues {
+        let result = PlasticValues {
             thickness: t,
             nominal_radius: with_t(&r.nominal_radius, Kind::Length)?,
             clearance: with_t(&r.clearance, Kind::Length)?,
@@ -185,7 +230,14 @@ impl Document {
             max_thickness: with_t(&r.max_thickness, Kind::Length)?,
             min_thickness: with_t(&r.min_thickness, Kind::Length)?,
             min_draft: with_t(&r.min_draft, Kind::Angle)?,
-        })
+        };
+        if !(result.min_thickness > 0.0 && result.max_thickness >= result.min_thickness) {
+            return Err(DocError::Invalid(format!(
+                "plastic rule `{}`: thickness limits must be positive and minimum must not exceed maximum",
+                r.name
+            )));
+        }
+        Ok(result)
     }
 }
 
@@ -204,5 +256,36 @@ mod tests {
         let pp_in = d.plastic_values(&vals, &d.plastic_rule("Polypropylene (PP) (0.1 in)").unwrap()).unwrap();
         assert!((pp_in.thickness - 2.54).abs() < 1e-9 && (pp_in.nominal_radius - 1.27).abs() < 1e-9 && (pp_in.clearance - 0.1016).abs() < 1e-9);
         assert_eq!(d.plastic_rules().len(), 6);
+    }
+
+    #[test]
+    fn rule_thickness_symbol_is_not_shadowed_by_global_parameter() {
+        let d = Document::default();
+        let mut vals = BTreeMap::new();
+        vals.insert("Thickness".to_string(), Value::length(20.0));
+        let abs = d.plastic_values(&vals, &PlasticRule::library()[0]).unwrap();
+        assert_eq!(abs.thickness, 1.5);
+        assert_eq!(abs.nominal_radius, 0.75);
+        assert!((abs.thickness_variation - 0.225).abs() < 1e-12);
+    }
+
+    #[test]
+    fn inconsistent_limits_are_refused_but_nominal_violations_are_diagnostics() {
+        let d = Document::default();
+        let mut rule = PlasticRule::library()[0].clone();
+        rule.min_thickness = "3 mm".into();
+        rule.max_thickness = "1 mm".into();
+        assert!(d.plastic_values(&BTreeMap::new(), &rule).is_err());
+        rule.max_thickness = "4 mm".into();
+        rule.min_draft = "3 deg".into();
+        let values = d.plastic_values(&BTreeMap::new(), &rule).unwrap();
+        assert_eq!(values.warnings().iter().map(|w| w.code).collect::<Vec<_>>(),
+            ["nominal_below_min", "draft_below_min"]);
+        rule.min_thickness = "0 mm".into();
+        assert!(d.plastic_values(&BTreeMap::new(), &rule).is_err());
+        rule.min_thickness = "1 mm".into();
+        rule.thickness = "5 mm".into();
+        let values = d.plastic_values(&BTreeMap::new(), &rule).unwrap();
+        assert!(values.warnings().iter().any(|w| w.code == "nominal_above_max"));
     }
 }
