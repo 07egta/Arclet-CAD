@@ -10,7 +10,9 @@ use solidcraft_engine::geom::Vec3;
 use solidcraft_ui_egui::SolveApp;
 use solidcraft_ui_egui::i18n::tr;
 use solidcraft_ui_egui::theme::Tokens;
-use solidcraft_ui_egui::ui_kit::{Container, Edge, Surface};
+use solidcraft_ui_egui::ui_kit::{self, Button, Container, Edge, Surface};
+
+use crate::classic_look::chrome::{self, Density};
 use solidcraft_ui_egui::viewport::Hit;
 
 /// Shown for any value the session does not have yet.
@@ -164,6 +166,15 @@ fn readout(app: &SolveApp) -> Readout {
     Readout { plane, cursor: cursor_of(app.viewport.hover.as_ref()), units: s.doc.units.clone(), component, selected: s.selection.len() }
 }
 
+/// Keep one compact strip on small laptops instead of letting disabled future
+/// features wrap the status bar into several rows and steal model space.
+fn visible_chips(density: Density) -> impl Iterator<Item = Chip> {
+    Chip::OBJECT_SNAPS
+        .into_iter()
+        .chain(Chip::MODES)
+        .filter(move |chip| density == Density::Full || backing(*chip).is_some())
+}
+
 fn settings(app: &SolveApp) -> Settings {
     let sketch_grid_snap = app.session.active_sketch.map(|_| !solidcraft_ui_egui::viewport::active_view(app).no_snap);
     Settings { sketch_grid_snap }
@@ -178,29 +189,54 @@ pub fn show(app: &mut SolveApp, ui: &mut Ui) {
     let read = readout(app);
     let settings = settings(app);
     let mut clicked = None;
+    let density = chrome::status_density(ui.ctx().viewport_rect().width());
     Container::new(ui.ctx(), Surface::ApplicationBar)
         .edge("arclet_status", Edge::Bottom)
-        .frame(Container::new(ui.ctx(), Surface::ApplicationBar).edge_frame(tokens.panel).inner_margin(egui::Margin::symmetric(16, 4)))
+        .frame(Container::new(ui.ctx(), Surface::ApplicationBar).edge_frame(tokens.panel).inner_margin(egui::Margin::symmetric(12, 4)))
         .show(ui, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                let dim = |text: String| RichText::new(text).size(12.0).color(tokens.text_dim);
-                let cursor = read.cursor;
-                let axis = |name: &str, index: usize| format!("{name} {}", coordinate(cursor.map(|c| c[index])));
-                ui.label(dim(format!("{}: {}", tr("arclet.status.plane"), read.plane.as_deref().unwrap_or(EMPTY))));
-                ui.label(dim(format!("{}  {}  {}", axis("X", 0), axis("Y", 1), axis("Z", 2))));
-                ui.label(dim(format!("{}: {}", tr("arclet.status.units"), read.units)));
-                ui.label(dim(format!("{}: {}", tr("arclet.status.component"), read.component.as_deref().unwrap_or(EMPTY))));
-                ui.label(dim(format!("{}: {}", tr("arclet.status.selected"), read.selected)));
-                ui.separator();
-                for chip in Chip::OBJECT_SNAPS.into_iter().chain(Chip::MODES) {
-                    let state = chip_state(chip, settings);
-                    let button = egui::Button::new(RichText::new(tr(chip.label_id())).size(12.0)).selected(state.on).small();
-                    let response = ui.add_enabled(state.enabled, button).on_hover_text(tr(tooltip_id(chip, state)));
-                    if response.clicked() {
-                        clicked = Some(chip);
-                    }
-                }
-            });
+            // One line, even at 200% scale. An overflow scroll never moves the
+            // viewport vertically when the cursor or selection readout changes.
+            egui::ScrollArea::horizontal()
+                .id_salt("arclet_status_overflow")
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = chrome::SECTION_GAP;
+                        let dim = |text: String| RichText::new(text).size(tokens.font_body).color(tokens.text_dim);
+                        let cursor = read.cursor;
+                        let axis = |name: &str, index: usize| format!("{name} {}", coordinate(cursor.map(|c| c[index])));
+                        if density == Density::Full || read.plane.is_some() {
+                            ui.label(dim(format!("{}: {}", tr("arclet.status.plane"), read.plane.as_deref().unwrap_or(EMPTY))));
+                            ui.separator();
+                        }
+                        ui.label(dim(format!("{}  {}  {}", axis("X", 0), axis("Y", 1), axis("Z", 2))).monospace());
+                        ui.separator();
+                        ui.label(dim(format!("{}: {}", tr("arclet.status.units"), read.units)));
+                        if density == Density::Full {
+                            ui.separator();
+                            ui.label(dim(format!("{}: {}", tr("arclet.status.component"), read.component.as_deref().unwrap_or(EMPTY))));
+                        }
+                        ui.separator();
+                        ui.label(dim(format!("{}: {}", tr("arclet.status.selected"), read.selected)));
+                        ui.separator();
+                        for chip in visible_chips(density) {
+                            let state = chip_state(chip, settings);
+                            let response = ui
+                                .add_enabled_ui(state.enabled, |ui| {
+                                    ui_kit::button(
+                                        ui,
+                                        RichText::new(tr(chip.label_id())).size(tokens.font_body),
+                                        if state.on { Button::SmallSelected } else { Button::Small },
+                                    )
+                                })
+                                .inner
+                                .on_hover_text(tr(tooltip_id(chip, state)));
+                            if response.clicked() {
+                                clicked = Some(chip);
+                            }
+                        }
+                    });
+                });
         });
     if let Some((command, params)) = clicked.and_then(|chip| click(chip, settings))
         && let Err(error) = app.run(command, params)
@@ -228,6 +264,17 @@ mod tests {
                 assert_eq!(click(chip, open), None, "{chip:?} sends nothing");
                 assert_eq!(tooltip_id(chip, chip_state(chip, open)), "arclet.status.not_available");
             }
+        }
+    }
+
+    #[test]
+    fn compact_status_never_advertises_unsupported_snap_modes() {
+        let compact: Vec<_> = visible_chips(Density::Compact).collect();
+        assert_eq!(compact, [Chip::GridSnap]);
+        let full: Vec<_> = visible_chips(Density::Full).collect();
+        assert_eq!(full.len(), Chip::OBJECT_SNAPS.len() + Chip::MODES.len());
+        for chip in compact {
+            assert_eq!(backing(chip), Some(Backing::SketchGridSnap));
         }
     }
 
