@@ -1,0 +1,69 @@
+name: Arclet viewport performance (software GPU)
+
+# Deliberately isolated from the app build/release workflow. A Linux runner normally
+# provides Mesa lavapipe (CPU-executed Vulkan), *not* a hardware GPU.
+on:
+  push:
+    branches:
+      - perf/arclet-rendering
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: arclet-viewport-bench-${{ github.ref }}
+  # Keep pre-change baseline runs intact when the optimized branch advances.
+  cancel-in-progress: false
+
+jobs:
+  mesa-software:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: arclet-viewport-bench
+      - name: Install Mesa Vulkan software renderer and system build libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mesa-vulkan-drivers vulkan-tools libxkbcommon-dev libwayland-dev libx11-dev
+      - name: Select lavapipe explicitly (do not mislabel hardware GPUs)
+        shell: bash
+        run: |
+          set -euo pipefail
+          icd="$(find /usr/share/vulkan/icd.d -maxdepth 1 -name 'lvp_icd*.json' -print -quit)"
+          test -n "$icd" || { echo "::error::Lavapipe ICD not available; no software GPU measurement"; exit 1; }
+          echo "VK_DRIVER_FILES=$icd" >> "$GITHUB_ENV"
+          echo "VK_ICD_FILENAMES=$icd" >> "$GITHUB_ENV"
+          echo "WGPU_BACKEND=vulkan" >> "$GITHUB_ENV"
+          echo "ARCLET_BENCH_POLICY=software" >> "$GITHUB_ENV"
+          echo "Software Vulkan ICD: $icd"
+          vulkaninfo --summary || true
+      - name: Build reproducible viewport probe
+        run: cargo build --release --locked -p solidcraft-gpu --example arclet_viewport_bench
+      - name: Measure small / medium / large (separate processes)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p bench-results/software
+          for scene in small medium large; do
+            echo "Measuring $scene with software Vulkan"
+            ./target/release/examples/arclet_viewport_bench "$scene" | tee "bench-results/software/$scene.json"
+          done
+      - name: Check reference-image cache regression (CPU-only unit test)
+        # The test never needs a physical GPU and checks pixel-version reuse, geometry
+        # invalidation, and opacity invalidation.
+        run: cargo test --release --locked -p solidcraft-gpu --lib reference_image_quad_buffers_have_exact_geometry_keys
+      - name: Verify instanced LOD choice matches the slice search
+        run: cargo test --release --locked -p solidcraft-gpu --lib streaming_lod_uses_identical_levels_to_slice_search
+      - name: Upload per-scene metrics
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: arclet-software-vulkan-metrics
+          path: bench-results/software/*.json
+          retention-days: 14
+          if-no-files-found: warn
