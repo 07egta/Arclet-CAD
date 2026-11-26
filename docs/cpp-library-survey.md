@@ -1,3 +1,5 @@
+> **Superseded:** the owner decided on Rust only (see [cpp-optional.md](cpp-optional.md)). This survey is kept for its licence notes; its USE/AVOID verdicts no longer mean "add the C++ library".
+
 # C/C++ library survey for Arclet CAD
 
 Date of survey: 2026-11-02. Licences were read from each project's README, LICENSE page or the licence text as returned by the web fetch on that date. Where a licence text could not be retrieved, the row says so.

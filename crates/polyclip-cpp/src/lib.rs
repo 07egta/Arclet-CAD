@@ -1,11 +1,7 @@
-//! Optional polygon offset and boolean spike.
+//! Polygon offset and boolean, pure Rust.
 //!
-//! The default build is pure Rust and handles convex polygons only: offsetting, and intersection
-//! of two convex polygons. Other inputs and operations return [`Error::Unsupported`].
-//!
-//! With the `clipper2` feature the same functions call Clipper2 (BSL-1.0) through a small C++
-//! shim, and every polygon and operation is supported. That path is off by default and never in
-//! wasm builds. See docs/cpp-optional.md.
+//! Handles convex polygons only: offsetting, and intersection of two convex polygons. Other
+//! inputs and operations return [`Error::Unsupported`]. There is no C++ backend (Rust only).
 //!
 //! Units are whatever the caller uses (millimetres in CAD). Inputs are limited to
 //! [`MAX_POINTS`] points per ring and coordinates or offsets of magnitude [`MAX_COORD`].
@@ -13,13 +9,8 @@
 #![deny(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-#[cfg(feature = "clipper2")]
-mod cpp;
 pub mod pure;
 
-#[cfg(feature = "clipper2")]
-pub use cpp::{boolean, offset_polygon};
-#[cfg(not(feature = "clipper2"))]
 pub use pure::{boolean, offset_polygon};
 
 /// A point in the plane.
@@ -53,14 +44,11 @@ pub enum Error {
     /// The active backend does not implement this case.
     #[error("not supported by the {backend} backend: {what}")]
     Unsupported { backend: &'static str, what: &'static str },
-    /// The C++ backend failed.
-    #[error("clipper2 backend failed: {0}")]
-    Backend(&'static str),
 }
 
 /// Name of the backend that [`offset_polygon`] and [`boolean`] use in this build.
 pub fn backend() -> &'static str {
-    if cfg!(feature = "clipper2") { "clipper2" } else { "pure-rust" }
+    "pure-rust"
 }
 
 /// Checks one ring: at least three points, at most [`MAX_POINTS`], finite, within [`MAX_COORD`].
