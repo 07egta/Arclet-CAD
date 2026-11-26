@@ -1,0 +1,43 @@
+name: Arclet AI automation
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/arclet-ai-automation.yml"
+      - "crates/mcp/**"
+      - "crates/ui-egui/src/control.rs"
+      - "apps/solidcraft-cli/tests/run_results.rs"
+      - "examples/ai-automation-tube.json"
+      - "docs/mcp.md"
+      - "docs/control-protocol.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: arclet-ai-automation-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  protocol-and-replay:
+    name: MCP guards and CLI replay
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Reuse Cargo cache
+        uses: Swatinem/rust-cache@v2
+      - name: Revision-tagged MCP inspection and atomic batch tests
+        run: |
+          cargo test --locked -p solidcraft-mcp --lib ai_state_snapshot_exposes_revision_and_optional_inventories
+          cargo test --locked -p solidcraft-mcp --lib guarded_ai_batch
+          cargo test --locked -p solidcraft-mcp --lib ai_headless_circle_extrude_resize_hole_save_reload_and_stl
+          cargo test --locked -p solidcraft-mcp --lib ai_command_errors_are_structured_and_shell_execution_is_not_exposed
+      - name: Deterministic headless CLI recipe and STL
+        run: cargo test --locked -p solidcraft-cli --test run_results ai_automation_recipe_replays_from_a_clean_process_and_roundtrips_through_stl
+      - name: Desktop queued precondition test
+        run: cargo test --locked -p solidcraft-ui-egui --lib engine_batch_rejects_stale_ai_revision_atomically
