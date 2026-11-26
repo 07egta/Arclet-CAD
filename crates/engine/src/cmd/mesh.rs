@@ -23,6 +23,10 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("mesh.convert", "Convert Mesh", convert)
         .icon("import")
         .params("body?: mesh body name (default: the selected mesh body); tolerance?: length expression (default 0.05 mm): reconstruct a closed constant-section mechanical mesh as editable planar and cylindrical faces, with a parametric timeline feature in the mesh body's owning component (the active component must be that component or an ancestor; otherwise activate the named component first); the active component is unchanged; name?"),
+    CommandSpec::new("mesh.repair_preview", "Preview Mesh Repair", repair_preview)
+        .icon("inspect")
+        .noundo()
+        .params("body?: imported mesh name (default selected), tolerance?: length (default 0 mm). Returns unchanged source and independent before/after diagnostic reports for exact duplicate and degenerate triangle removal. Does not modify the design."),
     CommandSpec::new("mesh.check", "Check Mesh", check)
         .icon("inspect")
         .noundo()
@@ -91,17 +95,78 @@ fn check(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(report)
 }
 
+
+/// Read-only preview of conservative triangle cleanup. The original document and
+/// source arrays remain intact even when the result is still not a closed mesh.
+fn repair_preview(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "mesh.repair_preview";
+    let tolerance = match p.get("tolerance") {
+        None | Some(Value::Null) => "0 mm".to_owned(),
+        Some(_) => expr(p, "tolerance").ok_or_else(|| bad(cmd, "invalid tolerance"))?,
+    };
+    let tolerance = s.doc.eval(&tolerance, Kind::Length).map_err(|e| bad(cmd, format!("tolerance: {e}")))?;
+    if !tolerance.is_finite() || !(0.0..=MAX_CHECK_TOLERANCE).contains(&tolerance) {
+        return Err(bad(cmd, "tolerance must be finite and non-negative"));
+    }
+    let name = target(s, p, cmd)?;
+    let state = s.model.state();
+    let source = state.body(&name).ok_or_else(|| bad(cmd, format!("no body `{name}`")))?;
+    let (positions, triangles) = source.body.triangle_mesh().ok_or_else(|| bad(cmd, "the body must be an imported triangle mesh"))?;
+    let before = analyze(positions, triangles, tolerance);
+    let mut seen = HashSet::new();
+    let mut candidate = Vec::with_capacity(triangles.len());
+    let mut removed_degenerate = 0usize;
+    let mut removed_duplicate = 0usize;
+    for t in triangles {
+        let (Some(&a), Some(&b), Some(&c)) =
+            (positions.get(t[0] as usize), positions.get(t[1] as usize), positions.get(t[2] as usize))
+        else {
+            removed_degenerate += 1;
+            continue;
+        };
+        if t[0] == t[1] || t[1] == t[2] || t[2] == t[0] || flat(a, b, c) {
+            removed_degenerate += 1;
+            continue;
+        }
+        // Facets are identical only when all three vertex indices match,
+        // regardless of winding. Near-coincident points are NOT moved.
+        let mut key = *t;
+        key.sort_unstable();
+        if seen.insert(key) {
+            candidate.push(*t);
+        } else {
+            removed_duplicate += 1;
+        }
+    }
+    let after = analyze(positions, &candidate, tolerance);
+    let certified_by_topology = after["closed"] == true;
+    Ok(json!({
+        "body": name, "mode": "preview_only", "changed_document": false,
+        "before": before, "after": after, "removed_degenerate_triangles": removed_degenerate,
+        "removed_duplicate_faces": removed_duplicate, "max_vertex_displacement_mm": 0.0,
+        "topology_closed_after_cleanup": certified_by_topology,
+        "limitations": "No output file, hole filling, B-rep healing, self-intersection certification or source mutation. A closed topology is not a certified solid."
+    }))
+}
+
 /// The integrity report of a triangle mesh. Pure, read-only, and bounded by the two slices: a
 /// triangle that names a vertex that is not there is counted as degenerate and kept out of the
 /// topology, so no index is ever used unchecked.
 pub(crate) fn analyze(positions: &[Vec3], triangles: &[[u32; 3]], tolerance: f64) -> Value {
     let (welded, unique, duplicate_vertices) = weld_vertices(positions, tolerance);
     let mut degenerate_triangles = 0usize;
+    let mut invalid_vertex_references = 0usize;
+    let mut duplicate_faces = 0usize;
+    let mut winding_conflicts = 0usize;
+    let mut short_edges = 0usize;
+    let mut seen_faces: HashSet<[usize; 3]> = HashSet::new();
+    let mut oriented: HashMap<(usize, usize), (u32, u32)> = HashMap::new();
     let mut edges: HashMap<(usize, usize), u32> = HashMap::new();
     for triangle in triangles {
         let [a, b, c] = *triangle;
         let (Some(&pa), Some(&pb), Some(&pc)) = (positions.get(a as usize), positions.get(b as usize), positions.get(c as usize)) else {
             degenerate_triangles += 1;
+            invalid_vertex_references += 1;
             continue;
         };
         if a == b || b == c || c == a || flat(pa, pb, pc) {
@@ -116,10 +181,19 @@ pub(crate) fn analyze(positions: &[Vec3], triangles: &[[u32; 3]], tolerance: f64
             // Welding collapsed the triangle: it has no side to count.
             continue;
         }
-        for (u, v) in [(wa, wb), (wb, wc), (wc, wa)] {
+        let mut face = [wa, wb, wc];
+        face.sort_unstable();
+        if !seen_faces.insert(face) {
+            duplicate_faces += 1;
+        }
+        for (u, v, distance) in [(wa, wb, pa.dist(pb)), (wb, wc, pb.dist(pc)), (wc, wa, pc.dist(pa))] {
+            if tolerance > 0.0 && distance < tolerance { short_edges += 1; }
             let key = if u < v { (u, v) } else { (v, u) };
             let n = edges.entry(key).or_insert(0);
             *n = n.saturating_add(1);
+            let counts = oriented.entry(key).or_default();
+            if u < v { counts.0 = counts.0.saturating_add(1); }
+            else { counts.1 = counts.1.saturating_add(1); }
         }
     }
     let mut naked_edges = 0usize;
@@ -131,16 +205,25 @@ pub(crate) fn analyze(positions: &[Vec3], triangles: &[[u32; 3]], tolerance: f64
             _ => non_manifold_edges += 1,
         }
     }
+    for (key, &(forward, reverse)) in &oriented {
+        if edges.get(key) == Some(&2) && (forward != 1 || reverse != 1) {
+            winding_conflicts += 1;
+        }
+    }
     let boundary_loops = boundary_loops(&edges, unique);
     json!({
         "vertices": positions.len(),
         "triangles": triangles.len(),
         "degenerate_triangles": degenerate_triangles,
+        "invalid_vertex_references": invalid_vertex_references,
+        "duplicate_faces": duplicate_faces,
+        "winding_conflicts": winding_conflicts,
+        "short_edges": short_edges,
         "duplicate_vertices": duplicate_vertices,
         "naked_edges": naked_edges,
         "non_manifold_edges": non_manifold_edges,
         "boundary_loops": boundary_loops,
-        "closed": !triangles.is_empty() && naked_edges == 0 && non_manifold_edges == 0,
+        "closed": !triangles.is_empty() && degenerate_triangles == 0 && duplicate_faces == 0 && winding_conflicts == 0 && naked_edges == 0 && non_manifold_edges == 0,
     })
 }
 
@@ -266,5 +349,93 @@ fn root(parent: &mut [usize], mut x: usize) -> usize {
             *slot = up;
         }
         x = up;
+    }
+}
+
+#[cfg(test)]
+mod model_healing_tests {
+    use super::*;
+
+    fn tetra() -> (Vec<Vec3>, Vec<[u32; 3]>) {
+        (
+            vec![
+                Vec3::new(0.0, 0.0, 0.0),
+                Vec3::new(1.0, 0.0, 0.0),
+                Vec3::new(0.0, 1.0, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+            ],
+            vec![[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]],
+        )
+    }
+
+    #[test]
+    fn healthy_solid_has_no_unresolved_topological_defects() {
+        let (p, t) = tetra();
+        let r = analyze(&p, &t, 0.0);
+        assert_eq!(r["closed"], true, "{r}");
+        for k in ["duplicate_faces", "invalid_vertex_references", "winding_conflicts", "naked_edges", "non_manifold_edges"] {
+            assert_eq!(r[k], 0, "{k}: {r}");
+        }
+    }
+
+    #[test]
+    fn duplicated_face_never_claims_watertight_solid() {
+        let (p, mut t) = tetra();
+        t.push(t[0]);
+        let r = analyze(&p, &t, 0.0);
+        assert_eq!(r["duplicate_faces"], 1, "{r}");
+        assert_eq!(r["closed"], false, "{r}");
+        assert_eq!(r["non_manifold_edges"], 3, "{r}");
+    }
+
+    #[test]
+    fn inverted_facet_is_reported_not_silently_accepted() {
+        let (p, mut t) = tetra();
+        t[0].swap(0, 1);
+        let r = analyze(&p, &t, 0.0);
+        assert_eq!(r["winding_conflicts"], 3, "{r}");
+        assert_eq!(r["closed"], false, "{r}");
+    }
+
+    #[test]
+    fn open_edge_and_non_manifold_edge_are_distinguished() {
+        let (p, mut t) = tetra();
+        t.pop();
+        let r = analyze(&p, &t, 0.0);
+        assert_eq!(r["naked_edges"], 3, "{r}");
+        assert_eq!(r["non_manifold_edges"], 0, "{r}");
+        assert_eq!(r["closed"], false);
+    }
+
+    #[test]
+    fn degenerate_and_invalid_references_are_not_certified() {
+        let (p, mut t) = tetra();
+        t.push([0, 0, 1]);
+        t.push([1, 2, 9999]);
+        let r = analyze(&p, &t, 0.0);
+        assert_eq!(r["degenerate_triangles"], 2, "{r}");
+        assert_eq!(r["invalid_vertex_references"], 1, "{r}");
+        assert_eq!(r["closed"], false, "{r}");
+    }
+
+    #[test]
+    fn near_gap_is_a_tolerance_hypothesis_not_an_exact_repair() {
+        let (mut p, mut t) = tetra();
+        p.push(Vec3::new(0.0, 0.0, 0.00001));
+        t[1][0] = 4;
+        let exact = analyze(&p, &t, 0.0);
+        let close = analyze(&p, &t, 0.001);
+        assert_eq!(exact["closed"], false);
+        assert_eq!(close["duplicate_vertices"], 1);
+        // A check made with tolerance is not evidence that coordinates were moved.
+        assert_eq!(p[4], Vec3::new(0.0, 0.0, 0.00001));
+    }
+
+    #[test]
+    fn large_gap_remains_open_at_a_small_tolerance() {
+        let (mut p, mut t) = tetra();
+        p.push(Vec3::new(0.0, 0.0, 0.25));
+        t[1][0] = 4;
+        assert_eq!(analyze(&p, &t, 0.001)["closed"], false);
     }
 }
