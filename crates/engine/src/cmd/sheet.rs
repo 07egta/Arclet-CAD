@@ -516,6 +516,26 @@ fn rules(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "sheet.manage_rules";
     let name = str_(p, "name").map(str::trim).filter(|n| !n.is_empty() && n.len() <= 128).ok_or_else(|| bad(cmd, "`name` is required"))?.to_string();
     if bool_(p, "delete").unwrap_or(false) {
+        // A selected sheet rule is part of a feature's parametric definition.
+        // Deleting it would otherwise make sheet_rule silently fall back to a
+        // different rule on the next evaluation (changing material thickness,
+        // bend allowance and exported cutting geometry without an edit).
+        // Check all timeline features, including rolled-back ones, first.
+        let implicit = s.doc.sheet_rule(None).name == name;
+        if let Some(feature) = s.doc.features.iter().find(|feature| {
+            let rule = match &feature.kind {
+                FeatureKind::SheetBase { rule, .. }
+                | FeatureKind::SheetContour { rule, .. }
+                | FeatureKind::SheetConvert { rule, .. } => rule,
+                _ => return false,
+            };
+            rule.as_deref() == Some(name.as_str()) || (rule.is_none() && implicit)
+        }) {
+            return Err(bad(cmd, format!(
+                "sheet metal rule `{name}` is used by feature `{}`; assign a different rule to its sheet feature before deleting it",
+                feature.name
+            )));
+        }
         let doc = s.doc_mut();
         let before = doc.sheet.rules.len();
         doc.sheet.rules.retain(|r| r.name != name);

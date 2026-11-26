@@ -614,3 +614,53 @@ fn bend_lines_can_be_left_out_and_everything_put_on_layer_0() {
         assert!(s.execute("sheet.export_dxf", &bad).is_err(), "{bad}");
     }
 }
+
+
+/// A fabrication DXF is checked against an independent analytic blank width,
+/// not only against the in-memory sheet table that generated the same file.
+#[test]
+fn arclet_ninety_degree_dxf_outline_reimports_at_its_analytic_flat_dimensions() {
+    let mut sheet = plate_in(sheet_of_2mm(), &[]);
+    run(&mut sheet, "sheet.flange", json!({
+        "edges": [[50, 0, 2]], "height": "20 mm", "angle": "90 deg",
+    }));
+    for (radius, k) in [(1.0, 0.5), (3.0, 0.4)] {
+        if radius != 1.0 {
+            run(&mut sheet, "sheet.manage_rules", json!({
+                "name": "Sheet2", "bend_radius": "3 mm", "k_factor": "0.4",
+            }));
+        }
+        let allowance = std::f64::consts::FRAC_PI_2 * (radius + k * 2.0);
+        let setback = radius + 2.0;
+        let blank_height = 60.0 - setback + allowance + 20.0 - setback;
+        let pattern = run(&mut sheet, "sheet.flat_pattern", json!({}));
+        let height = pattern["flat_size_mm"][1].as_f64().unwrap_or(f64::NAN);
+        assert!((height - blank_height).abs() < 1e-6, "sheet blank: {height} != {blank_height}");
+
+        let full = export(&mut sheet, json!({}));
+        let entities = entities(&full);
+        let bends: Vec<_> = entities.iter().filter(|e| matches!(layer_of(e).as_str(), "BEND_UP" | "BEND_DOWN")).collect();
+        assert_eq!(bends.len(), 1, "one 90-degree hinge on the blank");
+        let bend = bends[0];
+        assert_eq!(bend.0, "LINE");
+        let bend_len = point(bend, 10).dist(point(bend, 11));
+        assert!((bend_len - 100.0).abs() < 1e-6, "bend length {bend_len}");
+
+        let edges: Vec<_> = entities.iter().filter(|e| layer_of(e) == "OUTLINE").collect();
+        assert!(!edges.is_empty(), "DXF must contain the actual blank perimeter");
+        assert!(edges.iter().all(|e| e.0 == "LINE"), "unrelieved rectangle has only straight edges");
+        let points: Vec<Vec2> = edges.iter().flat_map(|e| [point(e, 10), point(e, 11)]).collect();
+        let width = points.iter().map(|p| p.x).fold(f64::NEG_INFINITY, f64::max)
+            - points.iter().map(|p| p.x).fold(f64::INFINITY, f64::min);
+        let depth = points.iter().map(|p| p.y).fold(f64::NEG_INFINITY, f64::max)
+            - points.iter().map(|p| p.y).fold(f64::INFINITY, f64::min);
+        assert!((width - 100.0).abs() < 1e-6, "DXF outline width {width}");
+        assert!((depth - blank_height).abs() < 1e-6, "DXF outline height {depth}");
+
+        // Do not import fold indicators as sketch geometry: laser-cut DXFs omit
+        // bend lines, while retaining the full, closed cutting perimeter.
+        let cutting = export(&mut sheet, json!({"bend_lines": false}));
+        let area = reimported_areas(&cutting).first().copied().unwrap_or(f64::NAN);
+        assert!((area - 100.0 * blank_height).abs() < 1e-5, "DXF roundtrip area {area}");
+    }
+}

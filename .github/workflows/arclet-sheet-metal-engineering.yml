@@ -1,0 +1,52 @@
+name: Arclet sheet-metal engineering
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'crates/doc/src/sheet.rs'
+      - 'crates/engine/src/cmd/sheet.rs'
+      - 'crates/engine/src/cmd/sheet_tests.rs'
+      - 'crates/engine/src/cmd/sheet_dxf_tests.rs'
+      - 'docs/arclet-sheet-metal-engineering.md'
+      - '.github/workflows/arclet-sheet-metal-engineering.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: arclet-sheet-metal-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sheet-metal:
+    name: Analytical bend / flat pattern / DXF verification
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Test Arclet rule, radius, bend and persistence regressions
+        run: cargo test --profile ci --locked -p solidcraft-doc -p solidcraft-engine --lib arclet_
+      - name: Measure actual DXF blank and re-import its perimeter
+        run: cargo test --profile ci --locked -p solidcraft-engine --lib arclet_ninety_degree_dxf_outline_reimports_at_its_analytic_flat_dimensions
+      - name: Existing analytic 90-degree K-factor oracle
+        run: cargo test --profile ci --locked -p solidcraft-engine --lib base_and_edge_flange_follow_the_k_factor
+      - name: Existing flat DXF roles and cutouts
+        run: cargo test --profile ci --locked -p solidcraft-engine --lib the_flat_pattern_is_on_layers_by_role_and_inner_contours_come_first
+      - name: Existing sheet metal solid and neutral-axis reference
+        run: cargo test --profile ci --locked -p solidcraft-doc --lib edge_flange_matches_fusion
+      - name: Existing multi-bend flange and edited sketch test
+        run: cargo test --profile ci --locked -p solidcraft-engine --lib an_edge_flange_can_carry_further_bends
+      - name: Existing U-channel conversion and fold-back
+        run: cargo test --profile ci --locked -p solidcraft-engine --lib a_channel_with_its_bends_modelled_folds_back_into_itself_under_its_own_radius
+      - name: Existing notched cutting geometry and flat DXF
+        run: cargo test --profile ci --locked -p solidcraft-engine --lib edge_notch_uses_the_same_material_boundary_in_solid_flat_and_dxf
+      - name: Existing box corner relief across folded and DXF
+        run: cargo test --profile ci --locked -p solidcraft-engine --lib corner_reliefs_of_the_rule_reach_the_part_the_flat_pattern_and_the_dxf
+      - name: Clippy for document and engine
+        run: cargo clippy --profile ci --locked -p solidcraft-doc -p solidcraft-engine --lib -- -D warnings
