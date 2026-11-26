@@ -265,6 +265,25 @@ fn queue_is_bounded_and_cancelled_entries_release_their_reservations() {
 }
 
 #[test]
+fn stale_completed_image_requires_both_job_identity_and_current_scene_generation() {
+    let host = CpuHost::cooperative();
+    let original = host.submit(id(305, 1), 41, empty(), request()).unwrap();
+    drain(&host);
+    assert_eq!(original.status().unwrap().progress.phase, Phase::Completed);
+    assert!(original.frame().unwrap().is_some(), "historical results remain inspectable");
+    assert!(original.frame_for(id(305, 1), 42).unwrap().is_none(), "old scene generation cannot publish");
+    assert!(original.frame_for(id(305, 2), 41).unwrap().is_none(), "different job cannot publish");
+    assert!(original.preview_for(id(305, 1), 42).unwrap().is_none());
+    let current = original.frame_for(id(305, 1), 41).unwrap().unwrap();
+    assert_eq!(current.info.scene_generation, 41);
+    assert_eq!(current.info.job, id(305, 1));
+    assert_eq!(format!("{:x}", Sha256::digest(current.png())), current.info.png_sha256);
+    drop(current);
+    drop(original);
+    assert_eq!(host.admitted_bytes(), 0);
+}
+
+#[test]
 fn cancellation_while_encoding_cannot_publish_a_late_frame() {
     let host = CpuHost::cooperative();
     let job = host.submit(id(1, 1), 8, empty(), request()).unwrap();

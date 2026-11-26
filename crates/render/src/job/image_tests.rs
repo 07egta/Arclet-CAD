@@ -51,6 +51,46 @@ fn finish(mut task: ImageTask) -> Vec<u8> {
 }
 
 #[test]
+fn real_pbr_mesh_png_matches_linear_brdf_lighting_and_one_srgb_transfer() {
+    // Actual encoded PNG from a four-vertex ProductScene. This tests the
+    // renderer's material consumption, not just an independent BRDF helper.
+    let surfaces = [
+        crate::surface::OpaqueFinish::PolishedMetal.surface().unwrap(),
+        crate::surface::OpaqueFinish::SatinAluminium.surface().unwrap(),
+        crate::surface::OpaqueFinish::MattePlastic.surface().unwrap(),
+        crate::surface::OpaqueFinish::GlazedCeramic.surface().unwrap(),
+        crate::surface::OpaqueFinish::VarnishedWood.surface().unwrap(),
+    ];
+    let mut center_colors = Vec::new();
+    for surface in surfaces {
+        let mut body = square("Real PBR material plane", [255; 3], 1.0, Vec3::ZERO);
+        let mesh = Arc::make_mut(&mut body.mesh);
+        mesh.positions = vec![
+            Vec3::new(-10.0, -10.0, 0.0), Vec3::new(10.0, -10.0, 0.0),
+            Vec3::new(10.0, 10.0, 0.0), Vec3::new(-10.0, 10.0, 0.0),
+        ];
+        mesh.normals = vec![Vec3::Z; 4];
+        body.surface = Some(surface);
+        let mut input = request();
+        input.camera.set_view(StandardView::Top);
+        let png = finish(ImageTask::new(scene(vec![body]), input, CancelToken::default()).unwrap());
+        let image = image::load_from_memory(&png).unwrap().to_rgba8();
+        let expected_linear = crate::studio::shade(surface, Vec3::Z, Vec3::Z).unwrap();
+        let mapped = crate::studio::tone_map(expected_linear).unwrap();
+        let expected = [mapped.x, mapped.y, mapped.z].map(solidcraft_geom::srgb::encode8);
+        let center = image.get_pixel(32, 32).0;
+        for (actual, expected) in center.iter().take(3).zip(expected) {
+            assert!((i16::from(*actual) - i16::from(expected)).abs() <= 1, "opaque material output {center:?} is not the one-transfer PBR expectation: {expected}");
+        }
+        assert_eq!(center[3], 255);
+        assert!(center.iter().take(3).any(|c| *c > 0));
+        center_colors.push(center);
+    }
+    assert_ne!(center_colors[0], center_colors[2], "metal and plastic must have distinct rendered specular responses");
+    assert_ne!(center_colors[0], center_colors[1], "polished and satin metals must differ");
+}
+
+#[test]
 fn transparent_png_has_straight_srgb_colour_without_a_shared_edge_seam() {
     let scene = scene(vec![square("Glass", [220, 40, 20], 0.5, Vec3::ZERO)]);
     let png = finish(ImageTask::new(scene, request(), CancelToken::default()).unwrap());

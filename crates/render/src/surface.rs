@@ -138,6 +138,47 @@ impl OpaqueSurface {
     }
 }
 
+/// Art-direction starting points for opaque product renders. These are bounded,
+/// dimensionless, *linear-sRGB* reflectances and GGX roughness values, not measured
+/// optical constants, production-grade identifiers, grain textures or CAD materials.
+/// For clear/frosted glass, use the separate transmission/dielectric pipeline.
+/// A brushed finish additionally needs the existing anisotropic orientation path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OpaqueFinish {
+    SatinAluminium,
+    PolishedMetal,
+    MattePlastic,
+    GlossyPlastic,
+    UnglazedCeramic,
+    GlazedCeramic,
+    UntexturedWood,
+    VarnishedWood,
+}
+
+impl OpaqueFinish {
+    /// A validated original GGX/Schlick surface. No display transfer/exposure is
+    /// baked into its reflectance. Wood is intentionally *uniform* until the
+    /// caller supplies a proper texture and local mapping.
+    pub fn surface(self) -> Result<OpaqueSurface, SurfaceError> {
+        use OpaqueFinish::*;
+        let (base, metallic, roughness, ior, coat) = match self {
+            SatinAluminium => (Vec3::new(0.54, 0.57, 0.62), 1.0, 0.38, 1.5, None),
+            PolishedMetal => (Vec3::new(0.68, 0.72, 0.76), 1.0, 0.09, 1.5, None),
+            MattePlastic => (Vec3::new(0.12, 0.20, 0.32), 0.0, 0.82, 1.48, None),
+            GlossyPlastic => (Vec3::new(0.22, 0.025, 0.035), 0.0, 0.16, 1.49, None),
+            UnglazedCeramic => (Vec3::new(0.72, 0.66, 0.56), 0.0, 0.92, 1.50, None),
+            GlazedCeramic => (Vec3::new(0.76, 0.73, 0.68), 0.0, 0.30, 1.50, Some((0.75, 0.14, 1.50))),
+            UntexturedWood => (Vec3::new(0.36, 0.17, 0.07), 0.0, 0.75, 1.49, None),
+            VarnishedWood => (Vec3::new(0.28, 0.10, 0.035), 0.0, 0.48, 1.49, Some((0.55, 0.18, 1.49))),
+        };
+        let mut surface = OpaqueSurface::new(base, metallic, roughness, ior)?;
+        if let Some((weight, roughness, ior)) = coat {
+            surface = surface.with_clear_coat(crate::clear_coat::ClearCoat::new(weight, roughness, ior)?);
+        }
+        Ok(surface)
+    }
+}
+
 /// Exact piecewise sRGB decoding of an existing 8-bit color channel ([`solidcraft_geom::srgb::decode8`]).
 pub use solidcraft_geom::srgb::decode8 as srgb8_to_linear;
 
@@ -160,6 +201,38 @@ mod tests {
 
     fn surface(metallic: f64, roughness: f64, ior: f64) -> OpaqueSurface {
         OpaqueSurface::new(Vec3::new(0.8, 0.5, 0.2), metallic, roughness, ior).unwrap()
+    }
+
+    #[test]
+    fn product_finish_profiles_keep_linear_reflectance_and_correct_normal_fresnel() {
+        let finishes = [
+            OpaqueFinish::SatinAluminium, OpaqueFinish::PolishedMetal,
+            OpaqueFinish::MattePlastic, OpaqueFinish::GlossyPlastic,
+            OpaqueFinish::UnglazedCeramic, OpaqueFinish::GlazedCeramic,
+            OpaqueFinish::UntexturedWood, OpaqueFinish::VarnishedWood,
+        ];
+        for finish in finishes {
+            let surface = finish.surface().unwrap();
+            assert!(surface.base_color().is_finite());
+            assert!((MIN_ROUGHNESS..=1.0).contains(&surface.roughness()));
+            let normal = surface.normal_reflectance();
+            if surface.metallic() == 1.0 {
+                assert_eq!(normal, surface.base_color(), "{finish:?}");
+            } else {
+                let expected = ((surface.dielectric_ior() - 1.0) / (surface.dielectric_ior() + 1.0)).powi(2);
+                for c in [normal.x, normal.y, normal.z] {
+                    assert!((c - expected).abs() < 1e-15, "{finish:?}: {c}, {expected}");
+                }
+            }
+            // For one fixed geometry/lighting sample, a material recipe must
+            // give a finite, nonnegative linear response before display mapping.
+            let radiance = crate::studio::shade(surface, Vec3::Z, Vec3::Z).unwrap();
+            assert!(radiance.is_finite() && radiance.x >= 0.0 && radiance.y >= 0.0 && radiance.z >= 0.0);
+        }
+        assert!(OpaqueFinish::GlazedCeramic.surface().unwrap().clear_coat().is_some());
+        assert!(OpaqueFinish::VarnishedWood.surface().unwrap().clear_coat().is_some());
+        assert!(OpaqueFinish::UntexturedWood.surface().unwrap().clear_coat().is_none());
+        assert!(OpaqueFinish::GlossyPlastic.surface().unwrap().roughness() < OpaqueFinish::MattePlastic.surface().unwrap().roughness());
     }
 
     #[test]
