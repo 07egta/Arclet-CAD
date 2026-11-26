@@ -14,6 +14,21 @@ use crate::viewport::Proj;
 
 /// Most points the CPU viewport draws of all clouds together.
 const MAX_CPU_POINTS: usize = 100_000;
+/// Shared GPU upload budget across **all** visible scans, rather than per cloud.
+/// Limits temporary conversion and cached GPU point bytes during large imports.
+const MAX_GPU_POINTS: usize = 750_000;
+
+fn shared_stride(total: usize, budget: usize) -> usize {
+    total.div_ceil(budget).max(1)
+}
+
+fn sample_start(phase: usize, stride: usize) -> usize {
+    (stride - phase % stride) % stride
+}
+
+fn gpu_stride(total: usize) -> usize {
+    shared_stride(total, MAX_GPU_POINTS)
+}
 
 /// What a cloud's dots are made from: they are made again only when one of these changes.
 #[derive(Clone, PartialEq)]
@@ -21,6 +36,8 @@ struct Key {
     points: usize,
     colors: usize,
     len: usize,
+    stride: usize,
+    phase: usize,
     origin: [u64; 3],
     transform: [u64; 16],
     size: u64,
@@ -30,11 +47,13 @@ struct Key {
 }
 
 impl Key {
-    fn of(c: &PointCloud) -> Key {
+    fn of(c: &PointCloud, stride: usize, phase: usize) -> Key {
         Key {
             points: Arc::as_ptr(c.points.values()).cast::<f32>() as usize,
             colors: Arc::as_ptr(&c.colors.0).cast::<u8>() as usize,
             len: c.len(),
+            stride,
+            phase,
             origin: [c.origin.x, c.origin.y, c.origin.z].map(f64::to_bits),
             transform: std::array::from_fn(|i| c.transform[i / 4][i % 4].to_bits()),
             size: c.point_size.to_bits(),
@@ -51,11 +70,14 @@ thread_local! {
     static VERSION: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
-fn dots(c: &PointCloud) -> Vec<u8> {
-    let mut out = Vec::with_capacity(c.len() * crate::gpu::CLOUD_POINT_SIZE);
+fn dots(c: &PointCloud, stride: usize, phase: usize) -> Vec<u8> {
+    let start = sample_start(phase, stride);
+    let count = if start < c.len() { 1 + (c.len() - 1 - start) / stride } else { 0 };
+    let mut out = Vec::with_capacity(count * crate::gpu::CLOUD_POINT_SIZE);
     let size = c.point_size as f32;
     let shade = c.shade();
-    for (i, p) in c.points.iter().enumerate() {
+    for i in (start..c.len()).step_by(stride) {
+        let Some(p) = c.points.get(i) else { continue };
         // Placed in double precision: the cloud's origin may be far from the design's.
         let local = c.origin + solidcraft_engine::geom::Vec3::new(f64::from(p[0]), f64::from(p[1]), f64::from(p[2]));
         let w = solidcraft_engine::doc::apply_point(&c.transform, local);
@@ -66,13 +88,19 @@ fn dots(c: &PointCloud) -> Vec<u8> {
 
 /// The shown point clouds as GPU dots.
 pub fn gpu_points(app: &SolveApp) -> Vec<GpuPoints> {
-    let doc = &app.session.doc;
+    let shown: Vec<&PointCloud> = solidcraft_engine::view::shown_point_clouds(&app.session).collect();
+    let total = shown.iter().fold(0usize, |sum, c| sum.saturating_add(c.len()));
+    let stride = gpu_stride(total);
     DOTS.with(|m| {
         let mut m = m.borrow_mut();
-        m.retain(|id, _| doc.point_clouds.iter().any(|c| c.id == *id));
-        solidcraft_engine::view::shown_point_clouds(&app.session)
+        // Release large cached buffers when a scan is hidden, not just when deleted.
+        m.retain(|id, _| shown.iter().any(|c| c.id == *id));
+        let mut base = 0usize;
+        shown.into_iter()
             .map(|c| {
-                let key = Key::of(c);
+                let phase = base % stride;
+                base = base.saturating_add(c.len());
+                let key = Key::of(c, stride, phase);
                 if let Some((k, version, bytes)) = m.get(&c.id)
                     && *k == key
                 {
@@ -82,7 +110,7 @@ pub fn gpu_points(app: &SolveApp) -> Vec<GpuPoints> {
                     v.set(v.get() + 1);
                     v.get()
                 });
-                let bytes = Arc::new(dots(c));
+                let bytes = Arc::new(dots(c, stride, phase));
                 m.insert(c.id, (key, version, bytes.clone()));
                 GpuPoints { id: c.id, version, bytes }
             })
@@ -96,16 +124,19 @@ pub fn show(app: &SolveApp, painter: &Painter, proj: &Proj) {
         return;
     }
     let clouds: Vec<&PointCloud> = solidcraft_engine::view::shown_point_clouds(&app.session).collect();
-    let total: usize = clouds.iter().map(|c| c.len()).sum();
+    let total = clouds.iter().fold(0usize, |sum, c| sum.saturating_add(c.len()));
     if total == 0 {
         return;
     }
-    let stride = total.div_ceil(MAX_CPU_POINTS).max(1);
+    let stride = shared_stride(total, MAX_CPU_POINTS);
     let mut shapes = Vec::new();
+    let mut base = 0usize;
     for c in clouds {
+        let start = sample_start(base % stride, stride);
+        base = base.saturating_add(c.len());
         let r = (c.point_size as f32 / painter.ctx().pixels_per_point() * 0.5).max(0.5);
         let shade = c.shade();
-        for i in (0..c.len()).step_by(stride) {
+        for i in (start..c.len()).step_by(stride) {
             let Some(p) = c.world_point(i) else { continue };
             let Some(q) = proj.to_screen(p) else { continue };
             shapes.push(Shape::rect_filled(egui::Rect::from_center_size(q, egui::vec2(r * 2.0, r * 2.0)), 0.0, crate::theme::model_color(shade(i))));
@@ -117,6 +148,25 @@ pub fn show(app: &SolveApp, painter: &Painter, proj: &Proj) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gpu_sampling_budget_is_shared_and_bounded() {
+        assert_eq!(gpu_stride(0), 1);
+        assert_eq!(gpu_stride(2), 1);
+        assert_eq!(gpu_stride(MAX_GPU_POINTS), 1);
+        assert_eq!(gpu_stride(MAX_GPU_POINTS + 1), 2);
+        assert_eq!(gpu_stride(10_000_000), 14);
+        // 1,000,000 tiny one-point clouds are globally sampled to at most 500,000
+        // dots: an identical stride restarted at every cloud would draw them all.
+        assert_eq!(gpu_stride(1_000_000), 2);
+        let count: usize = (0..1_000_000).filter(|i| sample_start(*i % 2, 2) == 0).count();
+        assert_eq!(count, 500_000);
+        let budget = 100_000;
+        let stride = shared_stride(1_000_000, budget);
+        let visible: usize = (0..1_000_000).filter(|i| sample_start(*i % stride, stride) == 0).count();
+        assert!(visible <= budget);
+        // Deterministic display sampling does not change stored scan data.
+    }
 
     #[test]
     fn dots_follow_the_cloud_and_are_made_again_only_when_it_changes() {

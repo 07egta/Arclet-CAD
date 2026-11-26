@@ -1,0 +1,8 @@
+{
+  "en": {
+    "cmd.pointcloud_analyze": "Analyze Point Cloud"
+  },
+  "ja": {
+    "cmd.pointcloud_analyze": "点群を解析"
+  }
+}
