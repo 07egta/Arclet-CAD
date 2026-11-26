@@ -892,3 +892,145 @@ fn a_similarity_moves_each_kind_of_segment_exactly() {
         assert!(Similarity2::new(scale, angle, shift).is_none(), "{scale} {angle} {shift:?}");
     }
 }
+
+
+/// Mission 30: a model can be accurately described far from the global origin.
+/// Every box edge and origin below has exactly representable integer coordinates.
+fn ultimate_quality_skewed_box(origin: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Mesh {
+    let mut mesh = cube_mesh(1.0);
+    for p in &mut mesh.positions {
+        *p = origin + a * p.x + b * p.y + c * p.z;
+    }
+    mesh
+}
+
+#[test]
+fn ultimate_quality_mesh_volume_is_translation_invariant() {
+    let a = Vec3::new(7.0, 3.0, 2.0);
+    let b = Vec3::new(1.0, 5.0, 2.0);
+    let c = Vec3::new(2.0, 1.0, 6.0);
+    let expected_volume = a.dot(b.cross(c));
+    assert_eq!(expected_volume, 172.0);
+    for origin in [
+        Vec3::ZERO,
+        Vec3::new(1.0e9, 1.0e9, 1.0e9),
+        Vec3::new(-1.0e12, 1.0e12, -1.0e12),
+    ] {
+        let measured = ultimate_quality_skewed_box(origin, a, b, c).measure();
+        let expected_centroid = origin + (a + b + c) * 0.5;
+        assert!(
+            (measured.volume - expected_volume).abs() <= 1e-9,
+            "origin={origin:?}: volume {}, analytical {}",
+            measured.volume,
+            expected_volume
+        );
+        assert!(
+            measured.centroid.dist(expected_centroid) <= 1e-4,
+            "origin={origin:?}: centroid {:?}, expected {expected_centroid:?}",
+            measured.centroid
+        );
+    }
+}
+
+#[test]
+fn ultimate_quality_mesh_measure_deterministic_bounded_affine_cases() {
+    // Deterministic property-based corpus: 256 finite integer coefficient cases.
+    // No unbounded allocation, wall-clock loop, or external fuzzing dependency.
+    let mut seed = 0x4a3f_27d0_9c8b_16e5_u64;
+    let mut coordinate = || {
+        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        ((seed >> 32) % 25) as f64 - 12.0
+    };
+    let mut tested = 0;
+    for i in 0..256 {
+        let a = Vec3::new(coordinate(), coordinate(), coordinate());
+        let b = Vec3::new(coordinate(), coordinate(), coordinate());
+        let c = Vec3::new(coordinate(), coordinate(), coordinate());
+        let expected = a.dot(b.cross(c));
+        if expected == 0.0 { continue; }
+        let origin = match i % 3 {
+            0 => Vec3::ZERO,
+            1 => Vec3::new(1.0e9, -1.0e9, 1.0e9),
+            _ => Vec3::new(-1.0e12, 1.0e12, -1.0e12),
+        };
+        let measured = ultimate_quality_skewed_box(origin, a, b, c).measure();
+        assert!(
+            (measured.volume - expected).abs() <= 1e-9,
+            "case={i}, origin={origin:?}, volume={}, analytic={expected}",
+            measured.volume
+        );
+        assert!(
+            measured.centroid.dist(origin + (a + b + c) * 0.5) <= 1e-4,
+            "case={i}, centroid={:?}",
+            measured.centroid
+        );
+        tested += 1;
+    }
+    assert!(tested >= 200, "degenerate fixtures dominated the finite corpus");
+}
+
+#[test]
+fn ultimate_quality_finite_aabb_midpoints_at_f64_extremes() {
+    // Adding two positive 1e308 endpoints overflows although their average is finite.
+    let two = Aabb2 { min: Vec2::new(1.0e308, -1.0e308), max: Vec2::new(1.0e308, 1.0e308) };
+    assert_eq!(two.center(), Vec2::new(1.0e308, 0.0));
+    let three = Aabb3 {
+        min: Vec3::new(1.0e308, -1.0e308, 1.0e308),
+        max: Vec3::new(1.0e308, 1.0e308, 1.0e308),
+    };
+    assert_eq!(three.center(), Vec3::new(1.0e308, 0.0, 1.0e308));
+    assert_eq!(Aabb2::EMPTY.center(), Vec2::ZERO);
+    assert_eq!(Aabb3::EMPTY.center(), Vec3::ZERO);
+}
+
+
+#[test]
+fn ultimate_quality_vec3_norm_stays_finite_across_extreme_scales() {
+    // Hypot is an independent scaled-norm oracle, not sqrt(x*x+y*y+z*z).
+    // The squared norm would overflow at 1e200 and underflow at 1e-200.
+    for scale in [1.0e-200, 1.0e-160, 1.0, 1.0e154, 1.0e200] {
+        let vector = Vec3::new(scale, -scale, scale);
+        let actual = vector.len();
+        let reference = scale.hypot(scale).hypot(scale);
+        assert!(
+            actual.is_finite() && actual > 0.0,
+            "finite coordinate scale {scale} gave {actual}"
+        );
+        assert!(
+            ((actual - reference) / reference).abs() <= 2e-15,
+            "scale={scale}: computed {actual}, reference {reference}"
+        );
+    }
+    assert_eq!(Vec3::ZERO.len(), 0.0);
+    assert!(Vec3::new(f64::NAN, 0.0, 0.0).len().is_nan());
+}
+
+
+#[test]
+fn ultimate_quality_aabb_center_preserves_opposite_sign_cancellation() {
+    // Independent oracle: exact Decimal arithmetic on the binary f64 endpoints,
+    // correctly rounded back to f64 gives -4.429161364691605e29. The naive
+    // low + (high-low)/2 loses 16,384 ULP for this particular finite input.
+    let low = -1.1791643339885448e34_f64;
+    let high = 1.179075750761251e34_f64;
+    let expected = -4.429161364691605e29_f64;
+    assert_eq!(
+        Aabb2 { min: Vec2::new(low, 0.0), max: Vec2::new(high, 0.0) }.center().x,
+        expected
+    );
+    assert_eq!(
+        Aabb3 { min: Vec3::new(low, 0.0, low), max: Vec3::new(high, 0.0, high) }.center(),
+        Vec3::new(expected, 0.0, expected)
+    );
+
+    // Half-summing each input can also mis-round tiny opposite-sign values:
+    // (-min_subnormal + 2*min_subnormal)/2 is a half-ULP tie -> nearest-even zero.
+    let subnormal = f64::from_bits(1);
+    assert_eq!(
+        Aabb2 {
+            min: Vec2::new(-subnormal, 0.0),
+            max: Vec2::new(2.0 * subnormal, 0.0),
+        }.center().x,
+        0.0
+    );
+}

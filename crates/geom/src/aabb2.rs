@@ -37,7 +37,24 @@ impl Aabb2 {
         Aabb2 { min: Vec2::new(self.min.x.min(o.min.x), self.min.y.min(o.min.y)), max: Vec2::new(self.max.x.max(o.max.x), self.max.y.max(o.max.y)) }
     }
     pub fn center(&self) -> Vec2 {
-        if self.is_empty() { Vec2::ZERO } else { (self.min + self.max) * 0.5 }
+        if self.is_empty() {
+            Vec2::ZERO
+        } else {
+            // (min + max) / 2 overflows for finite endpoints close to f64::MAX.
+            // The difference-based form preserves small spans; use half-sums only when
+            // the span itself overflows (endpoints with opposite signs).
+            let midpoint = |low: f64, high: f64| {
+                if low.is_sign_negative() != high.is_sign_negative() {
+                    // Opposite signs cannot overflow on addition. Sum first so
+                    // near-cancelling endpoints retain their low-order bits.
+                    (low + high) * 0.5
+                } else {
+                    // Same signs can overflow when added, but their difference is finite.
+                    low + (high - low) * 0.5
+                }
+            };
+            Vec2::new(midpoint(self.min.x, self.max.x), midpoint(self.min.y, self.max.y))
+        }
     }
     pub fn size(&self) -> Vec2 {
         if self.is_empty() { Vec2::ZERO } else { self.max - self.min }
