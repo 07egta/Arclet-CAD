@@ -590,3 +590,78 @@ fn view_presets_use_the_standard_view_angles() {
     assert_eq!(ViewPreset::ALL.iter().filter(|p| p.is_perspective()).count(), 1);
     assert!(ViewPreset::Perspective.is_perspective() && !ViewPreset::Top.is_perspective());
 }
+
+
+#[test]
+fn precision_quad_panes_have_exclusive_hit_boundaries_and_maximize() {
+    let rect = Rect::from_min_size(pos2(100.0, 80.0), vec2(960.0, 600.0));
+    let panes = crate::quad_view::pane_rects(rect, None);
+    let at = crate::quad_view::pane_at;
+    assert_eq!(at(&panes, pos2(200.0, 160.0)), Some(0));
+    assert_eq!(at(&panes, pos2(700.0, 160.0)), Some(1));
+    assert_eq!(at(&panes, pos2(200.0, 600.0)), Some(2));
+    assert_eq!(at(&panes, pos2(700.0, 600.0)), Some(3));
+    assert_eq!(at(&panes, pos2(580.0, 380.0)), Some(3), "divider belongs to bottom-right");
+    assert_eq!(at(&panes, pos2(100.0, 80.0)), Some(0));
+    assert_eq!(at(&panes, pos2(1060.0, 300.0)), None);
+    assert_eq!(at(&panes, pos2(99.0, 80.0)), None);
+    assert_eq!(at(&panes, pos2(f32::NAN, 200.0)), None);
+    for selected in 0..4 {
+        let maximized = crate::quad_view::pane_rects(rect, Some(selected));
+        for (i, r) in maximized.iter().enumerate() {
+            assert_eq!(r.is_positive(), i == selected);
+        }
+        assert_eq!(at(&maximized, rect.center()), Some(selected));
+    }
+}
+
+#[test]
+fn precision_quad_cameras_keep_independent_transforms_and_single_view_unchanged() {
+    let mut app = crate::SolveApp::new(Default::default(), Default::default());
+    assert!(!app.ui.quad_views);
+    let original = app.cam;
+    app.quad.enabled = true;
+    crate::quad_view::activate(&mut app, 0);
+    let pan = app.cam;
+    // Navigation itself remains in the single established navigation path. Tests
+    // change the camera value to prove the pane storage cannot overwrite its peers.
+    app.cam.target += Vec3::new(12.0, -3.0, 4.0);
+    let top = app.cam;
+    crate::quad_view::activate(&mut app, 1);
+    assert_eq!(app.cam, original);
+    app.cam.target += Vec3::new(-10.0, 5.0, 0.0);
+    let front = app.cam;
+    crate::quad_view::activate(&mut app, 0);
+    assert_eq!(app.cam, top);
+    crate::quad_view::activate(&mut app, 1);
+    assert_eq!(app.cam, front);
+    crate::quad_view::activate(&mut app, 3);
+    assert_eq!(app.cam, original);
+    assert_eq!(pan, original);
+    assert!(app.session.undo.is_empty());
+}
+
+#[test]
+fn precision_quad_projected_points_and_picking_rays_agree_in_each_view() {
+    let rect = Rect::from_min_size(pos2(50.0, 30.0), vec2(1200.0, 760.0));
+    let panes = crate::quad_view::pane_rects(rect, None);
+    let target = Vec3::new(4.0, 7.0, 11.0);
+    for (i, preset) in ViewPreset::ALL.iter().enumerate() {
+        let mut cam = Camera { target, distance: 150.0, ..Camera::default() };
+        cam.set_view(preset.standard_view());
+        cam.fov = if preset.is_perspective() { 0.6 } else { 0.0 };
+        let pane = panes[i];
+        let proj = crate::viewport::Proj {
+            cam,
+            vp: cam.view_proj(pane.width() as f64 / pane.height() as f64, 1000.0),
+            rect: pane,
+        };
+        let centre = proj.to_screen(target).unwrap();
+        assert!(centre.distance(pane.center()) < 0.01, "{i}: {centre:?} {pane:?}");
+        let (ray_origin, ray_dir) = proj.ray(centre);
+        let along = (target - ray_origin).dot(ray_dir);
+        let missed = ray_origin + ray_dir * along;
+        assert!(missed.dist(target) < 1e-7, "{i}: {missed:?} != {target:?}");
+        assert_eq!(crate::quad_view::pane_at(&panes, centre), Some(i));
+    }
+}

@@ -199,6 +199,7 @@ pub(crate) mod pick_index;
 pub(crate) mod place_gizmo;
 pub(crate) mod plugins;
 pub mod point_clouds;
+mod quad_view;
 pub mod prefs;
 pub mod prefs_notice;
 mod prefs_search;
@@ -331,6 +332,8 @@ pub struct UiState {
     pub show_timeline: bool,
     pub show_grid: bool,
     pub show_navigation_bar: bool,
+    /// Experimental four-view desktop viewport, default off.
+    pub quad_views: bool,
     pub perspective: bool,
     /// Perspective while orbiting, orthographic when the camera faces a standard axis view
     /// (#2682). Off by default; when on it decides the projection instead of `perspective`.
@@ -368,6 +371,7 @@ impl Default for UiState {
             show_timeline: true,
             show_grid: true,
             show_navigation_bar: true,
+            quad_views: false,
             perspective: false,
             auto_ortho_faces: false,
             palette_open: false,
@@ -511,6 +515,7 @@ pub struct SolveApp {
     /// A Save or Save As being written on a worker (see [`save_job`]).
     saving: Option<save_job::Saving>,
     pub viewport: viewport::ViewportState,
+    quad: quad_view::State,
     pub render_workspace: render_workspace::State,
     pub tool: Option<tools::Tool>,
     pub dialog: Option<dialogs::Dialog>,
@@ -744,6 +749,7 @@ impl SolveApp {
             easyprint: Default::default(),
             saving: None,
             viewport: viewport::ViewportState::default(),
+            quad: quad_view::State::default(),
             render_workspace,
             tool: None,
             dialog: None,
@@ -2616,7 +2622,7 @@ impl SolveApp {
         if render_workspace::active(self) {
             render_workspace::show(self, ui);
         } else {
-            viewport::show(self, ui);
+            quad_view::show(self, ui);
         }
     }
 

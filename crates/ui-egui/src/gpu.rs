@@ -17,6 +17,53 @@ pub use solidcraft_gpu::view::{
 /// A frame of the viewport as an egui paint callback.
 pub struct ViewportCallback(pub Frame);
 
+/// Dedicated per-pane renderers prevent egui-wgpu's prepare-all / paint-all phases
+/// from leaving every pane with the last camera's uniforms, culling and glass order.
+/// Allocated on demand only when four-view mode actually draws.
+pub struct QuadViewportCallback {
+    pub pane: usize,
+    pub frame: Frame,
+}
+
+struct QuadRenderers([Renderer; 4]);
+
+impl egui_wgpu::CallbackTrait for QuadViewportCallback {
+    fn prepare(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        _screen: &egui_wgpu::ScreenDescriptor,
+        encoder: &mut wgpu::CommandEncoder,
+        resources: &mut egui_wgpu::CallbackResources,
+    ) -> Vec<wgpu::CommandBuffer> {
+        if self.pane >= 4 {
+            return Vec::new();
+        }
+        if resources.get::<QuadRenderers>().is_none() {
+            // Keep the old single-view Renderer untouched. Each pane owns a separate
+            // uniform/culling/upload state; the documented memory cost is explicit.
+            let Some(target) = resources.get::<Renderer>().map(Renderer::target) else {
+                return Vec::new();
+            };
+            let make = || Renderer::new(device, GpuTarget { tess: false, ..target }, None);
+            resources.insert(QuadRenderers(std::array::from_fn(|_| make())));
+        }
+        if let Some(renderers) = resources.get_mut::<QuadRenderers>() {
+            renderers.0[self.pane].prepare(device, queue, encoder, &self.frame);
+        }
+        Vec::new()
+    }
+
+    fn paint(&self, info: egui::PaintCallbackInfo, pass: &mut wgpu::RenderPass<'static>, resources: &egui_wgpu::CallbackResources) {
+        let Some(renderers) = resources.get::<QuadRenderers>() else { return };
+        let Some(renderer) = renderers.0.get(self.pane) else { return };
+        let vp = info.viewport_in_pixels();
+        renderer.paint(&self.frame, pass, [vp.left_px as f32, vp.top_px as f32, vp.width_px as f32, vp.height_px as f32]);
+    }
+}
+
+
+
 /// The GPU plan evaluation compiling beside the window: there once it is ready ([`tick_tessellation`]).
 pub type TessReady = std::sync::Arc<std::sync::OnceLock<solidcraft_gpu::TessGpu>>;
 
