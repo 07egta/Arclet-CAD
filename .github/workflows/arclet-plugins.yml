@@ -1,0 +1,41 @@
+name: Arclet native plugins
+
+on:
+  pull_request:
+    paths:
+      - "apps/arclet/**"
+      - "examples/arclet-plugin-sample/**"
+      - "assets/locales/pending/arclet-plugins.json"
+      - "docs/arclet-plugins.md"
+      - ".github/workflows/arclet-plugins.yml"
+  push:
+    branches: [main]
+    paths:
+      - "apps/arclet/**"
+      - "examples/arclet-plugin-sample/**"
+      - ".github/workflows/arclet-plugins.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-plugin-integration:
+    name: Native plugin integration (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Linux GUI link dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev mesa-vulkan-drivers
+      - name: Build and run native plugin integration tests
+        run: cargo test --profile ci --locked -p arclet --test plugins
+      - name: Run Arclet application tests
+        run: cargo test --profile ci --locked -p arclet --bin arclet
