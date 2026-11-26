@@ -33,14 +33,15 @@ fn match_surface(s: &mut Session, p: &Value) -> Result<Value> {
     if s.model.state().body(&target).is_none() {
         return Err(bad(cmd, format!("no body `{target}`")));
     }
-    let faces: Vec<solidcraft_geom::Vec3> = p.get("faces").and_then(Value::as_array).map(|a| a.iter().filter_map(vec3).collect()).unwrap_or_default();
-    if faces.len() > 64 {
-        return Err(bad(cmd, "too many points on the face to rebuild"));
-    }
-    let edges: Vec<solidcraft_geom::Vec3> = p.get("edges").and_then(Value::as_array).map(|a| a.iter().filter_map(vec3).collect()).unwrap_or_default();
-    if edges.is_empty() || edges.len() > 10_000 {
-        return Err(bad(cmd, "`edges` must list 1 to 10000 points on the target's edge chain"));
-    }
+    let faces: Vec<solidcraft_geom::Vec3> = match p.get("faces") {
+        None => Vec::new(),
+        Some(Value::Array(list)) if list.len() <= 64 => list.iter()
+            .enumerate()
+            .map(|(i, p)| vec3(p).ok_or_else(|| bad(cmd, format!("`faces[{i}]` must be a finite point [x,y,z]"))))
+            .collect::<Result<Vec<_>>>()?,
+        _ => return Err(bad(cmd, "`faces` must list at most 64 finite face points [x,y,z]")),
+    };
+    let edges = super::surface::edge_chain_points(p.get("edges"), cmd, "edges")?;
     let order = match p.get("order") {
         None => Continuity::G2,
         Some(v) => v.as_str().and_then(Continuity::parse).filter(|o| *o != Continuity::G0).ok_or_else(|| bad(cmd, "`order` must be g1, g2 or g3"))?,
@@ -118,6 +119,22 @@ mod tests {
     /// `surface.match`: a skirt meets a cylinder's wall seam at g2; the body keeps its name, undo
     /// and redo move it back and forth, a cold reopen gives the same seam, and what cannot be
     /// matched is refused.
+    #[test]
+    fn malformed_match_selection_is_rejected_atomically() {
+        let mut s = Session::default();
+        boss_and_skirt(&mut s);
+        let before = s.doc.to_json();
+        for patch in [
+            json!({"body":"Skirt","target":"Boss","edges":[[10,0,15],null,[10,0,20]]}),
+            json!({"body":"Skirt","target":"Boss","edges":[[10,0,15],"bad"]}),
+            json!({"body":"Skirt","target":"Boss","edges":[[10,0,15]],"faces":[[0,0,0],null]}),
+            json!({"body":"Skirt","target":"Boss","edges":[[10,0,15]],"faces":"invalid"}),
+        ] {
+            assert!(s.execute("surface.match", &patch).is_err(), "accepted invalid selection: {patch}");
+            assert_eq!(s.doc.to_json(), before, "invalid Match changed the design");
+        }
+    }
+
     #[test]
     fn surface_match_rebuilds_a_skirt_onto_a_cylinder() {
         let mut s = Session::default();
