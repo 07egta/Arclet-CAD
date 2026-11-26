@@ -27,11 +27,17 @@
 
 File compatibility, API compatibility and native plugin execution compatibility are not interchangeable.
 
+### Mission 04: modeling commands (branch-only; source patch, not verified)
+
+The branch `feat/arclet-modeling-tools` adds engine-level `sketch.polyline`, `sketch.join`, `sketch.helix` and `sketch.spiral`, with typed input/output schemas, explicit validation and new regression tests. No Rust build, test suite or native UI execution was run in the authoring environment; registered command availability is **not** a verified user-facing feature. The original `sketch.trim`, `sketch.break`, `sketch.extend`, `surface.loft`, `surface.sweep`, `surface.match` and `surface.fair` handlers remain unchanged. The new sketch commands require an active sketch, and Helix additionally requires 3D Sketch mode; the Arclet UI does not yet expose dedicated buttons for these four commands. A menu hookup in `apps/arclet/src/app.rs` is a separate UI integration task.
+
+`sketch.join` keeps individual analytic source segments and ties end points with coincident constraints (G0), rather than constructing one true PolyCurve entity. `sketch.helix` and `sketch.spiral` are sampled fit approximations; they are not exact analytic helix entities, certified NURBS, or Rhino interoperability. No new claims of STEP, 3DM or Grasshopper compatibility arise from these commands.
+
 ## Rhino-class feature coverage
 
 This is a feature inventory, not a support claim. No 3DM, Grasshopper (GH/GHX), RhinoCommon, Python, or .rhp/.gha plugin support is claimed. Class-A and G3 are not certified (see the rows above).
 
-**Sources and method.** Command IDs come from the 503-entry engine registry. Reachability comes from the menu and toolbar wiring in `apps/arclet/src/app.rs` (curves, curve tools, surfaces, solids, transforms, analysis, views, File, Select, Isolate) and the explicit aliases in `apps/arclet/src/commands.rs`. Rows were mapped by command label and by the menu button name. No behaviour was tested for this table.
+**Sources and method.** Baseline command IDs came from the 503-entry engine registry; Mission 04 adds four new engine commands on its branch. Reachability comes from the menu and toolbar wiring in `apps/arclet/src/app.rs` (curves, curve tools, surfaces, solids, transforms, analysis, views, File, Select, Isolate) and the explicit aliases in `apps/arclet/src/commands.rs`. Rows were mapped by command label and by the menu button name. No behaviour was tested for this table.
 
 **Tiers**
 
@@ -45,7 +51,7 @@ This is a feature inventory, not a support claim. No 3DM, Grasshopper (GH/GHX), 
 **Other limits**
 
 - Desktop only: `sketch.spline.rebuild`, `inspect.curve_continuity`, `surface.match` and `surface.fair` are blocked on WebAssembly in `app.rs`, so their `main-works` tier does not hold in the browser build.
-- The menu button "Curve continuity" (`arclet.curve_continuity`) runs `inspect.curve_continuity`, which is a continuity analysis. It does not join curves, so joining is listed as missing.
+- The menu button "Curve continuity" (`arclet.curve_continuity`) runs `inspect.curve_continuity`, a read-only analysis, not `sketch.join`. The latter is registered engine-only in the Mission 04 patch.
 - `ui.isolate` is a UI context item, not one of the 503 registry IDs. It is counted as `main-works` and marked.
 - The File menu's New, Open, Save, Save As and export actions go through UI helper functions. Their IDs (`doc.open`, `file.new`, `file.save`, `file.save_as`, `file.export`, `file.export_view_dxf`, `file.save_mesh`) are matched by label and not traced in code.
 
@@ -54,7 +60,7 @@ This is a feature inventory, not a support claim. No 3DM, Grasshopper (GH/GHX), 
 | Rhino-style feature | Arclet/engine command id | Tier |
 |---|---|---|
 | Line | sketch.line | main-works |
-| Polyline (connected segments) | sketch.chain | engine-only |
+| Polyline (exact connected line segments) | sketch.line, sketch.polyline | main-works (`sketch.line`); `sketch.polyline` engine-only |
 | Arc (center, 3-point, tangent) | sketch.arc.center_point, sketch.arc.three_point, sketch.arc.tangent | main-works |
 | Circle, center and diameter | sketch.circle.center | main-works |
 | Circle, 2-point, 3-point, 2-tangent, 3-tangent | sketch.circle.two_point, sketch.circle.three_point, sketch.circle.two_tangent, sketch.circle.three_tangent | engine-only |
@@ -76,22 +82,22 @@ This is a feature inventory, not a support claim. No 3DM, Grasshopper (GH/GHX), 
 | Chamfer between curves | sketch.chamfer.distance_angle, sketch.chamfer.equal_distance, sketch.chamfer.two_distance | partial |
 | Extend curve | sketch.extend | engine-only |
 | Split or break curve | sketch.break | engine-only |
-| Join curves | — | missing |
+| Join curves (G0 exact source segments, not one PolyCurve) | sketch.join | engine-only (Mission 04, unbuilt) |
 | Project curve onto surface | sketch.project, sketch.project_to_surface | engine-only |
 | Intersection curve | sketch.intersect, sketch.intersection_curve | engine-only |
 | Isoparametric curve | sketch.isoparametric_curve | engine-only |
 | 3D line, 3D spline, 3D point | sketch.line3d, sketch.spline3d, sketch.point3d | engine-only |
-| Helix or spiral | — | missing |
+| Helix (sampled 3D fit wire) / planar Archimedean spiral (sampled fit spline) | sketch.helix, sketch.spiral | engine-only (Mission 04, unbuilt) |
 | Curve degree change or simplify | — | missing |
 | Explode curve into segments | — | missing |
 
 **Top gaps**
 
-- Join curves: no join command exists. The Curve menu's Curve continuity entry analyzes curve ends instead.
-- Helix, spiral, and degree change or simplify: no engine command.
+- Join: `sketch.join` (Mission 04) orders selected open curves into one branch-free G0 chain and adds coincident constraints where needed. It **does not** create a single Rhino-style PolyCurve object or guarantee G1/G2 continuity. The Curve continuity menu still analyzes only.
+- Helix/spiral: `sketch.helix` produces a sampled 3D fit wire (requires 3D Sketch); `sketch.spiral` produces a sampled planar fit spline. They are approximations, not exact analytic NURBS helices. Degree change/simplify remains missing.
 - Explode: no engine command.
 - Conic exists only in the engine, not in the menus.
-- Polyline is unconfirmed. Only the `sketch.chain` label was read, not its behaviour.
+- Polyline: `sketch.line` already creates consecutive line segments from a list of points, and `sketch.polyline` adds an explicit validated entry point. `sketch.chain` is read-only selection, **not** geometry creation.
 
 ### Surface
 

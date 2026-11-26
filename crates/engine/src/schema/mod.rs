@@ -61,6 +61,7 @@ pub mod inspect;
 pub mod layers;
 pub mod sketch_constraints;
 pub mod sketch_create;
+pub mod sketch_modeling;
 pub mod sketch_rebuild;
 pub mod view_navigation;
 

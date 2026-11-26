@@ -1,0 +1,38 @@
+{
+  "en": {
+    "cmd.sketch.helix": "Helix",
+    "cmd.sketch.join": "Join Curves",
+    "cmd.sketch.polyline": "Polyline",
+    "cmd.sketch.spiral": "Spiral"
+  },
+  "ar": {
+    "cmd.sketch.helix": "حلزون لولبي",
+    "cmd.sketch.join": "دمج المنحنيات",
+    "cmd.sketch.polyline": "خط متعدد",
+    "cmd.sketch.spiral": "حلزون"
+  },
+  "he": {
+    "cmd.sketch.helix": "הליקס",
+    "cmd.sketch.join": "חיבור עקומות",
+    "cmd.sketch.polyline": "פוליליין",
+    "cmd.sketch.spiral": "ספירלה"
+  },
+  "ja": {
+    "cmd.sketch.helix": "ヘリックス",
+    "cmd.sketch.join": "曲線を結合",
+    "cmd.sketch.polyline": "ポリライン",
+    "cmd.sketch.spiral": "スパイラル"
+  },
+  "vi": {
+    "cmd.sketch.helix": "Đường xoắn ốc trụ",
+    "cmd.sketch.join": "Nối đường cong",
+    "cmd.sketch.polyline": "Đường gấp khúc",
+    "cmd.sketch.spiral": "Đường xoắn ốc"
+  },
+  "zh": {
+    "cmd.sketch.helix": "螺旋线",
+    "cmd.sketch.join": "连接曲线",
+    "cmd.sketch.polyline": "折线",
+    "cmd.sketch.spiral": "螺线"
+  }
+}

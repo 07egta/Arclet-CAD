@@ -94,6 +94,7 @@ mod sketch_ends;
 mod sketch_freeform;
 mod sketch_import;
 mod sketch_inspect;
+mod sketch_modeling;
 mod sketch_modify;
 mod sketch_project;
 mod sketch_rebuild;
@@ -289,6 +290,7 @@ pub fn command_specs() -> Vec<&'static CommandSpec> {
     v.extend(sketch_import::COMMANDS.iter());
     v.extend(sketch_inspect::COMMANDS.iter());
     v.extend(sketch_ends::COMMANDS.iter());
+    v.extend(sketch_modeling::COMMANDS.iter());
     v.extend(sketch_canvas::COMMANDS.iter());
     v.extend(canvas_sketch::COMMANDS.iter());
     v.extend(point_cloud::COMMANDS.iter());
