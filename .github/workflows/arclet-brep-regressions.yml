@@ -1,0 +1,33 @@
+name: Arclet B-rep regressions
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'crates/kernel/**'
+      - '.github/workflows/arclet-brep-regressions.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'crates/kernel/**'
+      - '.github/workflows/arclet-brep-regressions.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  kernel:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Boolean retry regression tests
+        run: |
+          cargo test --profile ci --locked -p solidcraft-kernel --lib issue_616_tests::
+          cargo test --profile ci --locked -p solidcraft-kernel --lib empty_retry_tests::
+      - name: Rust formatting
+        run: cargo fmt --all -- --check
