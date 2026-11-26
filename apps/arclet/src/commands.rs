@@ -275,6 +275,38 @@ fn query(text: &str) -> Result<String, String> {
     Ok(normalized(text))
 }
 
+/// An operation requested by a specific Boolean command name. The generic `Boolean` and
+/// full `solid.combine` command deliberately keep the dialog's normal Join default.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BooleanAlias {
+    Union,
+    Difference,
+    Intersection,
+}
+
+impl BooleanAlias {
+    /// Indices in the shared Combine dialog's operation list (New, Join, Cut, Intersect).
+    pub(crate) const fn dialog_index(self) -> usize {
+        match self {
+            Self::Union => 1,
+            Self::Difference => 2,
+            Self::Intersection => 3,
+        }
+    }
+}
+
+/// The command registry resolves all three names to `solid.combine`, but the user meant a
+/// *specific* operation. Preserve that intent when starting its selection dialog. This
+/// function never executes a command or parses parameters from the input text.
+pub(crate) fn boolean_alias(text: &str) -> Option<BooleanAlias> {
+    match query(text).ok()?.as_str() {
+        "booleanunion" => Some(BooleanAlias::Union),
+        "booleandifference" => Some(BooleanAlias::Difference),
+        "booleanintersection" => Some(BooleanAlias::Intersection),
+        _ => None,
+    }
+}
+
 fn entries() -> &'static [Entry] {
     static ENTRIES: OnceLock<Vec<Entry>> = OnceLock::new();
     ENTRIES.get_or_init(|| {
@@ -372,6 +404,23 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
+
+    #[test]
+    fn boolean_command_names_keep_the_user_requested_operation() {
+        for (name, mode, index) in [
+            ("BooleanUnion", BooleanAlias::Union, 1),
+            ("  booleandifference ", BooleanAlias::Difference, 2),
+            ("BOOLEANINTERSECTION", BooleanAlias::Intersection, 3),
+        ] {
+            assert_eq!(resolve(name), Ok("solid.combine"), "{name}");
+            let operation = boolean_alias(name).expect("specific Boolean alias must keep its mode");
+            assert_eq!(operation, mode, "{name}");
+            assert_eq!(operation.dialog_index(), index, "{name}");
+        }
+        for name in ["Boolean", "solid.combine", "Join", "Line", "booleandifference;line", ""] {
+            assert_eq!(boolean_alias(name), None, "{name}");
+        }
+    }
 
     #[test]
     fn every_alias_resolves_to_a_real_registered_command() {
