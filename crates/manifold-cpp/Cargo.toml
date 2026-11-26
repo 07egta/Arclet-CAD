@@ -1,0 +1,28 @@
+[package]
+name = "solidcraft-manifold-cpp"
+description = "Optional native mesh Boolean bridge to Apache-2.0 Manifold C++"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# Only src/ffi.rs may contain unsafe. The rest of the workspace stays forbidden.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+too_many_arguments = "allow"
+type_complexity = "allow"
+neg_cmp_op_on_partial_ord = "allow"
+
+[features]
+default = []
+manifold = []
+
+[dependencies]
+thiserror = { workspace = true }
+
+[build-dependencies]
+cc = "1"

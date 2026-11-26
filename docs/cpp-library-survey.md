@@ -140,3 +140,7 @@ For orientation only. Nothing here is to be copied.
 ## Update: openNURBS licence is unresolved
 
 The repository `LICENSE` (read directly) is a copyright line, a warranty disclaimer and the bundled zlib licence. It contains no explicit grant of permission. The MIT claim rests only on a web page. Until McNeel confirms in writing, treat openNURBS as **not cleared**: do not vendor, link or port it, and do not use it as a source of code. A clean-room 3DM reader based on the public file-format description is the safe alternative.
+
+## Mission 17 linkage policy
+
+The optional native bridge pins Clipper2 and Manifold at exact source revisions, disables optional native dependencies/downloads and documents FFI safety and redistribution obligations in docs/native-cpp-bridge.md. Eigen and Ceres remain unlinked candidates pending workload-specific benchmarks and transitive dependency audits. This update does not change the final unresolved openNURBS verdict: no source or linkage until explicit permission is verified.

@@ -23,6 +23,7 @@ unsafe extern "C" {
     fn pc2_offset(xy: *const i64, n: usize, delta: f64, miter_limit: f64, status: *mut c_int) -> *mut PcResult;
     fn pc2_boolean(a: *const i64, na: usize, b: *const i64, nb: usize, op: c_int, status: *mut c_int) -> *mut PcResult;
     fn pc2_ring_count(r: *const PcResult) -> usize;
+    fn pc2_coord_count(r: *const PcResult) -> usize;
     fn pc2_ring_len(r: *const PcResult, i: usize) -> usize;
     fn pc2_coords(r: *const PcResult) -> *const i64;
     fn pc2_free(r: *mut PcResult);
@@ -68,35 +69,49 @@ struct Handle(NonNull<PcResult>);
 
 impl Handle {
     fn new(raw: *mut PcResult, status: c_int) -> Result<Self, Error> {
-        match (NonNull::new(raw), status) {
-            (Some(p), 0) => Ok(Handle(p)),
-            (_, 2) => Err(Error::Backend("out of memory")),
-            (_, 3) => Err(Error::Backend("unknown boolean operation")),
-            (_, 1) => Err(Error::Backend("Clipper2 raised an exception")),
-            _ => Err(Error::Backend("no result")),
+        if status != 0 {
+            if !raw.is_null() {
+                // SAFETY: a non-null pointer is owned here even if status reports an error.
+                unsafe { pc2_free(raw) };
+            }
+            return Err(match status {
+                2 => Error::Backend("out of memory"),
+                3 => Error::Backend("unknown boolean operation"),
+                1 => Error::Backend("Clipper2 rejected the operation or threw an exception"),
+                _ => Error::Backend("unknown native status"),
+            });
         }
+        NonNull::new(raw).map(Self).ok_or(Error::Backend("null result on success"))
     }
 
     fn rings(&self) -> Result<Vec<Ring>, Error> {
         let p = self.0.as_ptr().cast_const();
         // SAFETY: `p` is a live result owned by this handle; the accessors only read it.
-        let (count, coords) = unsafe { (pc2_ring_count(p), pc2_coords(p)) };
+        let (count, coord_count, coords) = unsafe { (pc2_ring_count(p), pc2_coord_count(p), pc2_coords(p)) };
+        if count > crate::MAX_POINTS {
+            return Err(Error::TooLarge("native ring count too large"));
+        }
         let mut rings = Vec::with_capacity(count);
         let mut offset = 0usize;
         for i in 0..count {
             // SAFETY: `i` is below the ring count reported for the same result.
             let len = unsafe { pc2_ring_len(p, i) };
+            if len > crate::MAX_POINTS {
+                return Err(Error::TooLarge("native ring has too many vertices"));
+            }
+            let next = offset.checked_add(len).ok_or(Error::TooLarge("native point count overflow"))?;
+            let start = offset.checked_mul(2).ok_or(Error::TooLarge("native offset overflow"))?;
+            let stop = next.checked_mul(2).ok_or(Error::TooLarge("native point count overflow"))?;
+            if stop > coord_count || (len != 0 && coords.is_null()) {
+                return Err(Error::Backend("invalid native coordinate buffer"));
+            }
             if len == 0 {
                 rings.push(Vec::new());
                 continue;
             }
-            if coords.is_null() {
-                return Err(Error::Backend("result has points but no coordinates"));
-            }
-            // SAFETY: the shim stores 2 * len coordinates per ring, back to back, so this range
-            // lies inside the buffer that `coords` points to.
-            let flat = unsafe { std::slice::from_raw_parts(coords.add(2 * offset), 2 * len) };
-            offset += len;
+            // SAFETY: start, stop and the buffer bound were validated above.
+            let flat = unsafe { std::slice::from_raw_parts(coords.add(start), stop - start) };
+            offset = next;
             rings.push(
                 flat.chunks_exact(2)
                     .map(|c| match *c {
@@ -105,6 +120,9 @@ impl Handle {
                     })
                     .collect(),
             );
+        }
+        if offset.checked_mul(2) != Some(coord_count) {
+            return Err(Error::Backend("native ring lengths disagree with buffer"));
         }
         Ok(rings)
     }

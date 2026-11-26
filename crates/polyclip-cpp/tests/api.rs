@@ -204,3 +204,40 @@ mod with_clipper2 {
         assert!(rings.is_empty());
     }
 }
+
+
+#[cfg(feature = "clipper2")]
+#[test]
+fn repeated_clipper_calls_free_native_results() {
+    let a = square(0.0, 0.0, 2.0);
+    let b = square(1.0, 1.0, 2.0);
+    for _ in 0..100 {
+        let out = boolean(&a, &b, BooleanOp::Intersection).expect("native boolean");
+        assert_close(area(&out[0]), 1.0);
+    }
+}
+
+/// Run explicitly with -- --ignored --nocapture for a per-run comparison.
+/// This compares equivalent convex intersection algorithms, not B-rep performance.
+#[cfg(feature = "clipper2")]
+#[test]
+#[ignore = "manual measurement; output includes hardware and iterations"]
+fn time_native_and_rust_convex_intersection() {
+    use std::hint::black_box;
+    use std::time::Instant;
+    let a = square(0.0, 0.0, 2.0);
+    let b = square(1.0, 1.0, 2.0);
+    let loops = 2_000;
+    let pure_start = Instant::now();
+    for _ in 0..loops {
+        black_box(pure::boolean(black_box(&a), black_box(&b), BooleanOp::Intersection).expect("pure"));
+    }
+    let pure_time = pure_start.elapsed();
+    let native_start = Instant::now();
+    for _ in 0..loops {
+        black_box(boolean(black_box(&a), black_box(&b), BooleanOp::Intersection).expect("native"));
+    }
+    let native_time = native_start.elapsed();
+    println!("convex square intersection: runs={loops}, pure_rust_ns_total={}, clipper2_ns_total={}",
+             pure_time.as_nanos(), native_time.as_nanos());
+}
