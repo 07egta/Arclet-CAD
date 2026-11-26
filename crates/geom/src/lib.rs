@@ -35,6 +35,7 @@ mod profile;
 pub mod section;
 pub mod simplify;
 pub mod spline_space;
+pub mod surface_quality;
 pub mod srgb;
 pub mod tess;
 pub mod title_block;
