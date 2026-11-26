@@ -131,6 +131,25 @@ pub fn rref(a: &mut Mat, tol: f64) -> Vec<usize> {
 /// vector)? Also returns the rank.
 pub fn determined_vars(j: &Mat, tol: f64) -> (Vec<bool>, usize) {
     let mut a = j.clone();
+    // Constraint equations use different units and geometry scales (distances in mm,
+    // angles and normalized parallelism). Their nonzero row scale must not change
+    // the estimated geometric DOF. Normalize each row by its largest magnitude before
+    // elimination, just as redundancy detection uses relative row norms. Rows whose
+    // largest magnitude is at or below the floating-point noise floor
+    // (64 * EPSILON) are left unscaled, so they are not amplified; they are still
+    // passed to elimination and are not dropped.
+    for row in 0..a.rows {
+        let begin = row.saturating_mul(a.cols);
+        let end = begin.saturating_add(a.cols);
+        if let Some(values) = a.data.get_mut(begin..end) {
+            let magnitude = values.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
+            if magnitude.is_finite() && magnitude > 64.0 * f64::EPSILON {
+                for value in values {
+                    *value /= magnitude;
+                }
+            }
+        }
+    }
     let pivots = rref(&mut a, tol);
     let rank = pivots.len();
     let free: Vec<usize> = (0..a.cols).filter(|c| !pivots.contains(c)).collect();
@@ -166,6 +185,21 @@ mod tests {
         assert!((x[0] - 0.8).abs() < 1e-12 && (x[1] - 1.4).abs() < 1e-12);
         let s = Mat::zeros(2, 2);
         assert!(solve(s, vec![1.0, 1.0]).is_none());
+    }
+
+    #[test]
+    fn rank_and_determination_are_invariant_to_row_units() {
+        // Identical geometric constraints can produce Jacobian rows differing by
+        // many orders of magnitude (e.g. a normalized angle of a long edge).
+        let mut j = Mat::zeros(3, 3);
+        j.set(0, 0, 1e-9);
+        j.set(0, 1, 2e-9);
+        j.set(1, 1, 2e8);
+        j.set(2, 0, 2e-9);
+        j.set(2, 1, 4e-9);
+        let (determined, rank) = determined_vars(&j, 1e-7);
+        assert_eq!(rank, 2);
+        assert_eq!(determined, vec![true, true, false]);
     }
 
     #[test]

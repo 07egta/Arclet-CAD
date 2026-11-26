@@ -992,6 +992,60 @@ fn distance_opening_slope(s: &State, b: &Block, v: usize) -> Option<f64> {
     }
 }
 
+/// Choose a perturbation from the geometry read by this block, not the absolute world
+/// coordinate. A 0.01 mm edge at x = 900,000,000 otherwise receives a 90 mm finite
+/// difference and its length derivative is almost zero. For a small angle guide next
+/// to a large line, use the scale local to the variable, not the whole block's bounds.
+fn derivative_scale(s: &State, block: &Block, variable: usize) -> f64 {
+    let owns = |p: usize| s.lay.pvar.get(p).copied().flatten().is_some_and(|first| variable == first || variable == first + 1);
+    let mut points = Vec::new();
+    let mut scale = f64::INFINITY;
+    for reference in block_refs(s.sk, block) {
+        let ids = match reference {
+            Ref::Point(p) => vec![p],
+            Ref::Curve(c) | Ref::Line(c) | Ref::Round(c) => {
+                let Some(curve) = s.sk.curves.get(c) else { continue };
+                let ids = curve.kind.point_ids();
+                if (ids.iter().any(|p| owns(*p)) || s.lay.rvar.get(c).copied().flatten() == Some(variable))
+                    && matches!(curve.kind, CurveKind::Circle { .. } | CurveKind::Arc { .. } | CurveKind::Ellipse { .. })
+                {
+                    let radius = s.radius_of(c).abs();
+                    if radius.is_finite() && radius > 0.0 {
+                        scale = scale.min(radius);
+                    }
+                }
+                ids
+            }
+        };
+        points.extend(ids);
+    }
+    for &p in &points {
+        if !owns(p) {
+            continue;
+        }
+        for &q in &points {
+            if p == q {
+                continue;
+            }
+            let distance = s.p(p).dist(s.p(q));
+            if distance.is_finite() && distance > 0.0 {
+                scale = scale.min(distance);
+            }
+        }
+    }
+    if scale.is_finite() { scale.max(1e-9) } else { 1.0 }
+}
+
+/// Sample at representable floating-point values; divide by their *actual* separation.
+/// A minimum of 16 ulps at large origins avoids subtraction noise without stepping
+/// across a nearby distance cusp. The local scale also works for microscopic sketches.
+fn derivative_samples(value: f64, scale: f64) -> (f64, f64, f64) {
+    let step = (1e-6 * scale).max(16.0 * f64::EPSILON * value.abs().max(1.0));
+    let high = value + step;
+    let low = value - step;
+    (high, low, high - low)
+}
+
 /// Residual vector and Jacobian (rows × all n vars) for the given blocks.
 fn system(sk: &Sketch, lay: &Layout, blocks: &[(Block, Vec<usize>)], x: &mut [f64], with_j: bool) -> (Vec<f64>, Option<Mat>, Vec<usize>) {
     #[cfg(feature = "solver-profiling")]
@@ -1026,14 +1080,14 @@ fn system(sk: &Sketch, lay: &Layout, blocks: &[(Block, Vec<usize>)], x: &mut [f6
         for &v in vars {
             let Some(x0) = x.get(v).copied() else { continue };
             let opening = distance_opening_slope(&State { sk, lay, x }, b, v);
-            let h = 1e-7 * x0.abs().max(1.0);
+            let (high, low, span) = derivative_samples(x0, derivative_scale(&State { sk, lay, x }, b, v));
             if let Some(xv) = x.get_mut(v) {
-                *xv = x0 + h;
+                *xv = high;
             }
             plus.clear();
             block_residuals(&State { sk, lay, x }, b, &mut plus);
             if let Some(xv) = x.get_mut(v) {
-                *xv = x0 - h;
+                *xv = low;
             }
             minus.clear();
             block_residuals(&State { sk, lay, x }, b, &mut minus);
@@ -1041,7 +1095,7 @@ fn system(sk: &Sketch, lay: &Layout, blocks: &[(Block, Vec<usize>)], x: &mut [f6
                 *xv = x0;
             }
             for k in 0..rows {
-                let d = (plus.get(k).copied().unwrap_or(0.0) - minus.get(k).copied().unwrap_or(0.0)) / (2.0 * h);
+                let d = (plus.get(k).copied().unwrap_or(0.0) - minus.get(k).copied().unwrap_or(0.0)) / span;
                 j.set(row + k, v, if k == 0 { opening.unwrap_or(d) } else { d });
             }
         }
@@ -1078,14 +1132,14 @@ fn local_system(
             let Some(c) = col.get(v).copied().filter(|c| *c < ncols) else { continue };
             let Some(x0) = x.get(v).copied() else { continue };
             let opening = distance_opening_slope(&State { sk, lay, x }, b, v);
-            let h = 1e-7 * x0.abs().max(1.0);
+            let (high, low, span) = derivative_samples(x0, derivative_scale(&State { sk, lay, x }, b, v));
             if let Some(xv) = x.get_mut(v) {
-                *xv = x0 + h;
+                *xv = high;
             }
             plus.clear();
             block_residuals(&State { sk, lay, x }, b, &mut plus);
             if let Some(xv) = x.get_mut(v) {
-                *xv = x0 - h;
+                *xv = low;
             }
             minus.clear();
             block_residuals(&State { sk, lay, x }, b, &mut minus);
@@ -1093,7 +1147,7 @@ fn local_system(
                 *xv = x0;
             }
             for k in 0..rows {
-                let d = (plus.get(k).copied().unwrap_or(0.0) - minus.get(k).copied().unwrap_or(0.0)) / (2.0 * h);
+                let d = (plus.get(k).copied().unwrap_or(0.0) - minus.get(k).copied().unwrap_or(0.0)) / span;
                 j.set(row + k, c, if k == 0 { opening.unwrap_or(d) } else { d });
             }
         }
@@ -1516,8 +1570,9 @@ fn accumulate(sk: &Sketch, lay: &Layout, b: &Block, unit: &[usize], x: &mut [f64
     let (mut plus, mut minus) = (Vec::new(), Vec::new());
     for (&v, dk) in unit.iter().zip(&mut d) {
         let Some(x0) = x.get(v).copied() else { continue };
-        let h = 1e-7 * x0.abs().max(1.0);
-        for (at, out) in [(x0 + h, &mut plus), (x0 - h, &mut minus)] {
+        let opening = distance_opening_slope(&State { sk, lay, x }, b, v);
+        let (high, low, span) = derivative_samples(x0, derivative_scale(&State { sk, lay, x }, b, v));
+        for (at, out) in [(high, &mut plus), (low, &mut minus)] {
             if let Some(xv) = x.get_mut(v) {
                 *xv = at;
             }
@@ -1527,7 +1582,12 @@ fn accumulate(sk: &Sketch, lay: &Layout, b: &Block, unit: &[usize], x: &mut [f64
         if let Some(xv) = x.get_mut(v) {
             *xv = x0;
         }
-        *dk = plus.iter().zip(&minus).map(|(p, m)| (p - m) / (2.0 * h)).collect();
+        *dk = plus
+            .iter()
+            .zip(&minus)
+            .enumerate()
+            .map(|(row, (p, m))| if row == 0 { opening.unwrap_or((p - m) / span) } else { (p - m) / span })
+            .collect();
     }
     let [d0, d1] = &d;
     for k in 0..r.len() {
@@ -2509,6 +2569,25 @@ pub fn fillets_kept(before: &Sketch, after: &Sketch) -> bool {
     was.iter().all(|b| now.iter().find(|a| a.arc == b.arc).is_none_or(|a| matches!(turn(b, a), Turn::Kept)))
 }
 
+/// A line direction has no geometric meaning when either line has collapsed.
+/// This check applies both to variable components and to constraints between fixed
+/// curves (which are evaluated without entering any component's Jacobian analysis).
+fn collapsed_angle_reference(sk: &Sketch, now: &State, kind: &ConstraintKind) -> bool {
+    let lines = match *kind {
+        ConstraintKind::Angle { a, b, .. } | ConstraintKind::Parallel { a, b } | ConstraintKind::Perpendicular { a, b } => [a, b],
+        ConstraintKind::LineAngle { l, .. } => [l, l],
+        _ => return false,
+    };
+    lines.iter().any(|&l| {
+        let (a, b) = now.line(l);
+        let original = match sk.curves.get(l).map(|c| &c.kind) {
+            Some(CurveKind::Line { a, b }) => sk.point(*a).zip(sk.point(*b)).map_or(1.0, |(a, b)| a.dist(b)),
+            _ => 1.0,
+        };
+        a.dist(b) <= (ACCEPT * original).max(f64::MIN_POSITIVE)
+    })
+}
+
 /// The turns of every filleted arc from `before` to where `sk` is now, applying the swaps.
 fn settle(sk: &mut Sketch, before: &[ArcSense]) -> Vec<(usize, Turn)> {
     let after = arc_senses(sk, &|i| sk.points.get(i).map(|p| p.pos).unwrap_or_default());
@@ -2608,6 +2687,10 @@ fn solve_inner(
     let _timer = profiling::timer(Phase::Solve);
     #[cfg(feature = "solver-profiling")]
     profiling::count(|c| c.solve_calls = c.solve_calls.saturating_add(1));
+    // Only patterned sketches need a full snapshot: these two calls can remove constraints
+    // or rewrite copied curves before a numerical failure is known. Ordinary solves avoid
+    // the cost of cloning a large sketch.
+    let pattern_snapshot = (!sk.patterns.is_empty()).then(|| sk.clone());
     sk.prune_patterns();
     sk.refresh_pattern_shapes();
     let mut orientation_before = Vec::new();
@@ -2901,25 +2984,9 @@ fn solve_inner(
         let now = State { sk, lay: &lay, x: &x };
         for (b, _) in &sub {
             let (Block::User(ci, k) | Block::TangentAt(ci, k, _)) = b else { continue };
-            // An angle requires two directions. A nearly collapsed line can satisfy its
-            // horizontal/vertical residual within tolerance while pointing anywhere, so
-            // the angle alone must not turn that degenerate pose into a solved sketch.
-            // Compare against the input length, so an already short reference still solves.
-            let angular_lines = match **k {
-                ConstraintKind::Angle { a, b, .. } => Some([a, b]),
-                ConstraintKind::LineAngle { l, .. } => Some([l, l]),
-                _ => None,
-            };
-            if angular_lines.is_some_and(|lines| {
-                lines.iter().any(|&l| {
-                    let (a, b) = now.line(l);
-                    let original = match sk.curves.get(l).map(|c| &c.kind) {
-                        Some(CurveKind::Line { a, b }) => sk.point(*a).zip(sk.point(*b)).map_or(1.0, |(a, b)| a.dist(b)),
-                        _ => 1.0,
-                    };
-                    a.dist(b) < ACCEPT * original
-                })
-            }) {
+            // An angle requires two nonzero directions. This geometric check
+            // prevents a vacuous zero dot/cross product from reporting success.
+            if collapsed_angle_reference(sk, &now, k) {
                 if let Some(c) = sk.constraints.get(*ci)
                     && !failing.contains(&c.id)
                 {
@@ -2989,6 +3056,20 @@ fn solve_inner(
     if !consts.is_empty() {
         let (r, _, owner) = system(sk, &lay, &consts, &mut x, false);
         check(&r, &owner, &consts, &mut failing);
+        // Constants have no Jacobian columns or variable components, but still
+        // need semantic validation (a fixed zero-length line has no angle).
+        let now = State { sk, lay: &lay, x: &x };
+        for (block, _) in &consts {
+            let (Block::User(ci, kind) | Block::TangentAt(ci, kind, _)) = block else { continue };
+            if collapsed_angle_reference(sk, &now, kind) {
+                degenerate = true;
+                if let Some(c) = sk.constraints.get(*ci)
+                    && !failing.contains(&c.id)
+                {
+                    failing.push(c.id.clone());
+                }
+            }
+        }
     }
     if degenerate {
         max_residual = max_residual.max(1.0);
@@ -3060,23 +3141,24 @@ fn solve_inner(
             failing.push(id.clone());
         }
     }
-    let use_x = if status == SolveStatus::Solved { &x } else { &x0 };
-    // Write back.
-    for (i, p) in sk.points.iter_mut().enumerate() {
-        if let Some(v) = lay.pvar.get(i).copied().flatten() {
-            p.pos = Vec2::new(use_x.get(v).copied().unwrap_or(p.pos.x), use_x.get(v + 1).copied().unwrap_or(p.pos.y));
+    // On failure do not even re-write the original coordinates/radii: normalizing a
+    // radius, welding periodic endpoints, or refreshing a reference dimension on a
+    // rejected solution would turn an unsuccessful edit into a document mutation.
+    if status == SolveStatus::Solved {
+        for (i, p) in sk.points.iter_mut().enumerate() {
+            if let Some(v) = lay.pvar.get(i).copied().flatten() {
+                p.pos = Vec2::new(x.get(v).copied().unwrap_or(p.pos.x), x.get(v + 1).copied().unwrap_or(p.pos.y));
+            }
         }
-    }
-    for (i, c) in sk.curves.iter_mut().enumerate() {
-        if let (CurveKind::Circle { r, .. } | CurveKind::Ellipse { r, .. }, Some(v)) = (&mut c.kind, lay.rvar.get(i).copied().flatten()) {
-            *r = use_x.get(v).copied().unwrap_or(*r).abs().max(1e-9);
+        for (i, c) in sk.curves.iter_mut().enumerate() {
+            if let (CurveKind::Circle { r, .. } | CurveKind::Ellipse { r, .. }, Some(v)) = (&mut c.kind, lay.rvar.get(i).copied().flatten()) {
+                *r = x.get(v).copied().unwrap_or(*r).abs().max(1e-9);
+            }
         }
-    }
-    if status == SolveStatus::Solved
-        && let Some(positions) = periodic_positions
-    {
-        for (point, position) in sk.points.iter_mut().zip(positions) {
-            point.pos = position;
+        if let Some(positions) = periodic_positions {
+            for (point, position) in sk.points.iter_mut().zip(positions) {
+                point.pos = position;
+            }
         }
     }
     if status == SolveStatus::Failed {
@@ -3095,7 +3177,10 @@ fn solve_inner(
         Some(v) => vdet(Some(v)) && vdet(Some(v + 1)),
         None => true,
     };
-    refresh_driven_dimensions(sk);
+    // A failed solve must not silently update reference dimensions.
+    if status == SolveStatus::Solved {
+        refresh_driven_dimensions(sk);
+    }
     let (dof, point_determined, curve_determined) = match analysis {
         Analysis::Full | Analysis::Freedom => (
             lay.n.saturating_sub(rank),
@@ -3104,6 +3189,11 @@ fn solve_inner(
         ),
         Analysis::StatusOnly => (0, Vec::new(), Vec::new()),
     };
+    if status == SolveStatus::Failed
+        && let Some(previous) = pattern_snapshot
+    {
+        *sk = previous;
+    }
     SolveReport {
         status,
         dof,
@@ -3206,6 +3296,112 @@ mod continuation_unit_tests {
 #[cfg(test)]
 mod typed_dimension_tests {
     use super::*;
+
+    #[test]
+    fn large_world_coordinates_do_not_flatten_local_distance_jacobian() {
+        // The points are separated by 0.02 mm despite an origin near 9e8 mm.
+        // A derivative step based on |x| used to cross the point and report ~0.
+        let mut sk = Sketch::new();
+        let p = sk.add_point(Vec2::new(900_000_000.0, -900_000_000.0), None).unwrap();
+        sk.points[p].fixed = true;
+        let q = sk.add_point(Vec2::new(900_000_000.02, -900_000_000.0), None).unwrap();
+        sk.add_constraint(ConstraintKind::Distance { p, q, value: 0.02 }, None).unwrap();
+        let lay = layout(&sk, &Hold::default());
+        let mut x = initial_x(&sk, &lay);
+        let (blocks, _) = build_blocks(&sk, &lay, &points_on_curves(&sk));
+        let vars: Vec<usize> = (0..lay.n).collect();
+        let mut col = vec![usize::MAX; lay.n];
+        columns(&mut col, &vars, &vars);
+        let (residual, jacobian, _) = local_system(&sk, &lay, &blocks, &mut x, &col, vars.len());
+        let column = lay.pvar[q].unwrap();
+        assert!(max_abs(&residual) < ACCEPT);
+        assert!((jacobian.get(0, column) - 1.0).abs() < 1e-3, "distance Jacobian: {jacobian:?}");
+        assert!(jacobian.get(0, column + 1).abs() < 1e-3);
+
+        // Rank and geometry must agree at the accepted solution too.
+        let report = solve(&mut sk);
+        assert!(report.ok(), "{report:?}");
+        assert_eq!(report.dof, 1, "{report:?}");
+    }
+
+    #[test]
+    fn zero_length_parallel_and_perpendicular_are_not_valid_angles() {
+        for perpendicular in [false, true] {
+            let mut sk = Sketch::new();
+            let collapsed = sk.add_line(Vec2::new(4.0, 4.0), Vec2::new(4.0, 4.0), None, None, None).unwrap();
+            let guide = sk.add_line(Vec2::ZERO, Vec2::new(10.0, 0.0), None, None, None).unwrap();
+            sk.curves[collapsed].fixed = true;
+            let kind = if perpendicular {
+                ConstraintKind::Perpendicular { a: collapsed, b: guide }
+            } else {
+                ConstraintKind::Parallel { a: collapsed, b: guide }
+            };
+            let id = sk.add_constraint(kind, None).unwrap();
+            let before = sk.clone();
+            let report = solve(&mut sk);
+            assert_eq!(report.status, SolveStatus::Failed, "{report:?}");
+            assert!(report.failing.contains(&id), "{report:?}");
+            assert_eq!(sk.points, before.points);
+            assert_eq!(sk.curves, before.curves);
+
+            // A constraint between two fixed curves is evaluated in the constant
+            // block path rather than in a variable component.
+            sk.curves[guide].fixed = true;
+            let fixed_before = sk.clone();
+            let fixed_report = solve(&mut sk);
+            assert_eq!(fixed_report.status, SolveStatus::Failed, "{fixed_report:?}");
+            assert!(fixed_report.failing.contains(&id), "{fixed_report:?}");
+            assert_eq!(sk, fixed_before);
+        }
+    }
+
+    #[test]
+    fn consistent_radius_and_diameter_are_redundant_but_a_disagreement_fails() {
+        let mut sk = Sketch::new();
+        let circle = sk.add_circle(Vec2::ZERO, 10.0, Some(0), None).unwrap();
+        sk.add_constraint(ConstraintKind::Radius { c: circle, value: 10.0 }, None).unwrap();
+        let diameter = sk.add_constraint(ConstraintKind::Diameter { c: circle, value: 20.0 }, None).unwrap();
+        let consistent = solve(&mut sk);
+        assert!(consistent.ok(), "{consistent:?}");
+        assert_eq!(consistent.dof, 0);
+        assert!(consistent.redundant.contains(&diameter), "{consistent:?}");
+
+        sk.constraints.last_mut().unwrap().kind.set_value(18.0);
+        let before = sk.clone();
+        let conflicting = solve(&mut sk);
+        assert_eq!(conflicting.status, SolveStatus::Failed, "{conflicting:?}");
+        assert!(!conflicting.failing.is_empty());
+        assert_eq!(sk, before, "inconsistent dimensions cannot change the stored sketch");
+    }
+
+    #[test]
+    fn positive_microscopic_parallel_lines_are_not_rejected_as_collapsed() {
+        let mut sk = Sketch::new();
+        let a = sk.add_line(Vec2::ZERO, Vec2::new(1e-10, 0.0), None, None, None).unwrap();
+        let b = sk.add_line(Vec2::new(0.0, 1e-10), Vec2::new(2e-10, 1e-10), None, None, None).unwrap();
+        sk.curves[a].fixed = true;
+        sk.curves[b].fixed = true;
+        sk.add_constraint(ConstraintKind::Parallel { a, b }, None).unwrap();
+        let report = solve(&mut sk);
+        assert!(report.ok(), "{report:?}");
+        assert_eq!(report.dof, 0);
+    }
+
+    #[test]
+    fn failed_solve_does_not_update_a_driven_dimension() {
+        let mut sk = Sketch::new();
+        let line = sk.add_line(Vec2::ZERO, Vec2::new(10.0, 0.0), Some(0), None, None).unwrap();
+        sk.curves[line].fixed = true;
+        sk.add_constraint(ConstraintKind::Length { l: line, value: 12.0 }, None).unwrap();
+        sk.add_constraint(ConstraintKind::Length { l: line, value: 3.0 }, None).unwrap();
+        if let Some(dimension) = sk.constraints.last_mut() {
+            dimension.driven = true;
+        }
+        let before = sk.clone();
+        let report = solve(&mut sk);
+        assert_eq!(report.status, SolveStatus::Failed, "{report:?}");
+        assert_eq!(sk, before, "failure must preserve geometry and reference dimensions");
+    }
 
     #[test]
     fn failed_signed_sweep_restores_arc_orientation_and_coordinates() {

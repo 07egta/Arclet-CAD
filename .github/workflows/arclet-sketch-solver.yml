@@ -1,0 +1,36 @@
+name: Arclet sketch solver regression
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'crates/sketch/**'
+      - '.github/workflows/arclet-sketch-solver.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: arclet-sketch-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  sketch:
+    name: Sketch tests, formatting and Clippy
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Test sketch crate
+        run: cargo test --locked -p solidcraft-sketch
+      - name: Check formatting
+        if: ${{ !cancelled() }}
+        run: cargo fmt --all -- --check
+      - name: Check Clippy diagnostics
+        if: ${{ !cancelled() }}
+        run: cargo clippy --locked -p solidcraft-sketch --all-targets -- -D warnings
