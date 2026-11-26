@@ -13,6 +13,13 @@ pub struct NewParams {
     pub colour: Option<String>,
 }
 
+/// Delete a layer and rehome all bodies on the default layer.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct DeleteParams {
+    pub layer: u64,
+}
+
 /// `layer.rename`.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(deny_unknown_fields)]

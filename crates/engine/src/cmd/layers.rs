@@ -8,12 +8,13 @@ use solidcraft_doc::layers::{DEFAULT, Layer, is_hex_colour};
 
 use super::CommandSpec;
 use crate::params::bad;
-use crate::schema::layers::{AssignParams, CurrentParams, LayerReply, LockedParams, NewParams, RenameParams, VisibleParams};
+use crate::schema::layers::{AssignParams, CurrentParams, DeleteParams, LayerReply, LockedParams, NewParams, RenameParams, VisibleParams};
 use crate::{Result, Session};
 
 const PALETTE: [&str; 6] = ["#4a90d9", "#e8833a", "#5cb85c", "#d9534f", "#9b59b6", "#f1c40f"];
 
 const NEW_CONTRACT: crate::schema::TypedContract<NewParams> = crate::schema::TypedContract::new();
+const DELETE_CONTRACT: crate::schema::TypedContract<DeleteParams> = crate::schema::TypedContract::new();
 const RENAME_CONTRACT: crate::schema::TypedContract<RenameParams> = crate::schema::TypedContract::new();
 const VISIBLE_CONTRACT: crate::schema::TypedContract<VisibleParams> = crate::schema::TypedContract::new();
 const LOCKED_CONTRACT: crate::schema::TypedContract<LockedParams> = crate::schema::TypedContract::new();
@@ -26,6 +27,11 @@ pub static COMMANDS: &[CommandSpec] = &[
         .contract(&NEW_CONTRACT)
         .output(crate::schema::output_schema_for::<LayerReply>)
         .params("name?: text (default Layer N); colour?: #rrggbb (default: the next palette colour) → layer: id, name, colour"),
+    CommandSpec::new("layer.delete", "Delete Layer", crate::checked!("layer.delete", delete_layer))
+        .icon("delete")
+        .contract(&DELETE_CONTRACT)
+        .output(crate::schema::output_schema_for::<LayerReply>)
+        .params("layer: id (not 0); objects are returned to layer 0 → layer, bodies"),
     CommandSpec::new("layer.rename", "Rename Layer", crate::checked!("layer.rename", rename_layer))
         .icon("rename")
         .contract(&RENAME_CONTRACT)
@@ -86,6 +92,25 @@ fn new_layer(s: &mut Session, p: &Value) -> Result<Value> {
     let id = d.allocate_id()?;
     d.layers.items.push(Layer { id, name: name.clone(), colour: colour.clone(), visible: true, locked: false });
     Ok(json!({ "layer": id, "name": name, "colour": colour }))
+}
+
+fn delete_layer(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "layer.delete";
+    let id = layer_id(s, p, cmd)?;
+    if id == DEFAULT {
+        return Err(bad(cmd, "the default layer cannot be deleted"));
+    }
+    let members = s.doc.layers.members(id);
+    let doc = s.doc_mut();
+    doc.layers.items.retain(|layer| layer.id != id);
+    doc.layers.of.retain(|_, assigned| *assigned != id);
+    if doc.layers.current == id {
+        doc.layers.current = DEFAULT;
+    }
+    for body in &members {
+        sync_body(s, body);
+    }
+    Ok(json!({ "layer": id, "bodies": members.len() }))
 }
 
 fn rename_layer(s: &mut Session, p: &Value) -> Result<Value> {
@@ -170,6 +195,11 @@ fn assign(s: &mut Session, p: &Value) -> Result<Value> {
     if bodies.len() > 10_000 {
         return Err(bad(cmd, "`bodies` is too long"));
     }
+    let present: std::collections::BTreeSet<String> =
+        s.world_state().bodies.iter().map(|body| body.name.clone()).collect();
+    if let Some(missing) = bodies.iter().find(|body| !present.contains(*body)) {
+        return Err(bad(cmd, format!("no body `{missing}`")));
+    }
     let layers = &mut s.doc_mut().layers;
     for body in &bodies {
         if id == DEFAULT {
@@ -247,6 +277,32 @@ mod tests {
         for (cmd, p) in bad {
             assert!(s.execute(cmd, &p).is_err(), "{cmd} {p} must be refused");
         }
+    }
+
+    #[test]
+    fn deletion_rehomes_members_and_is_undoable() {
+        let mut s = two_bodies();
+        let id = run(&mut s, "layer.new", json!({"name": "Discardable"}))["layer"].as_u64().unwrap();
+        run(&mut s, "layer.assign", json!({"layer": id, "bodies": ["Plate", "Pin"]}));
+        run(&mut s, "layer.set_current", json!({"layer": id}));
+        assert!(s.execute("layer.delete", &json!({"layer": 0})).is_err());
+        assert_eq!(run(&mut s, "layer.delete", json!({"layer": id}))["bodies"], 2);
+        assert_eq!(s.doc.layers.current, 0);
+        assert_eq!(s.doc.layers.layer_of("Plate"), 0);
+        assert!(s.world_state().body("Plate").is_some());
+        run(&mut s, "edit.undo", json!({}));
+        assert_eq!(s.doc.layers.layer_of("Plate"), id);
+        run(&mut s, "edit.redo", json!({}));
+        assert_eq!(s.doc.layers.layer_of("Plate"), 0);
+    }
+
+    #[test]
+    fn unknown_assignment_is_atomic() {
+        let mut s = two_bodies();
+        let id = run(&mut s, "layer.new", json!({}))["layer"].as_u64().unwrap();
+        let before = s.doc.layers.clone();
+        assert!(s.execute("layer.assign", &json!({"layer": id, "bodies": ["Plate", "Missing"]})).is_err());
+        assert_eq!(s.doc.layers, before);
     }
 
     #[test]
