@@ -1,0 +1,31 @@
+name: Arclet command intent regression
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'apps/arclet/src/app.rs'
+      - 'apps/arclet/src/commands.rs'
+      - 'assets/locales/pending/arclet-command-intent.json'
+      - '.github/workflows/arclet-command-intent.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  arclet-desktop:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Verify Arclet command aliases, live dialog modes, and frame regressions
+        shell: bash
+        env:
+          RUST_TEST_THREADS: '1'
+        run: cargo test --profile ci --locked -p arclet --bin arclet -- --test-threads=1
+      - name: Clippy (Arclet desktop)
+        shell: bash
+        run: cargo clippy --profile ci --locked -p arclet --bin arclet -- -D warnings
