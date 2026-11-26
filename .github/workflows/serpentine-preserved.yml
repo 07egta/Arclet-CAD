@@ -1,0 +1,272 @@
+name: Serpentine preserved UI experiment
+on:
+  push:
+    branches: ['work/serpentine-ui-perf-*']
+    paths: ['experiments/serpentine-preserved/**', '.github/workflows/serpentine-preserved.yml']
+permissions:
+  contents: read
+concurrency:
+  group: serpentine-preserved-${{ github.ref_name }}-${{ github.sha }}
+  cancel-in-progress: true
+env:
+  RUSTFLAGS: ''
+  CARGO_ENCODED_RUSTFLAGS: ''
+jobs:
+  native:
+    name: ${{ matrix.os }} / native accelerator
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: bash
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PYTHONUTF8: '1'
+      LIBGL_ALWAYS_SOFTWARE: '1'
+      __GLX_VENDOR_LIBRARY_NAME: mesa
+      QT_QPA_FONTDIR: ${{ matrix.os == 'windows-latest' && 'C:/Windows/Fonts' || '' }}
+      SERP3D_PICK_BACKEND: rust
+      SERP3D_REQUIRE_NATIVE_TESTS: '1'
+    steps:
+      - name: Preserve exact LF source bytes
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: chisomobanzi/Serpentine3D
+          ref: 5a801e0db0ff6bf1d0738430fd9784db4ebfc9b0
+          path: upstream
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v5
+      - uses: dtolnay/rust-toolchain@1.99.1
+        with:
+          components: rustfmt, clippy
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+        with:
+          arch: x64
+      - name: Select the MSVC linker, not an unrelated link.exe
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $linker = Join-Path $env:VCToolsInstallDir 'bin\Hostx64\x64\link.exe'
+          if (!(Test-Path $linker)) { throw 'MSVC linker not found' }
+          "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=$linker" >> $env:GITHUB_ENV
+      - name: Install desktop test dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y libgl1 libegl1 libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-shape0 libxcb-render-util0 libxcb-xinerama0 libxcb-cursor0 libfontconfig1 libdbus-1-3
+      - name: Compile all experiment Python before any expensive native tests
+        run: python -m compileall -q experiments/serpentine-preserved/scripts experiments/serpentine-preserved/tests
+      - name: Retain a pristine comparison checkout
+        run: |
+          mkdir -p evidence baseline
+          git -C upstream archive HEAD | tar -x -C baseline
+      - name: Install pinned dependencies
+        working-directory: upstream
+        run: uv sync --extra dev --locked --python 3.12
+      - name: Check and apply reviewed backend patches
+        run: |
+          python experiments/serpentine-preserved/scripts/prepare.py upstream --check --report evidence/preflight.json
+          python experiments/serpentine-preserved/scripts/prepare.py upstream --report evidence/ui-preservation.json
+          git -C upstream rev-parse HEAD > evidence/upstream-commit.txt
+          git rev-parse HEAD > evidence/experiment-commit.txt
+      - name: Format, lint, test and build the dependency-free accelerator
+        run: python experiments/serpentine-preserved/scripts/build_native.py upstream --check 2>&1 | tee evidence/native-build.log
+      - name: All native and backend regression contracts
+        working-directory: upstream
+        run: uv run pytest ../experiments/serpentine-preserved/tests -q --junitxml=../evidence/contracts.xml 2>&1 | tee ../evidence/contracts.log
+      - name: Verify the independent Python fallback
+        env:
+          SERP3D_PICK_BACKEND: python
+        working-directory: upstream
+        run: uv run pytest ../experiments/serpentine-preserved/tests/test_performance_contracts.py ../experiments/serpentine-preserved/tests/test_history_contracts.py ../experiments/serpentine-preserved/tests/test_atomic_save_contracts.py -q --junitxml=../evidence/fallback.xml 2>&1 | tee ../evidence/fallback.log
+      - name: Keep the verified accelerator with its source and notices
+        run: |
+          mkdir -p native-artifact
+          cp upstream/serpentine3d/_native/* native-artifact/
+          cp experiments/serpentine-preserved/native-pick-index/LICENSE native-artifact/
+          cp experiments/serpentine-preserved/native-pick-index/RUST-LICENSE-MIT native-artifact/
+          cp experiments/serpentine-preserved/native-pick-index/src/lib.rs native-artifact/
+          cp experiments/serpentine-preserved/native-pick-index/Cargo.* native-artifact/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: serpentine-pick-index-${{ runner.os }}
+          path: native-artifact
+          retention-days: 14
+      - name: Measure three-million-triangle native RSS and exact output
+        if: runner.os == 'Linux'
+        working-directory: upstream
+        run: uv run python ../experiments/serpentine-preserved/scripts/benchmark_native_rss.py --baseline ../baseline --patched . --output ../evidence/native-rss.json 2>&1 | tee ../evidence/native-rss.log
+      - name: Build and validate the original-UI Windows source kit
+        if: runner.os == 'Windows'
+        run: |
+          mkdir -p release
+          python experiments/serpentine-preserved/scripts/package_windows.py upstream --output release/Serpentine3D-OriginalUI-Windows-x64.zip > evidence/windows-kit-build.json
+          python experiments/serpentine-preserved/scripts/package_windows.py --verify release/Serpentine3D-OriginalUI-Windows-x64.zip > evidence/windows-kit-verify.json
+          python -c "import hashlib,pathlib; p=pathlib.Path('release/Serpentine3D-OriginalUI-Windows-x64.zip'); p.with_suffix('.zip.sha256').write_text(hashlib.sha256(p.read_bytes()).hexdigest() + '  ' + p.name + '\\n')"
+      - name: Boot the extracted kit from a path containing spaces
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'Serpentine kit with spaces'
+          Expand-Archive -LiteralPath 'release/Serpentine3D-OriginalUI-Windows-x64.zip' -DestinationPath $root -Force
+          $kit = Join-Path $root 'Serpentine3D-OriginalUI'
+          & (Join-Path $kit 'launchers/Start-Windows.ps1') -SelfTest 2>&1 | Tee-Object -FilePath (Join-Path $env:GITHUB_WORKSPACE 'evidence/windows-kit-selftest.log')
+          if ($LASTEXITCODE -ne 0) { throw 'The extracted PowerShell launcher failed its self-test.' }
+          & (Join-Path $kit 'Start-Windows.cmd') -SelfTest 2>&1 | Tee-Object -FilePath (Join-Path $env:GITHUB_WORKSPACE 'evidence/windows-cmd-selftest.log')
+          if ($LASTEXITCODE -ne 0) { throw 'The extracted double-click CMD launcher failed its self-test.' }
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Windows'
+        with:
+          name: Serpentine3D-OriginalUI-Windows-x64-source-kit
+          path: |
+            release/Serpentine3D-OriginalUI-Windows-x64.zip
+            release/Serpentine3D-OriginalUI-Windows-x64.zip.sha256
+          retention-days: 14
+      - name: Install checksum-pinned Mesa llvmpipe for Windows CI GUI tests only
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # The hosted Windows runner has OpenGL 1.1; the *upstream* Qt app
+          # requires 3.3. Do not alter or distribute any app/UI/kernel files.
+          # A pinned CI-only Mesa software GL library supplies that capability.
+          $mesa = Join-Path $env:RUNNER_TEMP 'mesa3d-26.2.6-msvc.7z'
+          $source = 'https://github.com/pal1000/mesa-dist-win/releases/download/26.2.6/mesa3d-26.2.6-release-msvc.7z'
+          $expected = 'b2e00615feaba45942343c265cc8c5f576142ca682c1ac6661922d4b72492877'
+          Invoke-WebRequest -UseBasicParsing -TimeoutSec 240 -Uri $source -OutFile $mesa
+          $actual = (Get-FileHash -LiteralPath $mesa -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw 'Mesa CI driver checksum mismatch' }
+          $folder = Join-Path $env:RUNNER_TEMP 'mesa-software-gl'
+          New-Item -ItemType Directory -Force -Path $folder | Out-Null
+          & 7z.exe x $mesa "-o$folder" -y | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot extract the signed-off CI Mesa archive' }
+          # Select the PE32+ AMD64 runtime by binary header; Mesa release
+          # directory names are not stable across build configurations.
+          $candidates = @(Get-ChildItem -LiteralPath $folder -Recurse -File -Filter opengl32.dll)
+          $x64 = @($candidates | Where-Object {
+            $path = $_.FullName
+            if (!(Test-Path -LiteralPath (Join-Path $_.Directory.FullName 'libgallium_wgl.dll'))) {
+              return $false
+            }
+            $data = [IO.File]::ReadAllBytes($path)
+            if ($data.Length -lt 0x100) { return $false }
+            $peOffset = [BitConverter]::ToInt32($data, 0x3c)
+            if ($peOffset -lt 0x40 -or $peOffset -gt $data.Length - 6) { return $false }
+            return ([BitConverter]::ToUInt16($data, $peOffset + 4) -eq 0x8664)
+          })
+          if ($x64.Count -ne 1) {
+            Write-Host "OpenGL candidates: $($candidates.Count), x64 + gallium pairs: $($x64.Count)"
+            $candidates | Select-Object -ExpandProperty FullName | Write-Host
+            throw 'Expected exactly one 64-bit Mesa OpenGL + Gallium pair'
+          }
+          $mesaBin = $x64[0].Directory.FullName
+          $pythonDir = Join-Path $env:GITHUB_WORKSPACE 'upstream/.venv/Scripts'
+          if (!(Test-Path -LiteralPath (Join-Path $pythonDir 'python.exe'))) {
+            throw 'Pinned Python virtualenv not found'
+          }
+          foreach ($name in @('opengl32.dll', 'libgallium_wgl.dll')) {
+            Copy-Item -LiteralPath (Join-Path $mesaBin $name) -Destination (Join-Path $pythonDir $name) -Force
+          }
+          New-Item -ItemType File -Force -Path (Join-Path $pythonDir 'python.exe.local') | Out-Null
+          "GALLIUM_DRIVER=llvmpipe" >> $env:GITHUB_ENV
+          "MESA_LOADER_DRIVER_OVERRIDE=llvmpipe" >> $env:GITHUB_ENV
+          $mesaBin >> $env:GITHUB_PATH
+          Write-Host "Mesa x64 llvmpipe staged only for the CI Python process; archive SHA256 $actual"
+      - name: Install explicit pytest timeout in the pinned Windows test environment
+        if: runner.os == 'Windows'
+        run: uv pip install --python upstream/.venv/Scripts/python.exe pytest-timeout==2.4.0
+      - name: Probe Windows native Qt layer dock before the full suite
+        if: runner.os == 'Windows'
+        working-directory: upstream
+        env:
+          QT_QPA_PLATFORM: windows
+        run: .venv/Scripts/python.exe -m pytest tests/test_the_layers_panel_fits_the_column_the_app_gives_it.py -q --timeout=120 --timeout-method=thread --junitxml=../evidence/windows-native-qt-probe.xml 2>&1 | tee ../evidence/windows-native-qt-probe.log
+      - name: Complete upstream suite; crashes and timeouts remain failures
+        working-directory: upstream
+        env:
+          QT_QPA_PLATFORM: ${{ runner.os == 'Windows' && 'windows' || 'offscreen' }}
+        run: |
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            .venv/Scripts/python.exe -m pytest tests/ -q -n 2 --max-worker-restart=2 --ignore=tests/e2e_dod.py --timeout=300 --timeout-method=thread --durations=20 --junitxml=../evidence/upstream-tests.xml 2>&1 | tee ../evidence/upstream-tests.log
+          else
+            uv run --with pytest-timeout==2.4.0 pytest tests/ -q -n 2 --max-worker-restart=2 --ignore=tests/e2e_dod.py --timeout=300 --timeout-method=thread --durations=20 --junitxml=../evidence/upstream-tests.xml 2>&1 | tee ../evidence/upstream-tests.log
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: serpentine-${{ matrix.os }}-native-evidence
+          path: evidence
+          retention-days: 14
+  original-ui:
+    name: Original Qt UI / native backend comparison
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    env:
+      QT_QPA_PLATFORM: xcb
+      PYTHONUTF8: '1'
+      LIBGL_ALWAYS_SOFTWARE: '1'
+      __GLX_VENDOR_LIBRARY_NAME: mesa
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: chisomobanzi/Serpentine3D
+          ref: 5a801e0db0ff6bf1d0738430fd9784db4ebfc9b0
+          path: upstream
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v5
+      - uses: dtolnay/rust-toolchain@1.99.1
+      - name: Install real Qt and software OpenGL dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y libgl1 libegl1 libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-shape0 libxcb-render-util0 libxcb-xinerama0 libxcb-cursor0 libfontconfig1 libdbus-1-3 xvfb xauth
+      - name: Install pinned dependencies
+        working-directory: upstream
+        run: uv sync --extra dev --locked --python 3.12
+      - name: Check pinned source
+        run: |
+          mkdir -p evidence
+          python experiments/serpentine-preserved/scripts/prepare.py upstream --check --report evidence/preflight.json
+      - name: Exercise and capture baseline desktop
+        working-directory: upstream
+        run: xvfb-run -a -s '-screen 0 1600x1000x24 +extension GLX' uv run python ../experiments/serpentine-preserved/scripts/ui_smoke.py --output ../evidence/gui-before 2>&1 | tee ../evidence/gui-before.log
+      - name: Apply patches and install native accelerator without touching UI
+        run: |
+          python experiments/serpentine-preserved/scripts/prepare.py upstream --report evidence/ui-preservation.json
+          python experiments/serpentine-preserved/scripts/build_native.py upstream
+      - name: Exercise and capture patched desktop
+        env:
+          SERP3D_PICK_BACKEND: rust
+        working-directory: upstream
+        run: xvfb-run -a -s '-screen 0 1600x1000x24 +extension GLX' uv run python ../experiments/serpentine-preserved/scripts/ui_smoke.py --output ../evidence/gui-after 2>&1 | tee ../evidence/gui-after.log
+      - name: Compare same-host screenshots
+        working-directory: upstream
+        run: uv run python ../experiments/serpentine-preserved/scripts/compare_ui.py ../evidence/gui-before/original-ui-quad.png ../evidence/gui-after/original-ui-quad.png --output ../evidence/ui-pixel-comparison.json
+      - name: Real keyboard cancel and redo regression
+        working-directory: upstream
+        run: xvfb-run -a -s '-screen 0 1600x1000x24 +extension GLX' uv run python ../experiments/serpentine-preserved/scripts/ui_history_smoke.py --output ../evidence/history 2>&1 | tee ../evidence/history-keyboard.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: serpentine-original-ui-evidence
+          path: evidence
+          retention-days: 14

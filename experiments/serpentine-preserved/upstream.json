@@ -1,0 +1,50 @@
+{
+  "repository": "chisomobanzi/Serpentine3D",
+  "commit": "5a801e0db0ff6bf1d0738430fd9784db4ebfc9b0",
+  "protected_ui_files": 64,
+  "protected_ui_sha256": "0eda2f38c939bede552ddb07d1e7b8a29b23aeaaf51fc706e5ae06d3f2cf7da6",
+  "changed_files": {
+    "serpentine3d/core/scene.py": {
+      "before": "1dfa1be72e3de979ec6b0aee2bded8ed8fee3c3c510c9872fe1f6542712b9e03",
+      "after": "717b13c5680993ab174b01a13dee0ec834f6da534f29c472cf8df6a305cd67b3"
+    },
+    "serpentine3d/core/spatial.py": {
+      "before": "63f12b0e86d0def6a73ce5e63ca0f495ab67b5f64cf3018a9fd32e92d4d7e030",
+      "after": "61957d8a6d5e9b0868d980da00caa64ad20d8cafb7eed92b038b5f029413e15f"
+    },
+    "serpentine3d/core/tessellate.py": {
+      "before": "0f3157a48350b006b1f1050b1e5645fbe4c674500790140cfa43c0314c4ff39c",
+      "after": "1500cb972e17d990581eee61f28bfb71d68caa7ca6437168b2097a050e6ad12f"
+    },
+    "serpentine3d/fileio/native.py": {
+      "before": "92f45beefe5f6f264566016392441cb083a409094d40270ccc55842e4325378a",
+      "after": "8e692e8f2eda2a45053022fa9eacccc7a3b857671b292faf74154cac6e6970cc"
+    },
+    "serpentine3d/core/history.py": {
+      "before": "44291d6ad5749a7d2dd79e9fa7c9ba92e5bc499c847d9b65773ea045ef0b1305",
+      "after": "9d885137dbf8c807aead458c00ec93fb833670ddb012d0fc0af22ca0f2903d98"
+    },
+    "serpentine3d/core/native_spatial.py": {
+      "before": null,
+      "after": "86ff1ae5207cf0ad0a696bd06649b00303d64fd529b076546cfb012a29f22971"
+    }
+  },
+  "patches": [
+    {
+      "file": "0001-memory-and-picking.patch",
+      "sha256": "913e1636af39f648e8fe5f7c4d37ef8bfe0edb79e687dd126781878987bc5fff"
+    },
+    {
+      "file": "0002-atomic-native-save.patch",
+      "sha256": "1de39e7bad6f51dfa7c2216ba5de9f85efaa0a41a344b968dc80a02f09269006"
+    },
+    {
+      "file": "0003-cancelled-history.patch",
+      "sha256": "b7799ae7e60ed547bb76da1585dfec3e25016c45fd0e355cd854f02ad7493bdf"
+    },
+    {
+      "file": "0004-native-index-bridge.patch",
+      "sha256": "d12d13491a42fdd6b40b83e464158cfd4e1f2b9a531a2723947f3856400e5cf6"
+    }
+  ]
+}
