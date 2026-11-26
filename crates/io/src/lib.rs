@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 
 pub mod catalog;
+pub mod component_library;
 mod design;
 pub mod design_lock;
 mod design_metadata;
