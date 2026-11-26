@@ -80,6 +80,9 @@ const BLEND_SHARE: f64 = 0.4;
 /// How close, in grid cells, a station is to a corner when it is near it (see [`Near`]): G1 and
 /// G2 stations that near a corner whose neighbours disagree are not held to the angle tolerance.
 const CLASH_CELLS: f64 = 2.0;
+/// At a checked G2 station, accept at most a two-percent relative normal
+/// curvature mismatch (or two percent of one inverse characteristic length).
+const G2_CURVATURE_REL_TOL: f64 = 0.02;
 
 /// What the face beside a station asks the patch to repeat across it.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -185,6 +188,23 @@ pub fn fill_general(
             })
             .collect()
     };
+    // A side is sampled at t in [0,1), so without inspecting the exact
+    // endpoints a small seam gap can be silently bridged by the fit. Refuse
+    // a discontinuity greater than the caller's own positional tolerance
+    // before spending any time developing or optimising the surface.
+    let endpoints = sample(&[0.0, 1.0])?;
+    for k in 0..sides {
+        let end = endpoints[k][1].p;
+        let start = endpoints[(k + 1) % sides][0].p;
+        let gap = end.dist(start);
+        if !(gap <= spec.tol) {
+            return invalid(format!(
+                "boundary sides {k} and {} have a {gap:.6e} mm gap (position tolerance {:.6e} mm)",
+                (k + 1) % sides,
+                spec.tol
+            ));
+        }
+    }
     let mut per = 16usize;
     let mut fit = sample(&(0..per).map(|i| i as f64 / per as f64).collect::<Vec<_>>())?;
     let mut best = Shortfall::default();
@@ -220,6 +240,9 @@ pub fn fill_general(
     if !spec.points.is_empty() {
         why += &format!(", {:e} off its points", best.points);
     }
+    if fit.iter().flatten().any(|s| s.across.is_some_and(|a| a.bend.is_some())) {
+        why += &format!(", sampled normal curvature mismatch {:e} /mm (G2 criterion not met)", best.curvature);
+    }
     Err(SplineError::Unsupported(why))
 }
 
@@ -235,11 +258,12 @@ struct Shortfall {
     deviation: f64,
     angle: f64,
     points: f64,
+    curvature: f64,
 }
 
 impl Default for Shortfall {
     fn default() -> Shortfall {
-        Shortfall { deviation: f64::INFINITY, angle: f64::INFINITY, points: f64::INFINITY }
+        Shortfall { deviation: f64::INFINITY, angle: f64::INFINITY, points: f64::INFINITY, curvature: f64::INFINITY }
     }
 }
 
@@ -640,12 +664,17 @@ fn fit_round(st: &[Station], spec: &FillSpec, start: usize) -> SplineResult<Roun
         let (net, located) = fit_grid(&grid, st, &dev, spec, &near, &fade)?;
         let got = measure(&net, st, &dev, spec, &located, &near, &fade)?;
         best = best.min(got.shortfall);
-        let within = got.shortfall.deviation <= spec.tol && got.shortfall.angle <= spec.angle_tol && got.shortfall.points <= spec.tol;
+        let within = meets_fill_tolerances(&got, spec);
         if within && holds {
             check_folds(&net, &dev.d, lo, hi)?;
             let ctrl: Vec<HPoint> = net.ctrl.iter().map(|p| HPoint::weighted(*p, 1.0)).collect();
             let surface = NurbsSurface::from_homogeneous([3, 3], grid.knots.clone(), ctrl)?;
             let surface = crown(surface, &net, st, &dev, spec.crown)?;
+            // The uncrowned fit was checked above. A crown changes its interior
+            // control points, so recheck the *published* surface for folds, too.
+            if spec.crown != 0.0 {
+                check_crowned_folds(&surface, &dev.d, lo, hi)?;
+            }
             return Ok(Round::Done(Box::new(GeneralFill {
                 surface,
                 counter_clockwise: dev.counter_clockwise,
@@ -664,6 +693,35 @@ fn fit_round(st: &[Station], spec: &FillSpec, start: usize) -> SplineResult<Roun
         level *= 2;
     }
     Ok(Round::Exhausted(best))
+}
+
+/// All the sampled conditions must hold. A G2 fit cannot pass on G0 and
+/// G1 alone when its *local*, normalised curvature mismatch is excessive.
+fn meets_fill_tolerances(got: &Measured, spec: &FillSpec) -> bool {
+    got.shortfall.deviation <= spec.tol
+        && got.shortfall.angle <= spec.angle_tol
+        && got.shortfall.points <= spec.tol
+        && got.curvature_ratio <= G2_CURVATURE_REL_TOL
+}
+
+/// Reference inverse length in 1/mm for a nearly planar neighbouring face:
+/// when its normal curvature is zero there is no nonzero curvature to divide by.
+fn inverse_loop_size(st: &[Station]) -> f64 {
+    let (mut low, mut high) = (
+        Vec3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY),
+        Vec3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY),
+    );
+    for station in st {
+        low = low.min(station.p);
+        high = high.max(station.p);
+    }
+    1.0 / low.dist(high).max(1e-9)
+}
+
+/// Normalised mismatch at one G2 station. Using the *local* neighbouring
+/// curvature avoids a highly curved side hiding bad G2 behaviour on a flat side.
+fn relative_curvature_mismatch(actual: f64, expected: f64, inverse_size: f64) -> f64 {
+    (actual - expected).abs() / expected.abs().max(inverse_size)
 }
 
 /// Which stations are close to a corner, and to a corner whose neighbours disagree, on one grid.
@@ -1038,14 +1096,18 @@ fn locate(net: &Net, d: &[[f64; 2]], p: Vec3) -> SplineResult<[f64; 2]> {
 struct Measured {
     shortfall: Shortfall,
     angle_all: f64,
+    /// Maximum absolute normal-curvature discrepancy (1/mm) for reports.
     curvature: f64,
+    /// Worst mismatch divided by the local neighbour's curvature scale.
+    curvature_ratio: f64,
 }
 
 /// Measure a fit against every station and the points.
 fn measure(net: &Net, st: &[Station], dev: &Developed, spec: &FillSpec, located: &[[f64; 2]], near: &Near, fade: &Fade) -> SplineResult<Measured> {
     let off = |what: &str| SplineError::Invalid(format!("the fit cannot be evaluated {what}"));
     let sense = if dev.counter_clockwise { 1.0 } else { -1.0 };
-    let (mut deviation, mut angle, mut angle_all, mut curvature) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
+    let (mut deviation, mut angle, mut angle_all, mut curvature, mut curvature_ratio) = (0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64);
+    let inverse_size = inverse_loop_size(st);
     for (k, s) in st.iter().enumerate() {
         let (Some(&q), Some(&nu)) = (dev.d.get(k), dev.nu.get(k)) else { continue };
         deviation = deviation.max(net.point(q).ok_or_else(|| off("on the loop"))?.dist(s.p));
@@ -1066,7 +1128,12 @@ fn measure(net: &Net, st: &[Station], dev: &Developed, spec: &FillSpec, located:
             let second = uu * (nu[0] * nu[0]) + uv * (2.0 * nu[0] * nu[1]) + vv * (nu[1] * nu[1]);
             let speed2 = first.dot(first);
             if speed2 > 0.0 {
-                curvature = curvature.max((normal.dot(second) / speed2 - want.dot(bend)).abs());
+                let measured = normal.dot(second) / speed2;
+                let expected = want.dot(bend);
+                curvature = curvature.max((measured - expected).abs());
+                curvature_ratio = curvature_ratio.max(relative_curvature_mismatch(measured, expected, inverse_size));
+            } else {
+                curvature_ratio = f64::INFINITY;
             }
         }
     }
@@ -1074,10 +1141,10 @@ fn measure(net: &Net, st: &[Station], dev: &Developed, spec: &FillSpec, located:
     for (q, p) in located.iter().zip(spec.points) {
         points = points.max(net.point(*q).ok_or_else(|| off("at a point"))?.dist(*p));
     }
-    if ![deviation, angle, angle_all, curvature, points].iter().all(|x| x.is_finite()) {
+    if ![deviation, angle, angle_all, curvature, curvature_ratio, points].iter().all(|x| x.is_finite()) {
         return invalid("the fit is not finite");
     }
-    Ok(Measured { shortfall: Shortfall { deviation, angle, points }, angle_all, curvature })
+    Ok(Measured { shortfall: Shortfall { deviation, angle, points, curvature }, angle_all, curvature, curvature_ratio })
 }
 
 /// The fill with its crown (see [`FillSpec::crown`]).
@@ -1105,6 +1172,33 @@ fn crown(surface: NurbsSurface, net: &Net, st: &[Station], dev: &Developed, crow
 /// domain, the normal must be defined everywhere (the surface's parameter speed nowhere collapses
 /// against the rest) and must not turn over between neighbouring samples.
 fn check_folds(net: &Net, d: &[[f64; 2]], lo: [f64; 2], hi: [f64; 2]) -> SplineResult<()> {
+    check_fold_field(d, lo, hi, |q| Some((net.der(q, 1, 0)?, net.der(q, 0, 1)?)))
+}
+
+/// Approximate the first derivatives of the actual NURBS after its crown was
+/// applied. The domain has a 5% grid pad beyond the loop, leaving room for a
+/// centred stencil at all the sampled points inside that loop.
+fn check_crowned_folds(surface: &NurbsSurface, d: &[[f64; 2]], lo: [f64; 2], hi: [f64; 2]) -> SplineResult<()> {
+    let hu = (hi[0] - lo[0]) / (8.0 * FOLD_SAMPLES as f64);
+    let hv = (hi[1] - lo[1]) / (8.0 * FOLD_SAMPLES as f64);
+    if !(hu > 0.0 && hv > 0.0 && hu.is_finite() && hv.is_finite()) {
+        return invalid("the crowned surface has no finite domain");
+    }
+    check_fold_field(d, lo, hi, |q| {
+        let su = (surface.eval(q[0] + hu, q[1]).ok()? - surface.eval(q[0] - hu, q[1]).ok()?) / (2.0 * hu);
+        let sv = (surface.eval(q[0], q[1] + hv).ok()? - surface.eval(q[0], q[1] - hv).ok()?) / (2.0 * hv);
+        Some((su, sv))
+    })
+}
+
+/// Sampled fold/pinch check shared by the fitted and the crowned NURBS surface.
+/// This is not a proof of the absence of nonlocal self-intersections.
+fn check_fold_field(
+    d: &[[f64; 2]],
+    lo: [f64; 2],
+    hi: [f64; 2],
+    mut partials: impl FnMut([f64; 2]) -> Option<(Vec3, Vec3)>,
+) -> SplineResult<()> {
     let n = FOLD_SAMPLES;
     let mut cells: Vec<Option<(Vec3, f64)>> = Vec::with_capacity((n + 1) * (n + 1));
     for j in 0..=n {
@@ -1114,7 +1208,7 @@ fn check_folds(net: &Net, d: &[[f64; 2]], lo: [f64; 2], hi: [f64; 2]) -> SplineR
                 cells.push(None);
                 continue;
             }
-            let (Some(su), Some(sv)) = (net.der(q, 1, 0), net.der(q, 0, 1)) else { return invalid("the fit cannot be evaluated inside") };
+            let Some((su, sv)) = partials(q) else { return invalid("the fit cannot be evaluated inside") };
             let c = su.cross(sv);
             cells.push(Some((c, c.len())));
         }

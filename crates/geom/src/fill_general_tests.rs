@@ -71,6 +71,9 @@ fn a_tube_end_capped_g1_meets_the_wall_and_rises_over_it() {
             f.curvature_mismatch
         );
         assert!(f.deviation <= TOL && f.normal_deviation <= ANGLE);
+        if g2 {
+            assert!(f.curvature_mismatch <= G2_CURVATURE_REL_TOL / 20.0, "G2 mismatch: {}", f.curvature_mismatch);
+        }
         // The middle rises over the rim (the cap leaves the wall upwards).
         let mid = at(&f.surface, 0.5, 0.5);
         eprintln!("the cap's middle: {mid:?}");
@@ -137,6 +140,106 @@ fn a_planar_polygon_is_its_plane_and_a_point_lifts_it() {
     let f = fill_general(6, &mut g0, &spec(&point)).unwrap();
     eprintln!("L through a point: {:?} spans, off the loop {:e}, off the point {:e}", f.spans, f.deviation, f.point_deviation);
     assert!(f.deviation <= TOL && f.point_deviation <= TOL);
+}
+
+/// One very curved neighbouring side must not hide the G2 error beside a
+/// nearly flat side. The acceptance test compares *local* relative curvature
+/// mismatches, not a global maximum absolute mismatch.
+#[test]
+fn g2_mismatch_is_a_failure_even_when_positions_and_normals_fit() {
+    let with_ratio = |ratio| Measured {
+        shortfall: Shortfall { deviation: 0.0, angle: 0.0, points: 0.0, curvature: ratio },
+        angle_all: 0.0,
+        curvature: ratio,
+        curvature_ratio: ratio,
+    };
+    assert!(meets_fill_tolerances(&with_ratio(0.01), &spec(&[])));
+    assert!(!meets_fill_tolerances(&with_ratio(0.1), &spec(&[])));
+
+    // For a 20 mm loop, a zero-curvature neighbour (plane) has reference
+    // 1/20 mm^-1. 0.01 mm^-1 extra curvature is 20% of that scale and fails.
+    let inverse_size = 1.0 / 20.0;
+    let flat_error = relative_curvature_mismatch(0.01, 0.0, inverse_size);
+    assert!((flat_error - 0.2).abs() < 1e-12);
+    assert!(!meets_fill_tolerances(&with_ratio(flat_error), &spec(&[])));
+
+    // Even if another side has curvature 2/mm, only the local neighbour's
+    // curvature is relevant at each station (0.1/mm in this example).
+    assert!((relative_curvature_mismatch(0.101, 0.1, inverse_size) - 0.01).abs() < 1e-12);
+    assert!((relative_curvature_mismatch(0.11, 0.1, inverse_size) - 0.1).abs() < 1e-12);
+}
+
+/// A crown is checked after modifying the control net, not just before.
+/// This simple tensor patch folds across v=1/2 and must be rejected.
+#[test]
+fn post_crown_quality_check_rejects_an_interior_fold() {
+    let knots = [vec![0.0, 0.0, 1.0, 1.0], vec![0.0, 0.0, 1.0, 1.0]];
+    let domain = [[0.1, 0.1], [0.9, 0.1], [0.9, 0.9], [0.1, 0.9]];
+    let plane = NurbsSurface::new(
+        [1, 1],
+        knots.clone(),
+        &[Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::new(1.0, 1.0, 0.0)],
+        &[1.0; 4],
+    )
+    .unwrap();
+    assert!(check_crowned_folds(&plane, &domain, [0.0; 2], [1.0; 2]).is_ok());
+    let inverted = NurbsSurface::new(
+        [1, 1],
+        knots,
+        &[Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::new(-1.0, 1.0, 0.0)],
+        &[1.0; 4],
+    )
+    .unwrap();
+    let err = check_crowned_folds(&inverted, &domain, [0.0; 2], [1.0; 2]).unwrap_err();
+    assert!(err.to_string().contains("pinches") || err.to_string().contains("folds"), "{err}");
+}
+
+/// The requested general boundary fill supports odd-sided nonrectangular
+/// outlines without inventing a fourth Coons side. Planarity is checked
+/// independently over the untrimmed surface domain, not just on the rim.
+#[test]
+fn an_irregular_five_sided_loop_stays_in_its_exact_plane() {
+    let corners = [
+        Vec3::new(0.0, 0.0, 0.0),
+        Vec3::new(12.0, 0.0, 0.0),
+        Vec3::new(17.0, 5.0, 0.0),
+        Vec3::new(9.0, 14.0, 0.0),
+        Vec3::new(-3.0, 8.0, 0.0),
+    ];
+    let mut stations = |k: usize, ts: &[f64]| -> Result<Vec<Station>, String> {
+        let a = corners[k];
+        let b = corners[(k + 1) % corners.len()];
+        Ok(ts.iter().map(|&t| Station { p: a.lerp(b, t), up: Vec3::Z, across: None, corner: t == 0.0, clash: false }).collect())
+    };
+    let fill = fill_general(5, &mut stations, &spec(&[])).unwrap();
+    assert!(fill.deviation <= TOL, "{fill:?}");
+    for i in 0..=12 {
+        for j in 0..=12 {
+            let q = at(&fill.surface, i as f64 / 12.0, j as f64 / 12.0);
+            assert!(q.z.abs() < 1e-8, "{q:?} left the plane");
+        }
+    }
+}
+
+/// A missing endpoint connection is a geometry error, not permission to make
+/// a smooth surface with a hidden seam. An exactly closed loop is accepted.
+#[test]
+fn small_boundary_gaps_are_compared_with_the_requested_tolerance() {
+    let corners = [Vec3::ZERO, Vec3::X * 10.0, Vec3::new(10.0, 10.0, 0.0), Vec3::Y * 10.0];
+    let fill = |gap: f64| {
+        let mut stations = |k: usize, ts: &[f64]| -> Result<Vec<Station>, String> {
+            let mut a = corners[k];
+            let b = corners[(k + 1) % corners.len()];
+            if k == 2 {
+                a.y += gap;
+            }
+            Ok(ts.iter().map(|&t| Station { p: a.lerp(b, t), up: Vec3::Z, across: None, corner: t == 0.0, clash: false }).collect())
+        };
+        fill_general(4, &mut stations, &spec(&[]))
+    };
+    assert!(fill(0.0).unwrap().deviation <= TOL);
+    let e = fill(0.001).unwrap_err().to_string();
+    assert!(e.contains("gap") && e.contains("sides 1 and 2"), "{e}");
 }
 
 #[test]

@@ -1,0 +1,26 @@
+name: Arclet surface regression
+
+on:
+  push:
+    branches:
+      - feat/arclet-advanced-surface-filling
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  surface:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Geometry tests
+        run: cargo test --locked -p solidcraft-geom --lib
+      - name: Formatting
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --locked -p solidcraft-geom --all-targets -- -D warnings

@@ -280,7 +280,10 @@ fn closest(a: &mut Track, b: &mut Track, tol: f64) -> SplineResult<Crossing> {
         }
         d.push(best);
     }
-    // Runs of samples near `b`: one candidate crossing each, refined from its nearest sample.
+    // Use the closest sample of each near run, but ALSO its local distance minima.
+    // A shallow oscillating curve can intersect a guide twice while all samples in
+    // between are within `near` (the longest polyline segments). Grouping that
+    // entire corridor into one candidate silently accepted an ambiguous network.
     let n = d.len();
     let mut starts = Vec::new();
     let mut k = 0;
@@ -289,17 +292,34 @@ fn closest(a: &mut Track, b: &mut Track, tol: f64) -> SplineResult<Crossing> {
             k += 1;
             continue;
         }
-        let mut m = k;
+        let begin = k;
+        let mut best = k;
         while k < n && d[k].0 <= near {
-            if d[k].0 < d[m].0 {
-                m = k;
+            if d[k].0 < d[best].0 {
+                best = k;
             }
             k += 1;
         }
-        starts.push(m);
+        starts.push(best);
+        for i in begin + 1..k.saturating_sub(1) {
+            let before = d[i - 1].0;
+            let here = d[i].0;
+            let after = d[i + 1].0;
+            if here <= before && here <= after && (here < before || here < after) {
+                starts.push(i);
+            }
+        }
     }
     if starts.is_empty() {
         starts.push((0..n).min_by(|x, y| d[*x].0.total_cmp(&d[*y].0)).unwrap_or(0));
+    }
+    starts.sort_unstable();
+    starts.dedup();
+    // This is a crossing solver, not a tool for coincident/overlapping curves.
+    // Pathological samples must fail predictably instead of launching thousands of
+    // refinements for every pair in a large network.
+    if starts.len() > 64 {
+        return invalid(format!("{} and {} have too many possible crossings: divide or simplify the curves", a.label, b.label));
     }
     let mut found: Vec<Crossing> = Vec::new();
     let mut miss: Option<(f64, Vec3)> = None;
@@ -315,7 +335,22 @@ fn closest(a: &mut Track, b: &mut Track, tol: f64) -> SplineResult<Crossing> {
         }
     }
     match found.as_slice() {
-        [c] => Ok(*c),
+        [c] => {
+            if !a.point && !b.point {
+                let da = a.ders(c.s)?.0;
+                let db = b.ders(c.r)?.0;
+                let speed = da.len() * db.len();
+                // Two coincident (or almost tangent) curves do not define a
+                // single, well-conditioned network crossing, even if a closest
+                // point search returned just one parameter pair.
+                if !(speed > 0.0 && speed.is_finite())
+                    || !(da.cross(db).len() / speed > 1e-3)
+                {
+                    return invalid(format!("{} and {} touch tangentially or overlap: the crossing is not unique", a.label, b.label));
+                }
+            }
+            Ok(*c)
+        }
         [] => {
             let (gap, at) = miss.unwrap_or((f64::INFINITY, Vec3::ZERO));
             invalid(format!(
@@ -936,7 +971,9 @@ pub fn network_surface(u: Vec<NetworkCurve>, v: Vec<NetworkCurve>, tol: Toleranc
     let v_op_space = across_v.space().clone();
     let Some(across_u) = across_u else {
         // Curves in one direction only: the skinned surface.
-        return surface(&u_space, &v_op_space, &pu);
+        let result = surface(&u_space, &v_op_space, &pu)?;
+        verify_network_samples(&result, &mut us, &mut vs, &up, &vp, &ubar, &vbar, tol.fit)?;
+        return Ok(result);
     };
 
     // The derivative data at each crossing of a conditioned boundary, exactly as the fitted
@@ -1016,7 +1053,156 @@ pub fn network_surface(u: Vec<NetworkCurve>, v: Vec<NetworkCurve>, tol: Toleranc
             .collect();
         net.push(col);
     }
-    surface(&u_space, &v_space, &net)
+    let result = surface(&u_space, &v_space, &net)?;
+    verify_network_samples(&result, &mut us, &mut vs, &up, &vp, &ubar, &vbar, tol.fit)?;
+    Ok(result)
+}
+
+/// Metrics on a *finite grid* of the untrimmed tensor-product surface. These
+/// numbers are estimates, not a certificate that there is no self-intersection
+/// between samples. A highly twisted surface may need denser independent checks.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SampledSurfaceQuality {
+    /// Cell centres sampled per parameter direction.
+    pub samples_per_axis: usize,
+    /// Smallest local area Jacobian divided by the median Jacobian.
+    pub minimum_relative_jacobian: f64,
+    /// Largest change of unit normal between adjacent sample points (radians).
+    pub maximum_normal_step_rad: f64,
+    /// Largest sampled ratio of parameter-direction speeds (parameterisation distortion).
+    pub maximum_stretch_ratio: f64,
+    /// Number of adjacent sampled cells whose normals turn by 90° or more.
+    pub foldover_pairs: usize,
+}
+
+/// Sample normals and local area for a NURBS surface without changing its net.
+/// Singularities exactly at the boundary (e.g. the apex of a triangular patch)
+/// are excluded by sampling cell centres; interior singularities are refused.
+pub fn sampled_surface_quality(surface: &NurbsSurface, samples: usize) -> SplineResult<SampledSurfaceQuality> {
+    if !(4..=64).contains(&samples) {
+        return invalid("surface quality sampling must use 4 to 64 cells per axis");
+    }
+    let [ud, vd] = surface.domain();
+    let (wu, wv) = (ud[1] - ud[0], vd[1] - vd[0]);
+    if !(wu > 0.0 && wv > 0.0 && wu.is_finite() && wv.is_finite()) {
+        return invalid("the surface domain is not finite");
+    }
+    let (hu, hv) = (wu / (4.0 * samples as f64), wv / (4.0 * samples as f64));
+    let mut normals = Vec::with_capacity(samples * samples);
+    let mut areas = Vec::with_capacity(samples * samples);
+    let mut max_stretch = 1.0_f64;
+    for j in 0..samples {
+        for i in 0..samples {
+            let (u, v) = (
+                ud[0] + wu * (i as f64 + 0.5) / samples as f64,
+                vd[0] + wv * (j as f64 + 0.5) / samples as f64,
+            );
+            let su = (surface.eval(u + hu, v)? - surface.eval(u - hu, v)?) / (2.0 * hu);
+            let sv = (surface.eval(u, v + hv)? - surface.eval(u, v - hv)?) / (2.0 * hv);
+            let (lu, lv) = (su.len(), sv.len());
+            let area = su.cross(sv);
+            if !(lu > 0.0 && lv > 0.0 && lu.is_finite() && lv.is_finite() && area.is_finite()) {
+                return Err(SplineError::Unsupported("the surface has an undefined tangent inside its domain".into()));
+            }
+            max_stretch = max_stretch.max((lu / lv).max(lv / lu));
+            normals.push(area.normalized());
+            areas.push(area.len());
+        }
+    }
+    let mut sorted = areas.clone();
+    sorted.sort_by(f64::total_cmp);
+    let median = sorted[sorted.len() / 2];
+    if !(median > 0.0 && median.is_finite() && max_stretch.is_finite()) {
+        return invalid("the surface Jacobian is not finite");
+    }
+    let relative = areas.iter().copied().fold(f64::INFINITY, f64::min) / median;
+    let mut angle = 0.0_f64;
+    let mut folds = 0;
+    for j in 0..samples {
+        for i in 0..samples {
+            let Some(Some(a)) = normals.get(j * samples + i) else {
+                return Err(SplineError::Unsupported("the surface has a collapsed tangent inside its domain".into()));
+            };
+            for (x, y) in [(i + 1, j), (i, j + 1)] {
+                if x >= samples || y >= samples {
+                    continue;
+                }
+                let Some(Some(b)) = normals.get(y * samples + x) else {
+                    return Err(SplineError::Unsupported("the surface has a collapsed tangent inside its domain".into()));
+                };
+                let dot = a.dot(*b).clamp(-1.0, 1.0);
+                angle = angle.max(dot.acos());
+                if dot <= 0.0 {
+                    folds += 1;
+                }
+            }
+        }
+    }
+    Ok(SampledSurfaceQuality {
+        samples_per_axis: samples,
+        minimum_relative_jacobian: relative,
+        maximum_normal_step_rad: angle,
+        maximum_stretch_ratio: max_stretch,
+        foldover_pairs: folds,
+    })
+}
+
+/// Check the actual tensor-product result, independently of the control-space fit.
+/// A small fitting residual before Gordon blending does not guarantee that subtracting
+/// the crossing interpolant leaves the final surface on every input curve, especially
+/// when control-point coordinates are large. These are *sampled* errors, not a certified
+/// Hausdorff distance or a promise about unsampled intervals.
+fn verify_network_samples(
+    surface: &NurbsSurface,
+    us: &mut [Track],
+    vs: &mut [Track],
+    up: &[Placement],
+    vp: &[Placement],
+    ubar: &[f64],
+    vbar: &[f64],
+    tol: f64,
+) -> SplineResult<()> {
+    const CHECK_SAMPLES: usize = 32;
+    let quality = sampled_surface_quality(surface, 24)?;
+    if quality.minimum_relative_jacobian < 1e-5 || quality.foldover_pairs > 0 {
+        return Err(SplineError::Unsupported(format!(
+            "the interpolated surface folds or pinches inside: {} sampled normal reversals, minimum relative area Jacobian {:.3e} (24×24 grid)",
+            quality.foldover_pairs, quality.minimum_relative_jacobian
+        )));
+    }
+    // Each input curve is compared against the *placed* version used by Gordon:
+    // its crossing offsets are part of the surface's intended geometry.
+    for (i, (track, placement)) in us.iter_mut().zip(up).enumerate() {
+        let Some(&v) = vbar.get(i) else { return invalid("the surface is missing a u-curve parameter") };
+        for k in 0..=CHECK_SAMPLES {
+            let u = k as f64 / CHECK_SAMPLES as f64;
+            let want = placement.point(track, u)?;
+            let actual = surface.eval(u, v)?;
+            let error = want.dist(actual);
+            if !error.is_finite() || error > 4.0 * tol {
+                return Err(SplineError::Unsupported(format!(
+                    "surface interpolation strays {error:.3e} mm from {} at parameter {u:.4} (allowed sampled deviation {:.3e} mm)",
+                    track.label, 4.0 * tol
+                )));
+            }
+        }
+    }
+    for (j, (track, placement)) in vs.iter_mut().zip(vp).enumerate() {
+        let Some(&u) = ubar.get(j) else { return invalid("the surface is missing a v-curve parameter") };
+        for k in 0..=CHECK_SAMPLES {
+            let v = k as f64 / CHECK_SAMPLES as f64;
+            let want = placement.point(track, v)?;
+            let actual = surface.eval(u, v)?;
+            let error = want.dist(actual);
+            if !error.is_finite() || error > 4.0 * tol {
+                return Err(SplineError::Unsupported(format!(
+                    "surface interpolation strays {error:.3e} mm from {} at parameter {v:.4} (allowed sampled deviation {:.3e} mm)",
+                    track.label, 4.0 * tol
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// A conditioned end of the u-direction: which curve, the derivative orders, its neighbouring
@@ -1564,6 +1750,85 @@ mod tests {
         let steep = line("steep", Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 10.0, 5.0));
         let err = network_surface(vec![edge(), far], vec![steep, curve("right", side(10.0))], TOL).unwrap_err();
         assert!(err.to_string().contains("steep") && err.to_string().contains("tangent"), "{err}");
+    }
+
+    /// The final Gordon interpolation is independently checked on all six curves,
+    /// including interior curves (not just at their crossing points).
+    #[test]
+    fn final_network_keeps_curves_at_unsampled_positions() {
+        let z = |x: f64, y: f64| 0.02 * x * x - 0.04 * y * y + 0.01 * x * y;
+        let s = network_surface(
+            [0.0, 3.0, 7.0].into_iter().map(|y| curve("u", move |t| Vec3::new(10.0 * t, y, z(10.0 * t, y)))).collect(),
+            [0.0, 5.0, 10.0].into_iter().map(|x| curve("v", move |t| Vec3::new(x, 7.0 * t, z(x, 7.0 * t)))).collect(),
+            TOL,
+        )
+        .unwrap();
+        assert_eq!(s.degree()[0], 3);
+        assert_eq!(s.degree()[1], 3);
+        for q in grid(&s, 15) {
+            assert!((q.z - z(q.x, q.y)).abs() < 0.02, "{q:?}");
+        }
+    }
+
+    #[test]
+    fn sampled_surface_quality_detects_a_twisted_fold() {
+        let knots = [vec![0.0, 0.0, 1.0, 1.0], vec![0.0, 0.0, 1.0, 1.0]];
+        let plane = NurbsSurface::new(
+            [1, 1],
+            knots.clone(),
+            &[Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::new(1.0, 1.0, 0.0)],
+            &[1.0; 4],
+        )
+        .unwrap();
+        let good = sampled_surface_quality(&plane, 24).unwrap();
+        assert_eq!(good.foldover_pairs, 0);
+        assert!((good.minimum_relative_jacobian - 1.0).abs() < 1e-10);
+        assert!(good.maximum_normal_step_rad < 1e-6);
+
+        // S(u,v) = (u*(1 - 2v),v,0): its first derivative reverses
+        // across v=1/2, so this is NOT a regular surface.
+        let folded = NurbsSurface::new(
+            [1, 1],
+            knots,
+            &[Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::new(-1.0, 1.0, 0.0)],
+            &[1.0; 4],
+        )
+        .unwrap();
+        let bad = sampled_surface_quality(&folded, 24).unwrap();
+        assert!(bad.foldover_pairs > 0, "{bad:?}");
+        assert!(bad.maximum_normal_step_rad > 3.0);
+    }
+
+    #[test]
+    fn overlapping_network_curves_are_not_a_unique_crossing() {
+        let mut first = Track::new(line("first", Vec3::ZERO, Vec3::X * 10.0)).unwrap();
+        let mut second = Track::new(line("second", Vec3::X * 2.0, Vec3::X * 8.0)).unwrap();
+        let error = closest(&mut first, &mut second, 1e-4).unwrap_err();
+        assert!(
+            ["tangentially", "overlap", "more than once"].iter().any(|word| error.to_string().contains(word)),
+            "overlapping inputs must be rejected, not treated as one crossing: {error}"
+        );
+    }
+
+    /// A shallow sinusoid crosses twice while its *whole length* remains near the
+    /// guide at the coarse-table scale. One-minimum-per-near-run used to miss this.
+    #[test]
+    fn nearby_multiple_crossings_cannot_be_mistaken_for_one() {
+        let mut guide = Track::new(line("guide", Vec3::ZERO, Vec3::X * 10.0)).unwrap();
+        let mut wave = Track::new(curve("shallow", |t| Vec3::new(10.0 * t, 0.1 * (t - 0.3) * (t - 0.7), 0.0))).unwrap();
+        let gap = 1e-4;
+        let err = closest(&mut guide, &mut wave, gap).unwrap_err();
+        assert!(err.to_string().contains("cross more than once"), "{err}");
+    }
+
+    /// The added local-minima search does not turn a unique transverse crossing into
+    /// an apparent double crossing (the refinement candidates collapse to one).
+    #[test]
+    fn one_transverse_crossing_remains_unique() {
+        let mut guide = Track::new(line("guide", Vec3::ZERO, Vec3::X * 10.0)).unwrap();
+        let mut crossing = Track::new(line("cross", Vec3::new(5.0, -1.0, 0.0), Vec3::new(5.0, 1.0, 0.0))).unwrap();
+        let p = closest(&mut guide, &mut crossing, 1e-5).unwrap();
+        assert!(p.at.dist(Vec3::X * 5.0) < 1e-7, "{p:?}");
     }
 
     /// Networks that can't be built are refused, naming the curves; none panics.
